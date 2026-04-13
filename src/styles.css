@@ -1,0 +1,125 @@
+.cbv-shell {
+  display: grid;
+  grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
+  gap: 1rem;
+  min-height: 68vh;
+}
+
+.cbv-sidebar,
+.cbv-preview {
+  border: 1px solid #d5d0c7;
+  border-radius: 1rem;
+  background: rgba(255, 252, 246, 0.9);
+  overflow: hidden;
+}
+
+.cbv-panel-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: end;
+  padding: 1rem 1.25rem;
+  border-bottom: 1px solid #e5dfd4;
+}
+
+.cbv-eyebrow {
+  margin: 0;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 0.72rem;
+  color: #756b5e;
+}
+
+.cbv-tree {
+  max-height: 68vh;
+  overflow: auto;
+  padding: 0.75rem;
+}
+
+.cbv-tree-group {
+  display: grid;
+}
+
+.cbv-tree-label,
+.cbv-tree-file {
+  display: flex;
+  gap: 0.65rem;
+  align-items: center;
+  min-height: 2.3rem;
+  border-radius: 0.75rem;
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: #271f17;
+  font: inherit;
+  text-align: left;
+}
+
+.cbv-tree-label {
+  font-weight: 600;
+}
+
+.cbv-tree-file {
+  cursor: pointer;
+}
+
+.cbv-tree-file:hover,
+.cbv-tree-file.is-selected {
+  background: #ece4d6;
+}
+
+.cbv-tree-kind {
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: #e1d8c8;
+  color: #5b5042;
+  padding: 0.1rem 0.45rem;
+  font-size: 0.68rem;
+  text-transform: uppercase;
+}
+
+.cbv-preview-meta {
+  display: flex;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  padding: 1rem 1.25rem 0;
+  color: #756b5e;
+  font-size: 0.9rem;
+}
+
+.cbv-code {
+  margin: 0;
+  padding: 1.25rem;
+  overflow: auto;
+  max-height: 68vh;
+  font-size: 0.9rem;
+  line-height: 1.5;
+  color: #f8f4ee;
+  background:
+    linear-gradient(180deg, rgba(23, 20, 18, 0.97), rgba(38, 31, 26, 0.98));
+}
+
+.cbv-empty {
+  padding: 2rem 1.25rem;
+}
+
+.cbv-empty h2,
+.cbv-empty p {
+  margin: 0;
+}
+
+.cbv-empty p {
+  margin-top: 0.6rem;
+  color: #756b5e;
+}
+
+@media (max-width: 960px) {
+  .cbv-shell {
+    grid-template-columns: 1fr;
+  }
+
+  .cbv-tree,
+  .cbv-code {
+    max-height: none;
+  }
+}
