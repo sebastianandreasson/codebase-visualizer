@@ -2,12 +2,16 @@
   "name": "codebase-visualizer",
   "version": "0.1.0",
   "type": "module",
+  "bin": {
+    "codebase-visualizer": "./bin/codebase-visualizer.js"
+  },
   "files": [
+    "bin",
     "dist"
   ],
   "scripts": {
     "dev": "vite",
-    "build": "vite build && tsc -p tsconfig.build.json",
+    "build": "vite build && vite build -c vite.standalone.config.ts && tsc -p tsconfig.build.json",
     "lint": "eslint .",
     "preview": "vite preview"
   },

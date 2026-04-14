@@ -29,6 +29,7 @@ const INITIAL_VISUALIZER_STATE: VisualizerStoreState = {
   viewport: DEFAULT_VIEWPORT_STATE,
   selection: DEFAULT_SELECTION_STATE,
   viewMode: 'filesystem',
+  expandedSymbolClusterIds: [],
   graphLayers: DEFAULT_GRAPH_LAYER_VISIBILITY,
 }
 
@@ -63,6 +64,7 @@ export function createVisualizerStore(
 
       set({
         snapshot,
+        expandedSymbolClusterIds: [],
         selection: {
           ...currentSelection,
           nodeId: nextNodeId,
@@ -133,6 +135,16 @@ export function createVisualizerStore(
           nodeId: getNextSelectedNodeId(snapshotOrNull(state), state.selection, viewMode),
         },
       }))
+    },
+    toggleSymbolCluster: (clusterId) => {
+      set((state) => ({
+        expandedSymbolClusterIds: state.expandedSymbolClusterIds.includes(clusterId)
+          ? state.expandedSymbolClusterIds.filter((id) => id !== clusterId)
+          : [...state.expandedSymbolClusterIds, clusterId],
+      }))
+    },
+    setExpandedSymbolClusterIds: (expandedSymbolClusterIds) => {
+      set({ expandedSymbolClusterIds })
     },
     selectNode: (nodeId) => {
       set((state) => ({

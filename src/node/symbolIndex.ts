@@ -36,6 +36,10 @@ export function getSymbolByRange(
   return index.byRangeKey.get(getRangeKey(fileId, range))
 }
 
+export function getSymbolsForFile(index: SymbolIndex, fileId: string) {
+  return index.byFile.get(fileId) ?? []
+}
+
 function getRangeKey(fileId: string, range: SourceRange | undefined) {
   if (!range) {
     return `${fileId}:unknown`

@@ -23,6 +23,7 @@ export interface VisualizerStoreState {
   viewport: ViewportState
   selection: SelectionState
   viewMode: VisualizerViewMode
+  expandedSymbolClusterIds: string[]
   graphLayers: GraphLayerVisibility
 }
 
@@ -37,6 +38,8 @@ export interface VisualizerStoreActions {
   setViewport: (viewport: Partial<ViewportState>) => void
   setSelection: (selection: Partial<SelectionState>) => void
   setViewMode: (viewMode: VisualizerViewMode) => void
+  toggleSymbolCluster: (clusterId: string) => void
+  setExpandedSymbolClusterIds: (clusterIds: string[]) => void
   selectNode: (nodeId: string | null) => void
   selectEdge: (edgeId: string | null) => void
   setInspectorTab: (tab: SelectionState['inspectorTab']) => void

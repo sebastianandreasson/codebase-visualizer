@@ -18,6 +18,7 @@ export default defineConfig({
     lib: {
       entry: {
         index: resolve(__dirname, 'src/index.ts'),
+        'cli/index': resolve(__dirname, 'src/cli/index.ts'),
         'node/index': resolve(__dirname, 'src/node/index.ts'),
         planner: resolve(__dirname, 'src/planner/index.ts'),
         vite: resolve(__dirname, 'src/vite.ts'),
@@ -41,6 +42,7 @@ export default defineConfig({
         'node:module',
         'node:os',
         'node:path',
+        'node:url',
       ],
     },
   },

@@ -9,6 +9,7 @@ import type { GraphEdge, ProjectSnapshot, SourceRange, SymbolNode } from '../typ
 
 import {
   getSymbolByRange,
+  getSymbolsForFile,
   registerSymbolNodes,
   type SymbolIndex,
 } from './symbolIndex'
@@ -142,7 +143,9 @@ function ensureSymbolNode(
   }
 
   const range = toSourceRange(endpoint)
-  const existingSymbol = getSymbolByRange(symbolIndex, fileNode.id, range)
+  const existingSymbol =
+    getSymbolByRange(symbolIndex, fileNode.id, range) ??
+    getSymbolByName(symbolIndex, fileNode.id, endpoint.label)
 
   if (existingSymbol) {
     return existingSymbol
@@ -190,6 +193,61 @@ function toSourceRange(endpoint: JsCallgraphEndpoint): SourceRange | undefined {
       column: endpoint.end.column,
     },
   }
+}
+
+function getSymbolByName(
+  symbolIndex: SymbolIndex,
+  fileId: string,
+  label: string,
+) {
+  if (!label || label === 'global' || label === 'anon') {
+    return null
+  }
+
+  const matchingSymbols = getSymbolsForFile(symbolIndex, fileId).filter(
+    (symbolNode) =>
+      symbolNode.name === label &&
+      symbolNode.symbolKind !== 'unknown' &&
+      symbolNode.symbolKind !== 'module',
+  )
+
+  if (matchingSymbols.length === 0) {
+    return null
+  }
+
+  if (matchingSymbols.length === 1) {
+    return matchingSymbols[0]
+  }
+
+  return [...matchingSymbols].sort((left, right) => {
+    const leftParentDepth = countParentDepth(left, symbolIndex)
+    const rightParentDepth = countParentDepth(right, symbolIndex)
+
+    if (leftParentDepth !== rightParentDepth) {
+      return leftParentDepth - rightParentDepth
+    }
+
+    const leftLine = left.range?.start.line ?? Number.MAX_SAFE_INTEGER
+    const rightLine = right.range?.start.line ?? Number.MAX_SAFE_INTEGER
+
+    if (leftLine !== rightLine) {
+      return leftLine - rightLine
+    }
+
+    return left.id.localeCompare(right.id)
+  })[0]
+}
+
+function countParentDepth(symbolNode: SymbolNode, symbolIndex: SymbolIndex) {
+  let depth = 0
+  let currentParentId = symbolNode.parentSymbolId
+
+  while (currentParentId) {
+    depth += 1
+    currentParentId = symbolIndex.byId[currentParentId]?.parentSymbolId ?? null
+  }
+
+  return depth
 }
 
 function loadCallgraphModule(): JsCallgraphModule {

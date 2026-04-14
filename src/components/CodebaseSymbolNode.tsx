@@ -6,8 +6,14 @@ type CodebaseSymbolNodeData = Record<string, unknown> & {
   title: string
   subtitle: string
   kind: string
+  kindClass?: string
   tags: string[]
   dimmed: boolean
+  clusterSize?: number
+  sharedCallerCount?: number
+  clusterExpanded?: boolean
+  contained?: boolean
+  compact?: boolean
 }
 
 export const CodebaseSymbolNode = memo(function CodebaseSymbolNode({
@@ -21,6 +27,10 @@ export const CodebaseSymbolNode = memo(function CodebaseSymbolNode({
       className={[
         'cbv-node',
         'is-symbol',
+        nodeData.kindClass ? `is-kind-${nodeData.kindClass}` : '',
+        nodeData.contained ? 'is-contained' : '',
+        nodeData.clusterExpanded ? 'is-cluster-expanded' : '',
+        nodeData.compact ? 'is-compact' : '',
         selected ? 'is-selected' : '',
         nodeData.dimmed ? 'is-dimmed' : '',
       ]
@@ -33,12 +43,21 @@ export const CodebaseSymbolNode = memo(function CodebaseSymbolNode({
         type="target"
       />
       <div className="cbv-node-meta">
-        <span className="cbv-node-kind">{nodeData.kind}</span>
         {nodeData.tags.map((tag) => (
           <span className="cbv-node-tag" key={tag}>
             {tag}
           </span>
         ))}
+        {nodeData.sharedCallerCount && nodeData.sharedCallerCount > 1 ? (
+          <span className="cbv-node-tag is-shared">
+            {nodeData.sharedCallerCount} callers
+          </span>
+        ) : null}
+        {nodeData.clusterSize && nodeData.clusterSize > 0 ? (
+          <span className="cbv-node-tag is-cluster">
+            {nodeData.clusterSize} internal {nodeData.clusterExpanded ? 'open' : 'hidden'}
+          </span>
+        ) : null}
       </div>
       <strong className="cbv-node-title">{nodeData.title}</strong>
       <span className="cbv-node-subtitle">{nodeData.subtitle}</span>
