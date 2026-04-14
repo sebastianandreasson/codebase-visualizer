@@ -58,6 +58,7 @@ export type {
   SelectionState,
   SymbolKind,
   SymbolNode,
+  SymbolVisibility,
   ValidationIssue,
   ValidationIssueCode,
   ValidationIssueSeverity,

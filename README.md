@@ -22,6 +22,11 @@ npx codebase-visualizer . --port 3210 --host 127.0.0.1
 This starts a local web app and visualizes the target repository directory.
 It also writes `.codebase-visualizer/INSTRUCTIONS.md` into the target repo and prints a ready-to-paste prompt you can hand to a coding agent for custom layouts.
 
+Current language support:
+
+- TypeScript / JavaScript: files, symbols, imports, and call graph overlays.
+- Rust: first-pass Cargo workspace and target discovery plus Rust-aware file tagging and entrypoint detection.
+
 ## Package surface
 
 ```ts

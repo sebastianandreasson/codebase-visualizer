@@ -1,4 +1,10 @@
 export type {
+  LanguageAdapter,
+  LanguageAdapterCapabilities,
+  LanguageAdapterInput,
+  LanguageAdapterResult,
+} from './schema/analysis'
+export type {
   CodebaseDirectory,
   CodebaseEntry,
   CodebaseEntryKind,
@@ -18,6 +24,7 @@ export type {
   SourceRange,
   SymbolKind,
   SymbolNode,
+  SymbolVisibility,
 } from './schema/snapshot'
 export type {
   GraphLayerKey,

@@ -1,3 +1,5 @@
+import type { LanguageAdapter } from './analysis'
+
 export const PROJECT_SNAPSHOT_SCHEMA_VERSION = 1 as const
 
 export type SnapshotSchemaVersion = typeof PROJECT_SNAPSHOT_SCHEMA_VERSION
@@ -19,6 +21,8 @@ export type SymbolKind =
   | 'variable'
   | 'module'
   | 'unknown'
+
+export type SymbolVisibility = 'public' | 'private' | 'protected' | 'internal' | 'unknown'
 
 export type NodeTagId =
   | 'entrypoint'
@@ -75,6 +79,7 @@ export interface DirectoryNode extends BaseProjectNode {
 export interface FileNode extends BaseProjectNode {
   kind: 'file'
   parentId: string | null
+  language?: string
   extension: string
   size: number
   content: string | null
@@ -85,7 +90,10 @@ export interface SymbolNode extends BaseProjectNode {
   kind: 'symbol'
   fileId: string
   parentSymbolId: string | null
+  language?: string
   symbolKind: SymbolKind
+  nativeSymbolKind?: string
+  visibility?: SymbolVisibility
   signature?: string
   range?: SourceRange
 }
@@ -115,6 +123,7 @@ export interface ReadProjectSnapshotOptions {
   analyzeImports?: boolean
   analyzeSymbols?: boolean
   analyzeCalls?: boolean
+  adapters?: LanguageAdapter[]
 }
 
 export const DEFAULT_PROJECT_TAGS: NodeTag[] = [
@@ -153,6 +162,48 @@ export const DEFAULT_PROJECT_TAGS: NodeTag[] = [
     label: 'Likely Unused',
     category: 'analysis',
     description: 'A file not currently reachable from known entrypoints.',
+  },
+  {
+    id: 'workspace_member',
+    label: 'Workspace Member',
+    category: 'analysis',
+    description: 'A file that belongs to a detected multi-package workspace member.',
+  },
+  {
+    id: 'lib',
+    label: 'Library Target',
+    category: 'analysis',
+    description: 'A source file used as a library target entry.',
+  },
+  {
+    id: 'bin',
+    label: 'Binary Target',
+    category: 'analysis',
+    description: 'A source file used as a binary target entry.',
+  },
+  {
+    id: 'example',
+    label: 'Example Target',
+    category: 'analysis',
+    description: 'A source file used as an example target entry.',
+  },
+  {
+    id: 'bench',
+    label: 'Benchmark Target',
+    category: 'analysis',
+    description: 'A source file used as a benchmark target entry.',
+  },
+  {
+    id: 'build_script',
+    label: 'Build Script',
+    category: 'analysis',
+    description: 'A source file used as a Cargo build script.',
+  },
+  {
+    id: 'proc_macro',
+    label: 'Proc Macro',
+    category: 'analysis',
+    description: 'A source file used as a procedural macro target.',
   },
 ]
 
