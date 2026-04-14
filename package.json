@@ -20,6 +20,10 @@
       "types": "./dist/node/index.d.ts",
       "import": "./dist/node/index.js"
     },
+    "./planner": {
+      "types": "./dist/planner/index.d.ts",
+      "import": "./dist/planner.js"
+    },
     "./vite": {
       "types": "./dist/vite.d.ts",
       "import": "./dist/vite.js"

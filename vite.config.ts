@@ -19,6 +19,7 @@ export default defineConfig({
       entry: {
         index: resolve(__dirname, 'src/index.ts'),
         'node/index': resolve(__dirname, 'src/node/index.ts'),
+        planner: resolve(__dirname, 'src/planner/index.ts'),
         vite: resolve(__dirname, 'src/vite.ts'),
       },
       formats: ['es'],
@@ -34,6 +35,7 @@ export default defineConfig({
         'react/jsx-runtime',
         'typescript',
         'vite',
+        'node:crypto',
         'node:fs/promises',
         'node:http',
         'node:module',

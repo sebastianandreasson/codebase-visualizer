@@ -19,6 +19,8 @@ const INITIAL_VISUALIZER_STATE: VisualizerStoreState = {
   snapshot: null,
   layouts: [],
   activeLayoutId: null,
+  draftLayouts: [],
+  activeDraftId: null,
   viewport: DEFAULT_VIEWPORT_STATE,
   selection: DEFAULT_SELECTION_STATE,
   graphLayers: DEFAULT_GRAPH_LAYER_VISIBILITY,
@@ -73,6 +75,20 @@ export function createVisualizerStore(
     },
     setActiveLayoutId: (activeLayoutId) => {
       set({ activeLayoutId })
+    },
+    setDraftLayouts: (draftLayouts) => {
+      const activeDraftId =
+        draftLayouts.some((draft) => draft.id === get().activeDraftId)
+          ? get().activeDraftId
+          : draftLayouts[0]?.id ?? null
+
+      set({
+        draftLayouts,
+        activeDraftId,
+      })
+    },
+    setActiveDraftId: (activeDraftId) => {
+      set({ activeDraftId })
     },
     setViewport: (viewport) => {
       set((state) => ({

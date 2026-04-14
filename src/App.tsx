@@ -3,7 +3,7 @@ import { startTransition, useEffect } from 'react'
 import { CodebaseVisualizer } from './index'
 import type { CodebaseSnapshot } from './types'
 import { useVisualizerStore } from './store/visualizerStore'
-import { CODEBASE_VISUALIZER_ROUTE } from './vite'
+import { CODEBASE_VISUALIZER_ROUTE } from './shared/constants'
 
 export default function App() {
   const status = useVisualizerStore((state) => state.status)

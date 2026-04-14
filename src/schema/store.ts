@@ -1,4 +1,5 @@
 import type { LayoutSpec, SelectionState, ViewportState } from './layout'
+import type { LayoutDraft } from './planner'
 import type { AnalysisState } from './api'
 import type { ProjectSnapshot } from './snapshot'
 
@@ -12,6 +13,8 @@ export interface VisualizerStoreState {
   snapshot: ProjectSnapshot | null
   layouts: LayoutSpec[]
   activeLayoutId: string | null
+  draftLayouts: LayoutDraft[]
+  activeDraftId: string | null
   viewport: ViewportState
   selection: SelectionState
   graphLayers: GraphLayerVisibility
@@ -23,6 +26,8 @@ export interface VisualizerStoreActions {
   setSnapshot: (snapshot: ProjectSnapshot | null) => void
   setLayouts: (layouts: LayoutSpec[]) => void
   setActiveLayoutId: (layoutId: string | null) => void
+  setDraftLayouts: (draftLayouts: LayoutDraft[]) => void
+  setActiveDraftId: (draftId: string | null) => void
   setViewport: (viewport: Partial<ViewportState>) => void
   setSelection: (selection: Partial<SelectionState>) => void
   selectNode: (nodeId: string | null) => void

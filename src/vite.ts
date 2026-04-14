@@ -4,8 +4,7 @@ import type { Plugin } from 'vite'
 
 import type { ReadProjectSnapshotOptions } from './types'
 import { readProjectSnapshot } from './node/readProjectSnapshot'
-
-export const CODEBASE_VISUALIZER_ROUTE = '/__codebase-visualizer/snapshot'
+import { CODEBASE_VISUALIZER_ROUTE } from './shared/constants'
 
 export interface CodebaseVisualizerViteOptions
   extends ReadProjectSnapshotOptions {

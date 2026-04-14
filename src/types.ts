@@ -45,6 +45,28 @@ export type {
   LayoutSummary,
   SnapshotResponse,
 } from './schema/api'
+export type {
+  LayoutDraft,
+  LayoutDraftSource,
+  LayoutDraftStatus,
+  LayoutPlanner,
+  LayoutPlannerConstraints,
+  LayoutPlannerContext,
+  LayoutPlannerPlacement,
+  LayoutPlannerProposal,
+  LayoutPlannerProposalEnvelope,
+  LayoutPlannerRequest,
+  PlannerCoordinateSpace,
+  PlannerEdgeRef,
+  PlannerExistingLayout,
+  PlannerExistingLayoutSummary,
+  PlannerNodeRef,
+  PlannerSnapshotMeta,
+  ValidationIssue,
+  ValidationIssueCode,
+  ValidationIssueSeverity,
+  ValidationResult,
+} from './schema/planner'
 export {
   DEFAULT_PROJECT_TAGS,
   PROJECT_SNAPSHOT_SCHEMA_VERSION,
@@ -57,3 +79,4 @@ export {
   DEFAULT_VIEWPORT_STATE,
 } from './schema/layout'
 export { DEFAULT_GRAPH_LAYER_VISIBILITY } from './schema/store'
+export { DEFAULT_LAYOUT_PLANNER_CONSTRAINTS } from './schema/planner'
