@@ -116,6 +116,18 @@ export function createVisualizerStore(
     setViewMode: (viewMode) => {
       set((state) => ({
         viewMode,
+        graphLayers:
+          viewMode === 'symbols'
+            ? {
+                contains: false,
+                imports: false,
+                calls: true,
+              }
+            : {
+                contains: true,
+                imports: false,
+                calls: false,
+              },
         selection: {
           ...state.selection,
           nodeId: getNextSelectedNodeId(snapshotOrNull(state), state.selection, viewMode),

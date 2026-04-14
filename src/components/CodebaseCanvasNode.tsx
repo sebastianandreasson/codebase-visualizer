@@ -1,3 +1,5 @@
+import { memo } from 'react'
+
 import { Handle, Position, type NodeProps } from '@xyflow/react'
 
 type CodebaseCanvasNodeData = Record<string, unknown> & {
@@ -5,12 +7,12 @@ type CodebaseCanvasNodeData = Record<string, unknown> & {
   subtitle: string
   kind: 'directory' | 'file'
   tags: string[]
-  selected: boolean
   dimmed: boolean
 }
 
-export function CodebaseCanvasNode({
+export const CodebaseCanvasNode = memo(function CodebaseCanvasNode({
   data,
+  selected,
 }: NodeProps) {
   const nodeData = data as CodebaseCanvasNodeData
 
@@ -19,7 +21,7 @@ export function CodebaseCanvasNode({
       className={[
         'cbv-node',
         nodeData.kind === 'directory' ? 'is-directory' : 'is-file',
-        nodeData.selected ? 'is-selected' : '',
+        selected ? 'is-selected' : '',
         nodeData.dimmed ? 'is-dimmed' : '',
       ]
         .filter(Boolean)
@@ -49,4 +51,4 @@ export function CodebaseCanvasNode({
       />
     </div>
   )
-}
+})

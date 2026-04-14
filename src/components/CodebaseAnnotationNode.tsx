@@ -1,3 +1,5 @@
+import { memo } from 'react'
+
 import type { NodeProps } from '@xyflow/react'
 
 type CodebaseAnnotationNodeData = Record<string, unknown> & {
@@ -5,7 +7,7 @@ type CodebaseAnnotationNodeData = Record<string, unknown> & {
   dimmed: boolean
 }
 
-export function CodebaseAnnotationNode({
+export const CodebaseAnnotationNode = memo(function CodebaseAnnotationNode({
   data,
 }: NodeProps) {
   const annotation = data as CodebaseAnnotationNodeData
@@ -22,4 +24,4 @@ export function CodebaseAnnotationNode({
       <span>{annotation.label}</span>
     </div>
   )
-}
+})

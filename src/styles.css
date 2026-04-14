@@ -204,12 +204,10 @@
   border: 1px solid #d8cfbf;
   border-radius: 1rem;
   background: rgba(255, 251, 245, 0.96);
-  box-shadow: 0 10px 24px rgba(69, 52, 31, 0.08);
   transition:
     transform 140ms ease,
     border-color 140ms ease,
-    opacity 140ms ease,
-    box-shadow 140ms ease;
+    opacity 140ms ease;
 }
 
 .cbv-node.is-directory {
@@ -225,11 +223,12 @@
 .cbv-node.is-symbol {
   background:
     linear-gradient(180deg, rgba(244, 252, 250, 0.98), rgba(230, 244, 239, 0.96));
+  box-shadow: none;
 }
 
 .cbv-node.is-selected {
   border-color: #2f6c60;
-  box-shadow: 0 16px 32px rgba(47, 108, 96, 0.18);
+  box-shadow: 0 8px 18px rgba(47, 108, 96, 0.14);
 }
 
 .cbv-node.is-dimmed {
@@ -305,6 +304,15 @@
   height: 10px;
   border: 0;
   background: #8e806b;
+}
+
+.cbv-node.is-symbol .cbv-node-handle {
+  opacity: 0;
+}
+
+.cbv-node.is-symbol:hover .cbv-node-handle,
+.cbv-node.is-symbol.is-selected .cbv-node-handle {
+  opacity: 1;
 }
 
 .cbv-minimap {

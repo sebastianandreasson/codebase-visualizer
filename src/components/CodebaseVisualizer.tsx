@@ -6,9 +6,6 @@ import {
   MiniMap,
   ReactFlow,
   ReactFlowProvider,
-  getConnectedEdges,
-  getIncomers,
-  getOutgoers,
   useEdgesState,
   useNodesState,
   type Edge,
@@ -16,7 +13,7 @@ import {
   Position,
   type XYPosition,
 } from '@xyflow/react'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 
 import {
   isDirectoryNode,
@@ -190,11 +187,18 @@ export function CodebaseVisualizer({
     setEdges(flowModel.edges)
   }, [activeLayout, effectiveSnapshot, graphLayers, setEdges, setNodes, viewMode])
 
-  useEffect(() => {
-    decorateFlowState(selectedNodeId, selectedEdgeId, setNodes, setEdges)
-  }, [selectedEdgeId, selectedNodeId, setEdges, setNodes])
-
-  const files = effectiveSnapshot ? collectFiles(effectiveSnapshot) : []
+  const visibleNodeCount = useMemo(
+    () =>
+      effectiveSnapshot && activeLayout
+        ? countVisibleLayoutNodes(effectiveSnapshot, activeLayout, viewMode)
+        : 0,
+    [activeLayout, effectiveSnapshot, viewMode],
+  )
+  const denseCanvasMode = viewMode === 'symbols' && visibleNodeCount > 250
+  const files = useMemo(
+    () => (effectiveSnapshot ? collectFiles(effectiveSnapshot) : []),
+    [effectiveSnapshot],
+  )
   const selectedNode =
     selectedNodeId && effectiveSnapshot ? effectiveSnapshot.nodes[selectedNodeId] : null
   const selectedSymbol = selectedNode && isSymbolNode(selectedNode) ? selectedNode : null
@@ -203,7 +207,6 @@ export function CodebaseVisualizer({
     selectedEdgeId ? edges.find((edge) => edge.id === selectedEdgeId) ?? null : null
   const graphSummary = buildGraphSummary(
     selectedNodeId,
-    nodes,
     edges,
     effectiveSnapshot,
   )
@@ -403,6 +406,7 @@ export function CodebaseVisualizer({
               minZoom={0.2}
               nodeTypes={nodeTypes}
               nodes={nodes}
+              onlyRenderVisibleElements
               onEdgeClick={(_, edge) => {
                 selectEdge(edge.id)
               }}
@@ -441,12 +445,14 @@ export function CodebaseVisualizer({
                 variant={BackgroundVariant.Dots}
               />
               <Controls showInteractive={false} />
-              <MiniMap
-                className="cbv-minimap"
-                maskColor="rgba(44, 35, 27, 0.16)"
-                pannable
-                zoomable
-              />
+              {denseCanvasMode ? null : (
+                <MiniMap
+                  className="cbv-minimap"
+                  maskColor="rgba(44, 35, 27, 0.16)"
+                  pannable
+                  zoomable
+                />
+              )}
             </ReactFlow>
           </section>
 
@@ -797,15 +803,14 @@ function buildFlowNode(
       targetPosition: Position.Left,
       width: placement.width,
       height: placement.height,
-      data: {
-        title: node.name,
-        subtitle: getSymbolSubtitle(node, snapshot),
-        kind: node.symbolKind,
-        tags: node.tags.slice(0, 3),
-        selected: false,
-        dimmed: false,
-      },
-    }
+        data: {
+          title: node.name,
+          subtitle: getSymbolSubtitle(node, snapshot),
+          kind: node.symbolKind,
+          tags: node.tags.slice(0, 3),
+          dimmed: false,
+        },
+      }
   }
 
   return {
@@ -824,7 +829,6 @@ function buildFlowNode(
       subtitle: getNodeSubtitle(node),
       kind: node.kind,
       tags: node.tags.slice(0, 3),
-      selected: false,
       dimmed: false,
     },
   }
@@ -1007,83 +1011,8 @@ function getEdgeColor(kind: GraphEdgeKind) {
   }
 }
 
-function decorateFlowState(
-  selectedNodeId: string | null,
-  selectedEdgeId: string | null,
-  setNodes: ReturnType<typeof useNodesState>[1],
-  setEdges: ReturnType<typeof useEdgesState>[1],
-) {
-  setEdges((currentEdges) => {
-    const selectedNodeIds = new Set<string>()
-    const relatedEdgeIds = new Set<string>()
-
-    setNodes((currentNodes) => {
-      const selectedNode =
-        selectedNodeId
-          ? currentNodes.find((node) => node.id === selectedNodeId) ?? null
-          : null
-      const selectedEdge =
-        selectedEdgeId
-          ? currentEdges.find((edge) => edge.id === selectedEdgeId) ?? null
-          : null
-
-      if (selectedNode) {
-        selectedNodeIds.add(selectedNode.id)
-
-        for (const edge of getConnectedEdges([selectedNode], currentEdges)) {
-          relatedEdgeIds.add(edge.id)
-        }
-
-        for (const node of getIncomers(selectedNode, currentNodes, currentEdges)) {
-          selectedNodeIds.add(node.id)
-        }
-
-        for (const node of getOutgoers(selectedNode, currentNodes, currentEdges)) {
-          selectedNodeIds.add(node.id)
-        }
-      }
-
-      if (selectedEdge) {
-        relatedEdgeIds.add(selectedEdge.id)
-        selectedNodeIds.add(selectedEdge.source)
-        selectedNodeIds.add(selectedEdge.target)
-      }
-
-      return currentNodes.map((node) => ({
-        ...node,
-        data: {
-          ...(node.data ?? {}),
-          selected: isAnnotationNodeId(node.id) ? false : node.id === selectedNodeId,
-          dimmed:
-            isAnnotationNodeId(node.id)
-              ? false
-              : selectedNodeIds.size > 0 &&
-                !selectedNodeIds.has(node.id),
-        },
-      }))
-    })
-
-    return currentEdges.map((edge) => ({
-      ...edge,
-      animated:
-        getFlowEdgeData(edge)?.kind !== 'contains' &&
-        (relatedEdgeIds.size === 0 || relatedEdgeIds.has(edge.id)),
-      style: {
-        ...edge.style,
-        opacity:
-          relatedEdgeIds.size > 0 && !relatedEdgeIds.has(edge.id) ? 0.16 : 1,
-      },
-      labelStyle: {
-        fill: '#4f463b',
-        fontSize: 11,
-      },
-    }))
-  })
-}
-
 function buildGraphSummary(
   selectedNodeId: string | null,
-  nodes: Node[],
   edges: Edge[],
   snapshot: CodebaseSnapshot | null,
 ): GraphSummary {
@@ -1095,26 +1024,16 @@ function buildGraphSummary(
     }
   }
 
-  const selectedNode = nodes.find((node) => node.id === selectedNodeId)
-
-  if (!selectedNode) {
-    return {
-      incoming: 0,
-      outgoing: 0,
-      neighbors: [],
-    }
-  }
-
-  const incomers = getIncomers(selectedNode, nodes, edges)
-  const outgoers = getOutgoers(selectedNode, nodes, edges)
+  const incomingEdges = edges.filter((edge) => edge.target === selectedNodeId)
+  const outgoingEdges = edges.filter((edge) => edge.source === selectedNodeId)
   const neighborIds = new Set([
-    ...incomers.map((node) => node.id),
-    ...outgoers.map((node) => node.id),
+    ...incomingEdges.map((edge) => edge.source),
+    ...outgoingEdges.map((edge) => edge.target),
   ])
 
   return {
-    incoming: incomers.length,
-    outgoing: outgoers.length,
+    incoming: incomingEdges.length,
+    outgoing: outgoingEdges.length,
     neighbors: Array.from(neighborIds)
       .map((nodeId) => snapshot.nodes[nodeId])
       .filter((node): node is ProjectNode => Boolean(node)),
@@ -1130,6 +1049,22 @@ function countEdgesOfKind(
 
 function countSymbolNodes(snapshot: CodebaseSnapshot) {
   return Object.values(snapshot.nodes).filter(isSymbolNode).length
+}
+
+function countVisibleLayoutNodes(
+  snapshot: CodebaseSnapshot,
+  layout: LayoutSpec,
+  viewMode: VisualizerViewMode,
+) {
+  const hiddenNodeIds = new Set(layout.hiddenNodeIds)
+
+  return Object.values(snapshot.nodes).filter((node) => {
+    if (hiddenNodeIds.has(node.id) || !layout.placements[node.id]) {
+      return false
+    }
+
+    return viewMode === 'symbols' ? isSymbolNode(node) : node.kind !== 'symbol'
+  }).length
 }
 
 function updateLayoutPlacement(

@@ -1,3 +1,5 @@
+import { memo } from 'react'
+
 import { Handle, Position, type NodeProps } from '@xyflow/react'
 
 type CodebaseSymbolNodeData = Record<string, unknown> & {
@@ -5,12 +7,12 @@ type CodebaseSymbolNodeData = Record<string, unknown> & {
   subtitle: string
   kind: string
   tags: string[]
-  selected: boolean
   dimmed: boolean
 }
 
-export function CodebaseSymbolNode({
+export const CodebaseSymbolNode = memo(function CodebaseSymbolNode({
   data,
+  selected,
 }: NodeProps) {
   const nodeData = data as CodebaseSymbolNodeData
 
@@ -19,7 +21,7 @@ export function CodebaseSymbolNode({
       className={[
         'cbv-node',
         'is-symbol',
-        nodeData.selected ? 'is-selected' : '',
+        selected ? 'is-selected' : '',
         nodeData.dimmed ? 'is-dimmed' : '',
       ]
         .filter(Boolean)
@@ -47,4 +49,4 @@ export function CodebaseSymbolNode({
       />
     </div>
   )
-}
+})
