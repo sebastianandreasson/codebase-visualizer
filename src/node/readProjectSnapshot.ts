@@ -13,18 +13,7 @@ import {
   DEFAULT_PROJECT_TAGS,
   PROJECT_SNAPSHOT_SCHEMA_VERSION,
 } from '../schema/snapshot'
-
-const DEFAULT_IGNORED_NAMES = new Set([
-  '.DS_Store',
-  '.git',
-  '.idea',
-  '.next',
-  '.turbo',
-  '.vscode',
-  'coverage',
-  'dist',
-  'node_modules',
-])
+import { createIgnoreMatcher } from './gitignore'
 
 const DEFAULT_MAX_DEPTH = 12
 const DEFAULT_MAX_FILE_SIZE = 100_000
@@ -32,7 +21,6 @@ const DEFAULT_MAX_FILES = 2_000
 
 interface WalkState {
   filesSeen: number
-  ignoredNames: Set<string>
   includeContents: boolean
   maxDepth: number
   maxFileSize: number
@@ -41,6 +29,7 @@ interface WalkState {
   edges: GraphEdge[]
   nodes: Record<string, ProjectNode>
   rootIds: string[]
+  ignoreMatcher: ReturnType<typeof createIgnoreMatcher>
 }
 
 export async function readProjectSnapshot(
@@ -49,10 +38,6 @@ export async function readProjectSnapshot(
   const rootDir = options.rootDir ?? process.cwd()
   const state: WalkState = {
     filesSeen: 0,
-    ignoredNames: new Set([
-      ...DEFAULT_IGNORED_NAMES,
-      ...(options.ignoredNames ?? []),
-    ]),
     includeContents: options.includeContents ?? true,
     maxDepth: options.maxDepth ?? DEFAULT_MAX_DEPTH,
     maxFileSize: options.maxFileSize ?? DEFAULT_MAX_FILE_SIZE,
@@ -61,9 +46,10 @@ export async function readProjectSnapshot(
     edges: [],
     nodes: {},
     rootIds: [],
+    ignoreMatcher: createIgnoreMatcher(rootDir, options.ignoredNames),
   }
 
-  state.rootIds = await walkDirectory(rootDir, state, 0, null)
+  state.rootIds = await walkDirectory(rootDir, state, 0, null, [])
 
   return {
     schemaVersion: PROJECT_SNAPSHOT_SCHEMA_VERSION,
@@ -83,14 +69,28 @@ async function walkDirectory(
   state: WalkState,
   depth: number,
   parentId: string | null,
+  parentIgnoreContexts: Awaited<
+    ReturnType<ReturnType<typeof createIgnoreMatcher>['loadContexts']>
+  >,
 ): Promise<string[]> {
   if (depth > state.maxDepth || state.filesSeen >= state.maxFiles) {
     return []
   }
 
+  const ignoreContexts = await state.ignoreMatcher.loadContexts(
+    directoryPath,
+    parentIgnoreContexts,
+  )
+
   const directoryEntries = await readdir(directoryPath, { withFileTypes: true })
   const sortedEntries = directoryEntries
-    .filter((entry) => !state.ignoredNames.has(entry.name))
+    .filter((entry) => {
+      const absolutePath = join(directoryPath, entry.name)
+      const relativePath = normalizePath(relative(state.rootDir, absolutePath))
+      const isDirectory = entry.isDirectory()
+
+      return !state.ignoreMatcher.isIgnored(relativePath, isDirectory, ignoreContexts)
+    })
     .sort((left, right) => {
       if (left.isDirectory() !== right.isDirectory()) {
         return left.isDirectory() ? -1 : 1
@@ -119,6 +119,7 @@ async function walkDirectory(
         state,
         depth + 1,
         relativePath,
+        ignoreContexts,
       )
       const directoryNode: DirectoryNode = {
         kind: 'directory',
