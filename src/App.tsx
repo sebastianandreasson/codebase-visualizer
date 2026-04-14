@@ -1,18 +1,23 @@
-import { startTransition, useEffect, useState } from 'react'
+import { startTransition, useEffect } from 'react'
 
 import { CodebaseVisualizer } from './index'
 import type { CodebaseSnapshot } from './types'
+import { useVisualizerStore } from './store/visualizerStore'
 import { CODEBASE_VISUALIZER_ROUTE } from './vite'
 
 export default function App() {
-  const [snapshot, setSnapshot] = useState<CodebaseSnapshot | null>(null)
-  const [errorMessage, setErrorMessage] = useState<string | null>(null)
-  const [isLoading, setIsLoading] = useState(true)
+  const status = useVisualizerStore((state) => state.status)
+  const errorMessage = useVisualizerStore((state) => state.errorMessage)
+  const setErrorMessage = useVisualizerStore((state) => state.setErrorMessage)
+  const setSnapshot = useVisualizerStore((state) => state.setSnapshot)
+  const setStatus = useVisualizerStore((state) => state.setStatus)
 
   useEffect(() => {
     let isCancelled = false
 
     async function loadSnapshot() {
+      setStatus('loading')
+
       try {
         const response = await fetch(CODEBASE_VISUALIZER_ROUTE)
 
@@ -29,6 +34,7 @@ export default function App() {
         startTransition(() => {
           setSnapshot(data)
           setErrorMessage(null)
+          setStatus('ready')
         })
       } catch (error) {
         if (isCancelled) {
@@ -38,10 +44,7 @@ export default function App() {
         setErrorMessage(
           error instanceof Error ? error.message : 'Failed to load the codebase.',
         )
-      } finally {
-        if (!isCancelled) {
-          setIsLoading(false)
-        }
+        setStatus('error')
       }
     }
 
@@ -50,7 +53,7 @@ export default function App() {
     return () => {
       isCancelled = true
     }
-  }, [])
+  }, [setErrorMessage, setSnapshot, setStatus])
 
   return (
     <main className="demo-page">
@@ -63,12 +66,12 @@ export default function App() {
         </p>
       </header>
 
-      {isLoading ? (
+      {status === 'loading' || status === 'idle' ? (
         <section className="demo-status">Indexing files from the current workspace...</section>
       ) : errorMessage ? (
         <section className="demo-status is-error">{errorMessage}</section>
       ) : (
-        <CodebaseVisualizer snapshot={snapshot} />
+        <CodebaseVisualizer />
       )}
     </main>
   )

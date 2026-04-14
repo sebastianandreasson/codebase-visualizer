@@ -1,22 +1,42 @@
-import { useState } from 'react'
+import { useEffect } from 'react'
 
-import type { CodebaseEntry, CodebaseFile, CodebaseSnapshot } from '../types'
+import {
+  isDirectoryNode,
+  isFileNode,
+  type CodebaseEntry,
+  type CodebaseFile,
+  type CodebaseSnapshot,
+  type DirectoryNode,
+  type FileNode,
+} from '../types'
+import { useVisualizerStore } from '../store/visualizerStore'
 
 interface CodebaseVisualizerProps {
-  snapshot: CodebaseSnapshot | null
+  snapshot?: CodebaseSnapshot | null
 }
 
 export function CodebaseVisualizer({
   snapshot,
 }: CodebaseVisualizerProps) {
-  const [preferredPath, setPreferredPath] = useState<string | null>(null)
+  const currentSnapshot = useVisualizerStore((state) => state.snapshot)
+  const selectedNodeId = useVisualizerStore((state) => state.selection.nodeId)
+  const setSnapshot = useVisualizerStore((state) => state.setSnapshot)
+  const selectNode = useVisualizerStore((state) => state.selectNode)
 
-  const files = snapshot ? collectFiles(snapshot.tree) : []
-  const selectedPath =
-    files.find((file) => file.path === preferredPath)?.path ?? files[0]?.path ?? null
-  const selectedFile = files.find((file) => file.path === selectedPath) ?? null
+  useEffect(() => {
+    if (snapshot === undefined) {
+      return
+    }
 
-  if (!snapshot) {
+    setSnapshot(snapshot)
+  }, [setSnapshot, snapshot])
+
+  const effectiveSnapshot = snapshot ?? currentSnapshot
+  const files = effectiveSnapshot ? collectFiles(effectiveSnapshot) : []
+  const selectedFile =
+    files.find((file) => file.id === selectedNodeId) ?? files[0] ?? null
+
+  if (!effectiveSnapshot) {
     return (
       <section className="cbv-shell">
         <div className="cbv-empty">
@@ -32,18 +52,27 @@ export function CodebaseVisualizer({
       <aside className="cbv-sidebar">
         <div className="cbv-panel-header">
           <p className="cbv-eyebrow">Project tree</p>
-          <strong>{snapshot.totalFiles} files indexed</strong>
+          <strong>{effectiveSnapshot.totalFiles} files indexed</strong>
         </div>
         <div className="cbv-tree">
-          {snapshot.tree.map((entry) => (
+          {effectiveSnapshot.rootIds.map((rootId) => {
+            const entry = effectiveSnapshot.nodes[rootId]
+
+            if (!entry || entry.kind === 'symbol') {
+              return null
+            }
+
+            return (
             <TreeNode
               depth={0}
               entry={entry}
-              key={entry.path}
-              selectedPath={selectedFile?.path ?? null}
-              setSelectedPath={setPreferredPath}
+              key={entry.id}
+              nodes={effectiveSnapshot.nodes}
+              selectedPath={selectedFile?.id ?? null}
+              setSelectedPath={selectNode}
             />
-          ))}
+            )
+          })}
         </div>
       </aside>
 
@@ -77,40 +106,51 @@ export function CodebaseVisualizer({
 function TreeNode({
   depth,
   entry,
+  nodes,
   selectedPath,
   setSelectedPath,
 }: {
   depth: number
-  entry: CodebaseEntry
+  entry: CodebaseEntry | DirectoryNode | FileNode
+  nodes: CodebaseSnapshot['nodes']
   selectedPath: string | null
   setSelectedPath: (path: string) => void
 }) {
-  if (entry.kind === 'directory') {
+  if (isDirectoryNode(entry)) {
     return (
       <div className="cbv-tree-group">
         <div className="cbv-tree-label" style={{ paddingLeft: `${depth * 14}px` }}>
           <span className="cbv-tree-kind">dir</span>
           <span>{entry.name}</span>
         </div>
-        {entry.children.map((child) => (
-          <TreeNode
-            depth={depth + 1}
-            entry={child}
-            key={child.path}
-            selectedPath={selectedPath}
-            setSelectedPath={setSelectedPath}
-          />
-        ))}
+        {entry.childIds.map((childId) => {
+          const child = nodes[childId]
+
+          if (!child || child.kind === 'symbol') {
+            return null
+          }
+
+          return (
+            <TreeNode
+              depth={depth + 1}
+              entry={child}
+              key={child.id}
+              nodes={nodes}
+              selectedPath={selectedPath}
+              setSelectedPath={setSelectedPath}
+            />
+          )
+        })}
       </div>
     )
   }
 
-  const isSelected = entry.path === selectedPath
+  const isSelected = entry.id === selectedPath
 
   return (
     <button
       className={`cbv-tree-file${isSelected ? ' is-selected' : ''}`}
-      onClick={() => setSelectedPath(entry.path)}
+      onClick={() => setSelectedPath(entry.id)}
       style={{ paddingLeft: `${depth * 14}px` }}
       type="button"
     >
@@ -120,19 +160,39 @@ function TreeNode({
   )
 }
 
-function collectFiles(entries: CodebaseEntry[]) {
+function collectFiles(snapshot: CodebaseSnapshot) {
   const files: CodebaseFile[] = []
 
-  for (const entry of entries) {
-    if (entry.kind === 'file') {
-      files.push(entry)
-      continue
-    }
-
-    files.push(...collectFiles(entry.children))
+  for (const rootId of snapshot.rootIds) {
+    collectFileChildren(rootId, snapshot, files)
   }
 
   return files
+}
+
+function collectFileChildren(
+  nodeId: string,
+  snapshot: CodebaseSnapshot,
+  files: CodebaseFile[],
+) {
+  const node = snapshot.nodes[nodeId]
+
+  if (!node) {
+    return
+  }
+
+  if (isFileNode(node)) {
+    files.push(node)
+    return
+  }
+
+  if (!isDirectoryNode(node)) {
+    return
+  }
+
+  for (const childId of node.childIds) {
+    collectFileChildren(childId, snapshot, files)
+  }
 }
 
 function formatFileSize(size: number) {

@@ -2,12 +2,17 @@ import { readdir, readFile, stat } from 'node:fs/promises'
 import { basename, extname, join, relative } from 'node:path'
 
 import type {
-  CodebaseDirectory,
-  CodebaseEntry,
   CodebaseFile,
-  CodebaseSnapshot,
+  DirectoryNode,
+  GraphEdge,
+  ProjectNode,
+  ProjectSnapshot,
   ReadProjectSnapshotOptions,
 } from '../types'
+import {
+  DEFAULT_PROJECT_TAGS,
+  PROJECT_SNAPSHOT_SCHEMA_VERSION,
+} from '../schema/snapshot'
 
 const DEFAULT_IGNORED_NAMES = new Set([
   '.DS_Store',
@@ -33,11 +38,14 @@ interface WalkState {
   maxFileSize: number
   maxFiles: number
   rootDir: string
+  edges: GraphEdge[]
+  nodes: Record<string, ProjectNode>
+  rootIds: string[]
 }
 
 export async function readProjectSnapshot(
   options: ReadProjectSnapshotOptions = {},
-): Promise<CodebaseSnapshot> {
+): Promise<ProjectSnapshot> {
   const rootDir = options.rootDir ?? process.cwd()
   const state: WalkState = {
     filesSeen: 0,
@@ -50,15 +58,23 @@ export async function readProjectSnapshot(
     maxFileSize: options.maxFileSize ?? DEFAULT_MAX_FILE_SIZE,
     maxFiles: options.maxFiles ?? DEFAULT_MAX_FILES,
     rootDir,
+    edges: [],
+    nodes: {},
+    rootIds: [],
   }
 
-  const tree = await walkDirectory(rootDir, state, 0)
+  state.rootIds = await walkDirectory(rootDir, state, 0, null)
 
   return {
+    schemaVersion: PROJECT_SNAPSHOT_SCHEMA_VERSION,
     rootDir,
     generatedAt: new Date().toISOString(),
     totalFiles: state.filesSeen,
-    tree,
+    rootIds: state.rootIds,
+    entryFileIds: [],
+    nodes: state.nodes,
+    edges: state.edges,
+    tags: DEFAULT_PROJECT_TAGS,
   }
 }
 
@@ -66,7 +82,8 @@ async function walkDirectory(
   directoryPath: string,
   state: WalkState,
   depth: number,
-): Promise<CodebaseEntry[]> {
+  parentId: string | null,
+): Promise<string[]> {
   if (depth > state.maxDepth || state.filesSeen >= state.maxFiles) {
     return []
   }
@@ -82,7 +99,7 @@ async function walkDirectory(
       return left.name.localeCompare(right.name)
     })
 
-  const tree: CodebaseEntry[] = []
+  const childIds: string[] = []
 
   for (const entry of sortedEntries) {
     if (state.filesSeen >= state.maxFiles) {
@@ -97,15 +114,26 @@ async function walkDirectory(
     }
 
     if (entry.isDirectory()) {
-      const children = await walkDirectory(absolutePath, state, depth + 1)
-      const directoryNode: CodebaseDirectory = {
+      const children = await walkDirectory(
+        absolutePath,
+        state,
+        depth + 1,
+        relativePath,
+      )
+      const directoryNode: DirectoryNode = {
         kind: 'directory',
+        id: relativePath,
         name: entry.name,
         path: relativePath,
-        children,
+        tags: [],
+        parentId,
+        childIds: children,
+        depth,
       }
 
-      tree.push(directoryNode)
+      state.nodes[directoryNode.id] = directoryNode
+      childIds.push(directoryNode.id)
+      addContainsEdge(state, parentId, directoryNode.id)
       continue
     }
 
@@ -114,22 +142,34 @@ async function walkDirectory(
     }
 
     state.filesSeen += 1
-    tree.push(await readProjectFile(absolutePath, relativePath, state))
+    const fileNode = await readProjectFile(
+      absolutePath,
+      relativePath,
+      parentId,
+      state,
+    )
+    state.nodes[fileNode.id] = fileNode
+    childIds.push(fileNode.id)
+    addContainsEdge(state, parentId, fileNode.id)
   }
 
-  return tree
+  return childIds
 }
 
 async function readProjectFile(
   absolutePath: string,
   relativePath: string,
+  parentId: string | null,
   state: WalkState,
 ): Promise<CodebaseFile> {
   const fileStat = await stat(absolutePath)
   const fileNode: CodebaseFile = {
     kind: 'file',
+    id: relativePath,
     name: basename(absolutePath),
     path: relativePath,
+    tags: [],
+    parentId,
     extension: extname(absolutePath).slice(1),
     size: fileStat.size,
     content: null,
@@ -162,4 +202,21 @@ async function readProjectFile(
 
 function normalizePath(pathValue: string) {
   return pathValue.split('\\').join('/')
+}
+
+function addContainsEdge(
+  state: WalkState,
+  parentId: string | null,
+  childId: string,
+) {
+  if (!parentId) {
+    return
+  }
+
+  state.edges.push({
+    id: `contains:${parentId}->${childId}`,
+    kind: 'contains',
+    source: parentId,
+    target: childId,
+  })
 }
