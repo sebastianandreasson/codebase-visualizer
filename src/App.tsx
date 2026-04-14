@@ -27,6 +27,24 @@ export default function App() {
   const setStatus = useVisualizerStore((state) => state.setStatus)
 
   useEffect(() => {
+    const desktopBridge = (
+      globalThis as typeof globalThis & {
+        codebaseVisualizerDesktop?: { isDesktop?: boolean }
+      }
+    ).codebaseVisualizerDesktop
+
+    if (!desktopBridge?.isDesktop) {
+      return
+    }
+
+    document.body.classList.add('is-desktop-host')
+
+    return () => {
+      document.body.classList.remove('is-desktop-host')
+    }
+  }, [])
+
+  useEffect(() => {
     let isCancelled = false
 
     async function loadWorkspaceState() {
@@ -39,15 +57,17 @@ export default function App() {
         ])
 
         if (!snapshotResponse.ok) {
-          throw new Error(
+          throw new Error(await getResponseErrorMessage(
+            snapshotResponse,
             `Snapshot request failed with status ${snapshotResponse.status}.`,
-          )
+          ))
         }
 
         if (!layoutStateResponse.ok) {
-          throw new Error(
+          throw new Error(await getResponseErrorMessage(
+            layoutStateResponse,
             `Layout state request failed with status ${layoutStateResponse.status}.`,
-          )
+          ))
         }
 
         const [snapshot, layoutState] = (await Promise.all([
@@ -99,7 +119,10 @@ export default function App() {
     const response = await fetch(CODEBASE_VISUALIZER_LAYOUTS_ROUTE)
 
     if (!response.ok) {
-      throw new Error(`Layout state request failed with status ${response.status}.`)
+      throw new Error(await getResponseErrorMessage(
+        response,
+        `Layout state request failed with status ${response.status}.`,
+      ))
     }
 
     const layoutState = (await response.json()) as LayoutStateResponse
@@ -122,7 +145,10 @@ export default function App() {
       )
 
       if (!response.ok) {
-        throw new Error(`Accept draft failed with status ${response.status}.`)
+        throw new Error(await getResponseErrorMessage(
+          response,
+          `Accept draft failed with status ${response.status}.`,
+        ))
       }
 
       const result = (await response.json()) as DraftMutationResponse
@@ -155,7 +181,10 @@ export default function App() {
       )
 
       if (!response.ok) {
-        throw new Error(`Reject draft failed with status ${response.status}.`)
+        throw new Error(await getResponseErrorMessage(
+          response,
+          `Reject draft failed with status ${response.status}.`,
+        ))
       }
 
       await refreshLayoutState()
@@ -191,4 +220,21 @@ export default function App() {
       )}
     </main>
   )
+}
+
+async function getResponseErrorMessage(
+  response: Response,
+  fallbackMessage: string,
+) {
+  try {
+    const payload = (await response.json()) as { message?: string }
+
+    if (payload?.message) {
+      return payload.message
+    }
+  } catch {
+    // Ignore non-JSON error bodies and fall back to the caller-provided message.
+  }
+
+  return fallbackMessage
 }

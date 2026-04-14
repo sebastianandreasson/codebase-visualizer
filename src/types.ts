@@ -1,4 +1,13 @@
 export type {
+  AgentEvent,
+  AgentMessage,
+  AgentMessageBlock,
+  AgentPermissionRequest,
+  AgentRunState,
+  AgentSessionSummary,
+  AgentToolInvocation,
+} from './schema/agent'
+export type {
   LanguageAdapter,
   LanguageAdapterCapabilities,
   LanguageAdapterInput,

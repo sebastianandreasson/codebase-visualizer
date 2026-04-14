@@ -1,14 +1,14 @@
-import { createServer } from 'node:http'
-import { readFile } from 'node:fs/promises'
-import { dirname, extname, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { resolve } from 'node:path'
 
-import { ensureAgentInstructions } from './agentInstructions'
-import { handleCodebaseVisualizerRequest } from '../node/http'
+import {
+  buildAgentPromptText,
+  DEFAULT_STANDALONE_HOST,
+  DEFAULT_STANDALONE_PORT,
+  startStandaloneServer,
+} from '../hosts/standaloneServer'
 
-const DEFAULT_HOST = '127.0.0.1'
-const DEFAULT_PORT = 3210
-const STANDALONE_HTML_ENTRY = '/standalone.html'
+const DEFAULT_HOST = DEFAULT_STANDALONE_HOST
+const DEFAULT_PORT = DEFAULT_STANDALONE_PORT
 
 export interface RunCliOptions {
   args?: string[]
@@ -23,58 +23,22 @@ export async function runCli(options: RunCliOptions = {}) {
   }
 
   const rootDir = resolve(parsedArguments.rootDir ?? process.cwd())
-  const instructionsPath = await ensureAgentInstructions(rootDir)
-  const standaloneDir = resolve(
-    dirname(fileURLToPath(import.meta.url)),
-    '..',
-    'standalone',
-  )
-
-  const server = createServer(async (request, response) => {
-    const handled = await handleCodebaseVisualizerRequest(request, response, {
-      rootDir,
-      analyzeCalls: true,
-      analyzeImports: true,
-      analyzeSymbols: true,
-    })
-
-    if (handled) {
-      return
-    }
-
-    await serveStandaloneAsset(request.url ?? '/', standaloneDir, response)
+  const serverHandle = await startStandaloneServer({
+    rootDir,
+    host: parsedArguments.host,
+    port: parsedArguments.port,
   })
 
-  await new Promise<void>((resolvePromise, rejectPromise) => {
-    server.once('error', rejectPromise)
-    server.listen(parsedArguments.port, parsedArguments.host, () => {
-      server.off('error', rejectPromise)
-      resolvePromise()
-    })
-  })
-
-  const address = server.address()
-  const port =
-    typeof address === 'object' && address ? address.port : parsedArguments.port
-  const host =
-    typeof address === 'object' && address ? address.address : parsedArguments.host
-  const url = `http://${host}:${port}`
-
-  process.stdout.write(`Codebase Visualizer running at ${url}\n`)
+  process.stdout.write(`Codebase Visualizer running at ${serverHandle.url}\n`)
   process.stdout.write(`Visualizing ${rootDir}\n`)
-  process.stdout.write(`Agent instructions written to ${instructionsPath}\n\n`)
-  process.stdout.write('Copy/paste this to your favorite coding agent:\n\n')
   process.stdout.write(
-    [
-      `Look up "${instructionsPath}" and follow it to construct a new Codebase Visualizer layout draft for this repository.`,
-      'Use the following layout brief:',
-      '"REPLACE WITH YOUR CUSTOM STRUCTURE HERE"',
-      'Save the result as a draft layout so it appears in Codebase Visualizer.',
-    ].join('\n') + '\n\n',
+    `Agent instructions written to ${serverHandle.instructionsPath}\n\n`,
   )
+  process.stdout.write('Copy/paste this to your favorite coding agent:\n\n')
+  process.stdout.write(buildAgentPromptText(serverHandle.instructionsPath) + '\n\n')
 
   const shutdown = () => {
-    server.close(() => {
+    void serverHandle.close().finally(() => {
       process.exit(0)
     })
   }
@@ -134,59 +98,6 @@ function parseArguments(args: string[]): ParsedArguments {
     host,
     port,
     rootDir,
-  }
-}
-
-async function serveStandaloneAsset(
-  urlPath: string,
-  standaloneDir: string,
-  response: import('node:http').ServerResponse,
-) {
-  const pathname = decodeURIComponent(urlPath.split('?')[0] || '/')
-  const normalizedPath =
-    pathname === '/' ? STANDALONE_HTML_ENTRY : pathname.replace(/\/+$/, '') || STANDALONE_HTML_ENTRY
-  const targetPath = resolve(standaloneDir, `.${normalizedPath}`)
-
-  if (!targetPath.startsWith(standaloneDir)) {
-    response.statusCode = 403
-    response.end('Forbidden')
-    return
-  }
-
-  try {
-    const fileContents = await readFile(targetPath)
-    response.statusCode = 200
-    response.setHeader(
-      'Content-Type',
-      getContentType(targetPath) ?? 'application/octet-stream',
-    )
-    response.end(fileContents)
-    return
-  } catch {
-    if (pathname !== '/' && !pathname.startsWith('/assets/')) {
-      await serveStandaloneAsset('/', standaloneDir, response)
-      return
-    }
-  }
-
-  response.statusCode = 404
-  response.end('Not found')
-}
-
-function getContentType(pathValue: string) {
-  switch (extname(pathValue)) {
-    case '.css':
-      return 'text/css; charset=utf-8'
-    case '.html':
-      return 'text/html; charset=utf-8'
-    case '.js':
-      return 'text/javascript; charset=utf-8'
-    case '.json':
-      return 'application/json; charset=utf-8'
-    case '.svg':
-      return 'image/svg+xml'
-    default:
-      return null
   }
 }
 

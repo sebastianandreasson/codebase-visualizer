@@ -76,28 +76,35 @@ export async function enrichProjectSnapshot(
       continue
     }
 
-    const result = await adapter.analyze({
-      snapshot: workingSnapshot,
-      fileNodes: adapterFileNodes,
-      options,
-    })
+    try {
+      const result = await adapter.analyze({
+        snapshot: workingSnapshot,
+        fileNodes: adapterFileNodes,
+        options,
+      })
 
-    if (result.nodes) {
-      Object.assign(context.nodes, result.nodes)
-    }
-
-    if (result.edges) {
-      context.edges.push(...result.edges)
-    }
-
-    if (result.entryFileIds) {
-      for (const entryFileId of result.entryFileIds) {
-        context.entryFileIds.add(entryFileId)
+      if (result.nodes) {
+        Object.assign(context.nodes, result.nodes)
       }
-    }
 
-    if (result.tags?.length) {
-      snapshot.tags = dedupeTags([...snapshot.tags, ...result.tags])
+      if (result.edges) {
+        context.edges.push(...result.edges)
+      }
+
+      if (result.entryFileIds) {
+        for (const entryFileId of result.entryFileIds) {
+          context.entryFileIds.add(entryFileId)
+        }
+      }
+
+      if (result.tags?.length) {
+        snapshot.tags = dedupeTags([...snapshot.tags, ...result.tags])
+      }
+    } catch (error) {
+      console.warn(
+        `[codebase-visualizer] Adapter "${adapter.id}" failed; continuing without its analysis.`,
+        error,
+      )
     }
   }
 

@@ -22,6 +22,16 @@ npx codebase-visualizer . --port 3210 --host 127.0.0.1
 This starts a local web app and visualizes the target repository directory.
 It also writes `.codebase-visualizer/INSTRUCTIONS.md` into the target repo and prints a ready-to-paste prompt you can hand to a coding agent for custom layouts.
 
+## Experimental Desktop Host
+
+```bash
+npm install
+npm run desktop -- /path/to/repo
+```
+
+This launches the same renderer in an Electron window and points it at the selected repository.
+If you omit the path, the desktop host now opens to a welcome screen where you can choose a folder yourself.
+
 Current language support:
 
 - TypeScript / JavaScript: files, symbols, imports, and call graph overlays.

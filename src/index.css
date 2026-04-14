@@ -47,6 +47,10 @@ pre {
   padding: 0.625rem;
 }
 
+body.is-desktop-host .demo-page {
+  padding-top: calc(0.625rem + env(safe-area-inset-top, 0px) + 1rem);
+}
+
 .demo-status {
   padding: 1.25rem 1.5rem;
   border: 1px solid #d5d0c7;
@@ -63,5 +67,9 @@ pre {
 @media (max-width: 720px) {
   .demo-page {
     padding: 0.5rem;
+  }
+
+  body.is-desktop-host .demo-page {
+    padding-top: calc(0.5rem + env(safe-area-inset-top, 0px) + 0.875rem);
   }
 }

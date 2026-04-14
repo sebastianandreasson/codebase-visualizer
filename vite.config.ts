@@ -17,6 +17,8 @@ export default defineConfig({
   build: {
     lib: {
       entry: {
+        'desktop/main': resolve(__dirname, 'src/desktop/main.ts'),
+        'desktop/preload': resolve(__dirname, 'src/desktop/preload.ts'),
         index: resolve(__dirname, 'src/index.ts'),
         'cli/index': resolve(__dirname, 'src/cli/index.ts'),
         'node/index': resolve(__dirname, 'src/node/index.ts'),
@@ -29,11 +31,14 @@ export default defineConfig({
     },
     rollupOptions: {
       external: [
+        '@mariozechner/pi-agent',
+        '@mariozechner/pi-ai',
         '@persper/js-callgraph',
         'ignore',
         'react',
         'react-dom',
         'react/jsx-runtime',
+        'electron',
         'tree-sitter',
         'tree-sitter-rust',
         'typescript',

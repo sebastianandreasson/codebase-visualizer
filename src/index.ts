@@ -10,6 +10,13 @@ export {
   visualizerStore,
 } from './store/visualizerStore'
 export type {
+  AgentEvent,
+  AgentMessage,
+  AgentMessageBlock,
+  AgentPermissionRequest,
+  AgentRunState,
+  AgentSessionSummary,
+  AgentToolInvocation,
   AnalysisState,
   AnalysisStatus,
   DraftMutationResponse,

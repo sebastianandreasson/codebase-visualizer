@@ -12,6 +12,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build && vite build -c vite.standalone.config.ts && tsc -p tsconfig.build.json",
+    "desktop": "npm run build && electron dist/desktop/main.js",
     "lint": "eslint .",
     "preview": "vite preview"
   },
@@ -44,6 +45,7 @@
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.1",
+    "electron": "^36.3.2",
     "eslint": "^9.39.4",
     "eslint-plugin-react-hooks": "^7.0.1",
     "eslint-plugin-react-refresh": "^0.5.2",
@@ -57,6 +59,7 @@
   "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "dependencies": {
+    "@mariozechner/pi-agent": "^0.9.0",
     "@persper/js-callgraph": "^1.3.2",
     "@xyflow/react": "^12.10.2",
     "ignore": "^7.0.5",

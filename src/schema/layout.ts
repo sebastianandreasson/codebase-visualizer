@@ -58,7 +58,7 @@ export interface ViewportState {
   zoom: number
 }
 
-export type InspectorTab = 'file' | 'graph' | 'layout'
+export type InspectorTab = 'file' | 'graph' | 'layout' | 'agent'
 
 export interface SelectionState {
   nodeId: string | null

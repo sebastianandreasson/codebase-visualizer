@@ -13,7 +13,14 @@ import {
   Position,
   type XYPosition,
 } from '@xyflow/react'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type PointerEvent as ReactPointerEvent,
+} from 'react'
 
 import {
   isDirectoryNode,
@@ -35,6 +42,7 @@ import { useVisualizerStore } from '../store/visualizerStore'
 import { buildStructuralLayout } from '../layouts/structuralLayout'
 import { buildSymbolLayout } from '../layouts/symbolLayout'
 import { CodebaseAnnotationNode } from './CodebaseAnnotationNode'
+import { AgentPanel } from './AgentPanel'
 import { CodebaseCanvasNode } from './CodebaseCanvasNode'
 import { CodebaseSymbolNode } from './CodebaseSymbolNode'
 
@@ -109,6 +117,9 @@ const DEFAULT_NODE_WIDTH = 240
 const DEFAULT_NODE_HEIGHT = 108
 const COMPACT_SYMBOL_NODE_WIDTH = 164
 const COMPACT_SYMBOL_NODE_HEIGHT = 74
+const DEFAULT_CANVAS_WIDTH_RATIO = 0.6
+const MIN_CANVAS_WIDTH_RATIO = 0.32
+const MAX_CANVAS_WIDTH_RATIO = 0.78
 
 const nodeTypes = {
   annotationNode: CodebaseAnnotationNode,
@@ -124,6 +135,12 @@ const SYMBOL_LEGEND_ITEMS = [
   { label: 'Variable', kindClass: 'variable' },
 ] as const
 
+interface DesktopBridge {
+  closeWorkspace?: () => Promise<boolean>
+  isDesktop?: boolean
+  openWorkspaceDialog?: () => Promise<boolean>
+}
+
 export function CodebaseVisualizer({
   snapshot,
   onAcceptDraft,
@@ -131,6 +148,10 @@ export function CodebaseVisualizer({
   layoutActionsPending = false,
 }: CodebaseVisualizerProps) {
   const [draftActionError, setDraftActionError] = useState<string | null>(null)
+  const [canvasWidthRatio, setCanvasWidthRatio] = useState(DEFAULT_CANVAS_WIDTH_RATIO)
+  const [activeResizePointerId, setActiveResizePointerId] = useState<number | null>(null)
+  const [workspaceActionPending, setWorkspaceActionPending] = useState(false)
+  const [workspaceActionError, setWorkspaceActionError] = useState<string | null>(null)
   const currentSnapshot = useVisualizerStore((state) => state.snapshot)
   const draftLayouts = useVisualizerStore((state) => state.draftLayouts)
   const activeDraftId = useVisualizerStore((state) => state.activeDraftId)
@@ -164,6 +185,13 @@ export function CodebaseVisualizer({
   )
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>([])
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([])
+  const workspaceRef = useRef<HTMLDivElement | null>(null)
+  const desktopBridge = (
+    globalThis as typeof globalThis & {
+      codebaseVisualizerDesktop?: DesktopBridge
+    }
+  ).codebaseVisualizerDesktop
+  const isDesktopHost = Boolean(desktopBridge?.isDesktop)
 
   useEffect(() => {
     if (snapshot === undefined) {
@@ -323,7 +351,111 @@ export function CodebaseVisualizer({
     edges,
     effectiveSnapshot,
   )
+  const workspaceName = effectiveSnapshot
+    ? getWorkspaceName(effectiveSnapshot.rootDir)
+    : 'Workspace'
   const visibleLayerToggles = getLayerTogglesForViewMode(viewMode)
+  const inspectorWidthRatio = 1 - canvasWidthRatio
+
+  useEffect(() => {
+    if (activeResizePointerId == null) {
+      return
+    }
+
+    const previousCursor = document.body.style.cursor
+    const previousUserSelect = document.body.style.userSelect
+
+    document.body.style.cursor = 'col-resize'
+    document.body.style.userSelect = 'none'
+
+    function handlePointerMove(event: PointerEvent) {
+      if (activeResizePointerId !== event.pointerId) {
+        return
+      }
+
+      const workspaceElement = workspaceRef.current
+
+      if (!workspaceElement) {
+        return
+      }
+
+      const bounds = workspaceElement.getBoundingClientRect()
+
+      if (bounds.width <= 0) {
+        return
+      }
+
+      const nextRatio = clampNumber(
+        (event.clientX - bounds.left) / bounds.width,
+        MIN_CANVAS_WIDTH_RATIO,
+        MAX_CANVAS_WIDTH_RATIO,
+      )
+
+      setCanvasWidthRatio(nextRatio)
+    }
+
+    function handlePointerUp(event: PointerEvent) {
+      if (activeResizePointerId !== event.pointerId) {
+        return
+      }
+
+      setActiveResizePointerId(null)
+    }
+
+    window.addEventListener('pointermove', handlePointerMove)
+    window.addEventListener('pointerup', handlePointerUp)
+    window.addEventListener('pointercancel', handlePointerUp)
+
+    return () => {
+      document.body.style.cursor = previousCursor
+      document.body.style.userSelect = previousUserSelect
+      window.removeEventListener('pointermove', handlePointerMove)
+      window.removeEventListener('pointerup', handlePointerUp)
+      window.removeEventListener('pointercancel', handlePointerUp)
+    }
+  }, [activeResizePointerId])
+
+  function handleResizePointerDown(event: ReactPointerEvent<HTMLButtonElement>) {
+    setActiveResizePointerId(event.pointerId)
+    event.currentTarget.setPointerCapture(event.pointerId)
+    event.preventDefault()
+  }
+
+  async function handleOpenAnotherWorkspace() {
+    if (!desktopBridge?.openWorkspaceDialog) {
+      return
+    }
+
+    try {
+      setWorkspaceActionPending(true)
+      setWorkspaceActionError(null)
+      await desktopBridge.openWorkspaceDialog()
+    } catch (error) {
+      setWorkspaceActionError(
+        error instanceof Error ? error.message : 'Failed to open another folder.',
+      )
+    } finally {
+      setWorkspaceActionPending(false)
+    }
+  }
+
+  async function handleCloseWorkspace() {
+    if (!desktopBridge?.closeWorkspace) {
+      return
+    }
+
+    try {
+      setWorkspaceActionPending(true)
+      setWorkspaceActionError(null)
+      await desktopBridge.closeWorkspace()
+    } catch (error) {
+      setWorkspaceActionError(
+        error instanceof Error ? error.message : 'Failed to close the current folder.',
+      )
+    } finally {
+      setWorkspaceActionPending(false)
+    }
+  }
 
   if (!effectiveSnapshot) {
     return (
@@ -340,11 +472,37 @@ export function CodebaseVisualizer({
     <ReactFlowProvider>
       <section className="cbv-shell">
         <header className="cbv-toolbar">
-          <div>
-            <strong>{activeDraft?.layout?.title ?? activeLayout?.title ?? 'Folder structure'}</strong>
-            <p className="cbv-eyebrow">
-              {viewMode === 'symbols' ? 'Symbol graph' : 'Filesystem canvas'}
-            </p>
+          <div className="cbv-workspace-summary">
+            <div>
+              <strong>{workspaceName}</strong>
+              <p className="cbv-eyebrow">{effectiveSnapshot.rootDir}</p>
+            </div>
+            {isDesktopHost ? (
+              <div className="cbv-workspace-actions">
+                <button
+                  disabled={workspaceActionPending}
+                  onClick={() => {
+                    void handleOpenAnotherWorkspace()
+                  }}
+                  type="button"
+                >
+                  Open Another
+                </button>
+                <button
+                  className="is-secondary"
+                  disabled={workspaceActionPending}
+                  onClick={() => {
+                    void handleCloseWorkspace()
+                  }}
+                  type="button"
+                >
+                  Close
+                </button>
+              </div>
+            ) : null}
+            {workspaceActionError ? (
+              <p className="cbv-workspace-error">{workspaceActionError}</p>
+            ) : null}
           </div>
 
           <div className="cbv-toolbar-meta">
@@ -510,7 +668,14 @@ export function CodebaseVisualizer({
 	          </div>
 	        </header>
 
-	        <div className="cbv-workspace">
+	        <div
+            className="cbv-workspace"
+            ref={workspaceRef}
+            style={{
+              '--cbv-canvas-width': `${(canvasWidthRatio * 100).toFixed(2)}%`,
+              '--cbv-inspector-width': `${(inspectorWidthRatio * 100).toFixed(2)}%`,
+            } as CSSProperties}
+          >
 	          <section className="cbv-canvas">
 	            {viewMode === 'symbols' ? (
 	              <div className="cbv-canvas-legend">
@@ -581,6 +746,15 @@ export function CodebaseVisualizer({
             </ReactFlow>
           </section>
 
+          <button
+            aria-label="Resize canvas and inspector"
+            className="cbv-workspace-resize-handle"
+            onPointerDown={handleResizePointerDown}
+            type="button"
+          >
+            <span />
+          </button>
+
           <aside className="cbv-inspector">
             <div className="cbv-panel-header">
               <p className="cbv-eyebrow">Inspector</p>
@@ -611,6 +785,13 @@ export function CodebaseVisualizer({
                 File
               </button>
               <button
+                className={inspectorTab === 'agent' ? 'is-active' : ''}
+                onClick={() => setInspectorTab('agent')}
+                type="button"
+              >
+                Agent
+              </button>
+              <button
                 className={inspectorTab === 'graph' ? 'is-active' : ''}
                 onClick={() => setInspectorTab('graph')}
                 type="button"
@@ -619,7 +800,9 @@ export function CodebaseVisualizer({
               </button>
             </div>
 
-            {inspectorTab === 'graph' ? (
+            {inspectorTab === 'agent' ? (
+              <AgentPanel />
+            ) : inspectorTab === 'graph' ? (
               <GraphInspector
                 selectedEdge={selectedEdge}
                 selectedNode={selectedNode}
@@ -651,6 +834,12 @@ export function CodebaseVisualizer({
       </section>
     </ReactFlowProvider>
   )
+}
+
+function getWorkspaceName(rootDir: string) {
+  const normalizedRootDir = rootDir.replace(/[\\/]+$/, '')
+  const segments = normalizedRootDir.split(/[\\/]/)
+  return segments[segments.length - 1] || rootDir
 }
 
 function LayerToggle({
@@ -2087,6 +2276,10 @@ function getLayerTogglesForViewMode(
   return viewMode === 'symbols'
     ? ['contains', 'calls']
     : ['contains', 'imports', 'calls']
+}
+
+function clampNumber(value: number, min: number, max: number) {
+  return Math.min(Math.max(value, min), max)
 }
 
 function getLayerLabel(
