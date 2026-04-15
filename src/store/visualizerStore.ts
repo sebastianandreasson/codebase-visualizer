@@ -61,6 +61,7 @@ export function createVisualizerStore(
       const viewMode = get().viewMode
       const currentSelection = get().selection
       const nextNodeId = getNextSelectedNodeId(snapshot, currentSelection, viewMode)
+      const nextNodeIds = getNextSelectedNodeIds(snapshot, currentSelection, viewMode, nextNodeId)
 
       set({
         snapshot,
@@ -68,6 +69,7 @@ export function createVisualizerStore(
         selection: {
           ...currentSelection,
           nodeId: nextNodeId,
+          nodeIds: nextNodeIds,
         },
       })
     },
@@ -133,6 +135,12 @@ export function createVisualizerStore(
         selection: {
           ...state.selection,
           nodeId: getNextSelectedNodeId(snapshotOrNull(state), state.selection, viewMode),
+          nodeIds: getNextSelectedNodeIds(
+            snapshotOrNull(state),
+            state.selection,
+            viewMode,
+            getNextSelectedNodeId(snapshotOrNull(state), state.selection, viewMode),
+          ),
         },
       }))
     },
@@ -146,15 +154,63 @@ export function createVisualizerStore(
     setExpandedSymbolClusterIds: (expandedSymbolClusterIds) => {
       set({ expandedSymbolClusterIds })
     },
-    selectNode: (nodeId) => {
-      set((state) => ({
-        selection: {
-          ...state.selection,
-          nodeId,
-          edgeId: null,
-          inspectorTab: 'file',
-        },
-      }))
+    selectNode: (nodeId, options) => {
+      set((state) => {
+        if (!nodeId) {
+          return {
+            selection: {
+              ...state.selection,
+              nodeId: null,
+              nodeIds: [],
+              edgeId: null,
+              inspectorTab: 'file',
+            },
+          }
+        }
+
+        const additive = Boolean(options?.additive)
+        const snapshot = state.snapshot
+        const canMultiSelect =
+          additive &&
+          snapshot !== null &&
+          isMultiSelectableNode(snapshot, nodeId) &&
+          state.selection.nodeIds.every((selectedNodeId) =>
+            isMultiSelectableNode(snapshot, selectedNodeId),
+          )
+
+        if (canMultiSelect) {
+          const alreadySelected = state.selection.nodeIds.includes(nodeId)
+          const nextNodeIds = alreadySelected
+            ? state.selection.nodeIds.filter((selectedNodeId) => selectedNodeId !== nodeId)
+            : [...state.selection.nodeIds, nodeId]
+          const nextPrimaryNodeId =
+            nextNodeIds.length === 0
+              ? null
+              : alreadySelected && state.selection.nodeId === nodeId
+                ? nextNodeIds[nextNodeIds.length - 1] ?? null
+                : nodeId
+
+          return {
+            selection: {
+              ...state.selection,
+              nodeId: nextPrimaryNodeId,
+              nodeIds: nextNodeIds,
+              edgeId: null,
+              inspectorTab: 'file',
+            },
+          }
+        }
+
+        return {
+          selection: {
+            ...state.selection,
+            nodeId,
+            nodeIds: [nodeId],
+            edgeId: null,
+            inspectorTab: 'file',
+          },
+        }
+      })
     },
     selectEdge: (edgeId) => {
       set((state) => ({
@@ -162,6 +218,7 @@ export function createVisualizerStore(
           ...state.selection,
           edgeId,
           nodeId: state.selection.nodeId,
+          nodeIds: state.selection.nodeIds,
           inspectorTab: 'graph',
         },
       }))
@@ -228,6 +285,31 @@ function getNextSelectedNodeId(
     : getFirstFileNodeId(snapshot)
 }
 
+function getNextSelectedNodeIds(
+  snapshot: ProjectSnapshot | null,
+  selection: SelectionState,
+  viewMode: VisualizerViewMode,
+  nextNodeId: string | null,
+) {
+  if (!snapshot) {
+    return []
+  }
+
+  if (viewMode !== 'filesystem') {
+    return nextNodeId ? [nextNodeId] : []
+  }
+
+  const nextNodeIds = selection.nodeIds.filter((nodeId) =>
+    isMultiSelectableNode(snapshot, nodeId),
+  )
+
+  if (nextNodeIds.length > 0) {
+    return nextNodeIds
+  }
+
+  return nextNodeId && isMultiSelectableNode(snapshot, nextNodeId) ? [nextNodeId] : []
+}
+
 function getFirstFileNodeId(snapshot: ProjectSnapshot) {
   for (const rootId of snapshot.rootIds) {
     const fileNodeId = findFirstFileNodeId(rootId, snapshot)
@@ -250,6 +332,11 @@ function getFirstSymbolNodeId(snapshot: ProjectSnapshot) {
 
 function snapshotOrNull(state: VisualizerStore) {
   return state.snapshot
+}
+
+function isMultiSelectableNode(snapshot: ProjectSnapshot, nodeId: string) {
+  const node = snapshot.nodes[nodeId]
+  return Boolean(node && isFileNode(node))
 }
 
 function findFirstFileNodeId(

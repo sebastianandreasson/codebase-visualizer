@@ -40,7 +40,7 @@ export interface VisualizerStoreActions {
   setViewMode: (viewMode: VisualizerViewMode) => void
   toggleSymbolCluster: (clusterId: string) => void
   setExpandedSymbolClusterIds: (clusterIds: string[]) => void
-  selectNode: (nodeId: string | null) => void
+  selectNode: (nodeId: string | null, options?: { additive?: boolean }) => void
   selectEdge: (edgeId: string | null) => void
   setInspectorTab: (tab: SelectionState['inspectorTab']) => void
   toggleGraphLayer: (layer: GraphLayerKey) => void

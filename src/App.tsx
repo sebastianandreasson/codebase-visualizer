@@ -58,29 +58,7 @@ export default function App() {
       setStatus('loading')
 
       try {
-        const [snapshotResponse, layoutStateResponse] = await Promise.all([
-          fetch(CODEBASE_VISUALIZER_ROUTE),
-          fetch(CODEBASE_VISUALIZER_LAYOUTS_ROUTE),
-        ])
-
-        if (!snapshotResponse.ok) {
-          throw new Error(await getResponseErrorMessage(
-            snapshotResponse,
-            `Snapshot request failed with status ${snapshotResponse.status}.`,
-          ))
-        }
-
-        if (!layoutStateResponse.ok) {
-          throw new Error(await getResponseErrorMessage(
-            layoutStateResponse,
-            `Layout state request failed with status ${layoutStateResponse.status}.`,
-          ))
-        }
-
-        const [snapshot, layoutState] = (await Promise.all([
-          snapshotResponse.json(),
-          layoutStateResponse.json(),
-        ])) as [CodebaseSnapshot, LayoutStateResponse]
+        const { layoutState, snapshot } = await fetchWorkspaceState()
 
         if (isCancelled) {
           return
@@ -121,6 +99,17 @@ export default function App() {
     setSnapshot,
     setStatus,
   ])
+
+  async function refreshWorkspaceState() {
+    const { layoutState, snapshot } = await fetchWorkspaceState()
+
+    startTransition(() => {
+      setSnapshot(snapshot)
+      setLayouts(layoutState.layouts)
+      setDraftLayouts(layoutState.draftLayouts)
+      setErrorMessage(null)
+    })
+  }
 
   async function refreshLayoutState() {
     const response = await fetch(CODEBASE_VISUALIZER_LAYOUTS_ROUTE)
@@ -335,6 +324,7 @@ export default function App() {
       ) : (
         <CodebaseVisualizer
           layoutActionsPending={layoutActionPending}
+          onAgentRunSettled={refreshWorkspaceState}
           layoutSuggestionError={layoutSuggestionError}
           layoutSuggestionPending={layoutSuggestionPending}
           onAcceptDraft={handleAcceptDraft}
@@ -344,6 +334,37 @@ export default function App() {
       )}
     </main>
   )
+}
+
+async function fetchWorkspaceState() {
+  const [snapshotResponse, layoutStateResponse] = await Promise.all([
+    fetch(CODEBASE_VISUALIZER_ROUTE),
+    fetch(CODEBASE_VISUALIZER_LAYOUTS_ROUTE),
+  ])
+
+  if (!snapshotResponse.ok) {
+    throw new Error(await getResponseErrorMessage(
+      snapshotResponse,
+      `Snapshot request failed with status ${snapshotResponse.status}.`,
+    ))
+  }
+
+  if (!layoutStateResponse.ok) {
+    throw new Error(await getResponseErrorMessage(
+      layoutStateResponse,
+      `Layout state request failed with status ${layoutStateResponse.status}.`,
+    ))
+  }
+
+  const [snapshot, layoutState] = (await Promise.all([
+    snapshotResponse.json(),
+    layoutStateResponse.json(),
+  ])) as [CodebaseSnapshot, LayoutStateResponse]
+
+  return {
+    layoutState,
+    snapshot,
+  }
 }
 
 function buildLayoutSuggestionPrompt(rootDir: string, layoutBrief: string) {

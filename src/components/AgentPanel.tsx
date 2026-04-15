@@ -8,12 +8,28 @@ import type {
   AgentSessionSummary,
   AgentSettingsState,
 } from '../schema/agent'
+import type { CodebaseFile, ProjectNode, SourceRange, SymbolNode } from '../types'
 
 interface AgentPanelProps {
   desktopHostAvailable?: boolean
+  inspectorContext?: {
+    file: CodebaseFile | null
+    files: CodebaseFile[]
+    node: ProjectNode | null
+    symbol: SymbolNode | null
+  }
+  onOpenSettings?: () => void
+  onRunSettled?: () => Promise<void>
+  settingsOnly?: boolean
 }
 
-export function AgentPanel({ desktopHostAvailable = false }: AgentPanelProps) {
+export function AgentPanel({
+  desktopHostAvailable = false,
+  inspectorContext,
+  onOpenSettings,
+  onRunSettled,
+  settingsOnly = false,
+}: AgentPanelProps) {
   const agentClient = useMemo(() => new DesktopAgentClient(), [])
   const [bridgeInfo, setBridgeInfo] = useState<DesktopAgentBridgeInfo>(() =>
     normalizeBridgeInfo(agentClient.getBridgeInfo(), desktopHostAvailable),
@@ -39,10 +55,32 @@ export function AgentPanel({ desktopHostAvailable = false }: AgentPanelProps) {
   const [oauthLoginUrl, setOauthLoginUrl] = useState<string | null>(null)
   const messageListRef = useRef<HTMLDivElement | null>(null)
   const sessionRef = useRef<AgentSessionSummary | null>(null)
+  const previousRunStateRef = useRef<AgentSessionSummary['runState'] | null>(null)
 
   useEffect(() => {
     sessionRef.current = session
   }, [session])
+
+  useEffect(() => {
+    const previousRunState = previousRunStateRef.current
+    const nextRunState = session?.runState ?? null
+
+    if (
+      previousRunState === 'running' &&
+      nextRunState !== 'running' &&
+      onRunSettled
+    ) {
+      void onRunSettled().catch((error) => {
+        setErrorMessage(
+          error instanceof Error
+            ? error.message
+            : 'Failed to refresh the repository after the agent run.',
+        )
+      })
+    }
+
+    previousRunStateRef.current = nextRunState
+  }, [onRunSettled, session?.runState])
 
   useEffect(() => {
     const updateBridgeInfo = () => {
@@ -236,7 +274,9 @@ export function AgentPanel({ desktopHostAvailable = false }: AgentPanelProps) {
       setPending(true)
       setErrorMessage(null)
       await persistSettingsDraftIfNeeded()
-      const ok = await agentClient.sendMessage(nextPrompt)
+      const ok = await agentClient.sendMessage(
+        buildInspectorScopedPrompt(nextPrompt, inspectorContext),
+      )
 
       if (!ok) {
         throw new Error('No active desktop agent session is available.')
@@ -591,9 +631,11 @@ export function AgentPanel({ desktopHostAvailable = false }: AgentPanelProps) {
           : pending
             ? 'A prompt is already being sent.'
             : null
+  const sessionIsInteractive =
+    session?.runState === 'ready' || session?.runState === 'running'
 
   return (
-    <div className="cbv-agent-panel">
+    <div className={`cbv-agent-panel${settingsOnly ? ' is-settings-only' : ''}`}>
       <div className="cbv-agent-meta">
         <div>
           <p className="cbv-eyebrow">Session</p>
@@ -614,12 +656,7 @@ export function AgentPanel({ desktopHostAvailable = false }: AgentPanelProps) {
         <p className="cbv-agent-error">{errorMessage}</p>
       ) : null}
 
-      {!bridgeInfo.hasAgentBridge ? (
-        <p className="cbv-agent-warning">
-          Bridge state: {bridgeInfo.hasDesktopHost ? 'desktop host detected' : 'desktop host not detected'}, agent bridge not detected. Using HTTP fallback.
-        </p>
-      ) : null}
-
+      {settingsOnly ? (
       <section className="cbv-agent-settings">
         <div className="cbv-agent-settings-header">
           <div>
@@ -871,7 +908,24 @@ export function AgentPanel({ desktopHostAvailable = false }: AgentPanelProps) {
           )}
         </div>
       </section>
-
+      ) : !sessionIsInteractive ? (
+        <div className="cbv-agent-setup-prompt">
+          <strong>Agent settings needed</strong>
+          <p>
+            {session?.lastError ??
+              'Open agent settings to sign in, choose a model, or update agent configuration before chatting here.'}
+          </p>
+          {onOpenSettings ? (
+            <button
+              onClick={onOpenSettings}
+              type="button"
+            >
+              Open Agent Settings
+            </button>
+          ) : null}
+        </div>
+      ) : (
+      <>
       <div className="cbv-agent-messages" ref={messageListRef}>
         {messages.length ? (
           messages.map((message) => (
@@ -903,6 +957,35 @@ export function AgentPanel({ desktopHostAvailable = false }: AgentPanelProps) {
       </div>
 
       <div className="cbv-agent-composer">
+        {inspectorContext?.file ||
+        inspectorContext?.files.length ||
+        inspectorContext?.symbol ||
+        inspectorContext?.node ? (
+          <div className="cbv-agent-context">
+            <p className="cbv-eyebrow">Current inspector target</p>
+            <strong>
+              {inspectorContext.files.length > 1
+                ? `${inspectorContext.files.length} selected files`
+                : inspectorContext.symbol?.path ??
+                inspectorContext.file?.path ??
+                  inspectorContext.node?.path ??
+                  'Current selection'}
+            </strong>
+            <p>
+              {describeInspectorContext(inspectorContext)}
+            </p>
+            {inspectorContext.files.length > 1 ? (
+              <ul className="cbv-agent-context-list">
+                {inspectorContext.files.map((file, index) => (
+                  <li key={file.id}>
+                    <strong>{index === 0 ? 'Primary' : `File ${index + 1}`}</strong>
+                    <span>{file.path}</span>
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+          </div>
+        ) : null}
         <textarea
           onChange={(event) => setComposerValue(event.target.value)}
           onKeyDown={(event) => {
@@ -943,6 +1026,8 @@ export function AgentPanel({ desktopHostAvailable = false }: AgentPanelProps) {
           </button>
         </div>
       </div>
+      </>
+      )}
     </div>
   )
 }
@@ -1002,4 +1087,99 @@ function upsertMessage(messages: AgentMessage[], nextMessage: AgentMessage) {
   return messages.map((message, index) =>
     index === existingIndex ? nextMessage : message,
   )
+}
+
+function buildInspectorScopedPrompt(
+  prompt: string,
+  inspectorContext:
+    | {
+        file: CodebaseFile | null
+        files: CodebaseFile[]
+        node: ProjectNode | null
+        symbol: SymbolNode | null
+      }
+    | undefined,
+) {
+  if (
+    !inspectorContext ||
+    (
+      !inspectorContext.file &&
+      inspectorContext.files.length === 0 &&
+      !inspectorContext.node &&
+      !inspectorContext.symbol
+    )
+  ) {
+    return prompt
+  }
+
+  const contextLines = [
+    'Codebase Visualizer inspector context:',
+    'Treat the current inspector selection as the primary target for this request.',
+    'If the user is asking for an edit, inspect and modify this file or symbol first unless they clearly redirect you elsewhere.',
+  ]
+
+  if (inspectorContext.files.length > 1) {
+    contextLines.push('Selected files (primary first):')
+
+    for (const file of inspectorContext.files) {
+      contextLines.push(`- ${file.path}`)
+    }
+
+    contextLines.push(
+      'Treat this file set as the default edit scope for the request. Start with these files before searching elsewhere in the repository.',
+    )
+  } else if (inspectorContext.file) {
+    contextLines.push(`Selected file: ${inspectorContext.file.path}`)
+  }
+
+  if (inspectorContext.symbol) {
+    contextLines.push(`Selected symbol: ${inspectorContext.symbol.path}`)
+    contextLines.push(`Selected symbol kind: ${inspectorContext.symbol.symbolKind}`)
+
+    if (inspectorContext.symbol.range) {
+      contextLines.push(
+        `Selected symbol range: lines ${formatRange(inspectorContext.symbol.range)}`,
+      )
+    }
+  } else if (inspectorContext.node) {
+    contextLines.push(`Selected node: ${inspectorContext.node.path}`)
+    contextLines.push(`Selected node kind: ${inspectorContext.node.kind}`)
+  }
+
+  return `${contextLines.join('\n')}\n\nUser request:\n${prompt}`
+}
+
+function describeInspectorContext(inspectorContext: {
+  file: CodebaseFile | null
+  files: CodebaseFile[]
+  node: ProjectNode | null
+  symbol: SymbolNode | null
+}) {
+  if (inspectorContext.symbol) {
+    const rangeText = inspectorContext.symbol.range
+      ? ` at lines ${formatRange(inspectorContext.symbol.range)}`
+      : ''
+    return `${inspectorContext.symbol.symbolKind}${rangeText}. Requests will default to this symbol.`
+  }
+
+  if (inspectorContext.files.length > 1) {
+    return `Requests will default to this ${inspectorContext.files.length}-file edit set.`
+  }
+
+  if (inspectorContext.file) {
+    return 'Requests will default to this file.'
+  }
+
+  if (inspectorContext.node) {
+    return `Requests will default to this ${inspectorContext.node.kind}.`
+  }
+
+  return ''
+}
+
+function formatRange(range: SourceRange) {
+  const startLine = range.start.line
+  const endLine = range.end.line
+
+  return startLine === endLine ? `${startLine}` : `${startLine}-${endLine}`
 }

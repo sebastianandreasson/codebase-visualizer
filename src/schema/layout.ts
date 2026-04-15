@@ -62,6 +62,7 @@ export type InspectorTab = 'file' | 'graph' | 'layout' | 'agent'
 
 export interface SelectionState {
   nodeId: string | null
+  nodeIds: string[]
   edgeId: string | null
   inspectorTab: InspectorTab
 }
@@ -74,6 +75,7 @@ export const DEFAULT_VIEWPORT_STATE: ViewportState = {
 
 export const DEFAULT_SELECTION_STATE: SelectionState = {
   nodeId: null,
+  nodeIds: [],
   edgeId: null,
   inspectorTab: 'file',
 }

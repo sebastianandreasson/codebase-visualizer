@@ -49,6 +49,7 @@ import { CodebaseSymbolNode } from './CodebaseSymbolNode'
 interface CodebaseVisualizerProps {
   snapshot?: CodebaseSnapshot | null
   onAcceptDraft?: (draftId: string) => Promise<void>
+  onAgentRunSettled?: () => Promise<void>
   onRejectDraft?: (draftId: string) => Promise<void>
   onSuggestLayout?: (brief: string) => Promise<void>
   layoutActionsPending?: boolean
@@ -147,12 +148,14 @@ interface DesktopBridge {
 export function CodebaseVisualizer({
   snapshot,
   onAcceptDraft,
+  onAgentRunSettled,
   onRejectDraft,
   onSuggestLayout,
   layoutActionsPending = false,
   layoutSuggestionPending = false,
   layoutSuggestionError = null,
 }: CodebaseVisualizerProps) {
+  const [agentSettingsOpen, setAgentSettingsOpen] = useState(false)
   const [draftActionError, setDraftActionError] = useState<string | null>(null)
   const [layoutSuggestionText, setLayoutSuggestionText] = useState('')
   const [canvasWidthRatio, setCanvasWidthRatio] = useState(DEFAULT_CANVAS_WIDTH_RATIO)
@@ -167,6 +170,7 @@ export function CodebaseVisualizer({
   const layouts = useVisualizerStore((state) => state.layouts)
   const activeLayoutId = useVisualizerStore((state) => state.activeLayoutId)
   const selectedNodeId = useVisualizerStore((state) => state.selection.nodeId)
+  const selectedNodeIds = useVisualizerStore((state) => state.selection.nodeIds)
   const selectedEdgeId = useVisualizerStore((state) => state.selection.edgeId)
   const inspectorTab = useVisualizerStore((state) => state.selection.inspectorTab)
   const viewport = useVisualizerStore((state) => state.viewport)
@@ -195,6 +199,7 @@ export function CodebaseVisualizer({
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>([])
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([])
   const workspaceRef = useRef<HTMLDivElement | null>(null)
+  const selectedNodeIdSet = useMemo(() => new Set(selectedNodeIds), [selectedNodeIds])
   const desktopBridge = (
     globalThis as typeof globalThis & {
       codebaseVisualizerDesktop?: DesktopBridge
@@ -329,14 +334,15 @@ export function CodebaseVisualizer({
     }
 
     const flowModel = buildFlowModel(
-        effectiveSnapshot,
-        activeLayout,
-        graphLayers,
-        viewMode,
-        symbolClusterState,
-        expandedClusterIds,
-        expandedClusterLayouts,
-      )
+      effectiveSnapshot,
+      activeLayout,
+      graphLayers,
+      viewMode,
+      symbolClusterState,
+      expandedClusterIds,
+      expandedClusterLayouts,
+      selectedNodeIdSet,
+    )
 
     setNodes(flowModel.nodes)
     setEdges(flowModel.edges)
@@ -346,6 +352,7 @@ export function CodebaseVisualizer({
     effectiveSnapshot,
     expandedClusterIds,
     graphLayers,
+    selectedNodeIdSet,
     setEdges,
     setNodes,
     symbolClusterState,
@@ -374,6 +381,7 @@ export function CodebaseVisualizer({
     selectedNodeId && effectiveSnapshot ? effectiveSnapshot.nodes[selectedNodeId] : null
   const selectedSymbol = selectedNode && isSymbolNode(selectedNode) ? selectedNode : null
   const selectedFile = getSelectedFile(effectiveSnapshot, selectedNode, files)
+  const selectedFiles = getSelectedFiles(effectiveSnapshot, selectedNodeIds)
   const selectedEdge =
     selectedEdgeId ? edges.find((edge) => edge.id === selectedEdgeId) ?? null : null
   const graphSummary = buildGraphSummary(
@@ -388,10 +396,10 @@ export function CodebaseVisualizer({
   const inspectorWidthRatio = 1 - canvasWidthRatio
 
   useEffect(() => {
-    if (selectedNodeId || selectedEdgeId) {
+    if (selectedNodeIds.length > 0 || selectedEdgeId) {
       setInspectorOpen(true)
     }
-  }, [selectedEdgeId, selectedNodeId])
+  }, [selectedEdgeId, selectedNodeIds])
 
   useEffect(() => {
     if (activeResizePointerId == null) {
@@ -682,6 +690,13 @@ export function CodebaseVisualizer({
                 </button>
               </div>
             ) : null}
+            <button
+              className="cbv-toolbar-button is-secondary"
+              onClick={() => setAgentSettingsOpen(true)}
+              type="button"
+            >
+              Agent Settings
+            </button>
 	          </div>
 
 	          <div className="cbv-layer-toggles">
@@ -726,12 +741,14 @@ export function CodebaseVisualizer({
               onMoveEnd={(_, flowViewport) => {
                 setViewport(flowViewport)
               }}
-              onNodeClick={(_, node) => {
+              onNodeClick={(event, node) => {
                 if (isAnnotationNodeId(node.id)) {
                   return
                 }
 
-                selectNode(node.id)
+                selectNode(node.id, {
+                  additive: event.metaKey || event.ctrlKey || event.shiftKey,
+                })
                 setInspectorOpen(true)
               }}
               onNodeDoubleClick={(_, node) => {
@@ -831,7 +848,11 @@ export function CodebaseVisualizer({
             <div className="cbv-panel-header">
               <div>
                 <p className="cbv-eyebrow">Inspector</p>
-                <strong>{selectedNode?.path ?? selectedFile?.path ?? 'Nothing selected'}</strong>
+                <strong>
+                  {selectedFiles.length > 1
+                    ? `${selectedFiles.length} files selected`
+                    : selectedNode?.path ?? selectedFile?.path ?? 'Nothing selected'}
+                </strong>
               </div>
               <button
                 aria-label="Close inspector"
@@ -883,12 +904,27 @@ export function CodebaseVisualizer({
             </div>
 
             {inspectorTab === 'agent' ? (
-              <AgentPanel desktopHostAvailable={isDesktopHost} />
+              <AgentPanel
+                desktopHostAvailable={isDesktopHost}
+                inspectorContext={{
+                  file: selectedFile,
+                  files: selectedFiles,
+                  node: selectedNode,
+                  symbol: selectedSymbol,
+                }}
+                onOpenSettings={() => setAgentSettingsOpen(true)}
+                onRunSettled={onAgentRunSettled}
+              />
             ) : inspectorTab === 'graph' ? (
               <GraphInspector
                 selectedEdge={selectedEdge}
                 selectedNode={selectedNode}
                 summary={graphSummary}
+              />
+            ) : selectedFiles.length > 1 ? (
+              <MultiFileInspector
+                primaryFile={selectedFile}
+                selectedFiles={selectedFiles}
               />
             ) : selectedFile ? (
               <>
@@ -914,6 +950,38 @@ export function CodebaseVisualizer({
           </aside>
           ) : null}
         </div>
+        {agentSettingsOpen ? (
+          <div
+            className="cbv-modal-backdrop"
+            onClick={() => setAgentSettingsOpen(false)}
+            role="presentation"
+          >
+            <section
+              aria-label="Agent settings"
+              className="cbv-modal"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <div className="cbv-modal-header">
+                <div>
+                  <p className="cbv-eyebrow">Settings</p>
+                  <strong>Agent Settings</strong>
+                </div>
+                <button
+                  aria-label="Close agent settings"
+                  className="cbv-inspector-close"
+                  onClick={() => setAgentSettingsOpen(false)}
+                  type="button"
+                >
+                  ×
+                </button>
+              </div>
+              <AgentPanel
+                desktopHostAvailable={isDesktopHost}
+                settingsOnly
+              />
+            </section>
+          </div>
+        ) : null}
       </section>
     </ReactFlowProvider>
   )
@@ -923,6 +991,58 @@ function getWorkspaceName(rootDir: string) {
   const normalizedRootDir = rootDir.replace(/[\\/]+$/, '')
   const segments = normalizedRootDir.split(/[\\/]/)
   return segments[segments.length - 1] || rootDir
+}
+
+function MultiFileInspector({
+  primaryFile,
+  selectedFiles,
+}: {
+  primaryFile: CodebaseFile | null
+  selectedFiles: CodebaseFile[]
+}) {
+  const additionalFiles = primaryFile
+    ? selectedFiles.filter((file) => file.id !== primaryFile.id)
+    : selectedFiles
+
+  return (
+    <div className="cbv-multi-file-inspector">
+      <div className="cbv-multi-file-summary">
+        <strong>{selectedFiles.length} files selected</strong>
+        <p>
+          Cmd, Ctrl, or Shift-click files on the canvas to build an edit set for the
+          agent.
+        </p>
+      </div>
+
+      <div className="cbv-multi-file-list-card">
+        <p className="cbv-eyebrow">Selected files</p>
+        <ul className="cbv-multi-file-list">
+          {selectedFiles.map((file, index) => (
+            <li key={file.id}>
+              <strong>{index === 0 ? 'Primary' : `File ${index + 1}`}</strong>
+              <span>{file.path}</span>
+            </li>
+          ))}
+        </ul>
+      </div>
+
+      {primaryFile ? (
+        <>
+          <div className="cbv-preview-meta">
+            <span>{formatFileSize(primaryFile.size)}</span>
+            <span>{primaryFile.extension || 'no extension'}</span>
+            <span>{describeContentState(primaryFile)}</span>
+            <span>
+              {additionalFiles.length > 0
+                ? `${additionalFiles.length} additional files in scope`
+                : 'Primary preview'}
+            </span>
+          </div>
+          <CodePreview file={primaryFile} />
+        </>
+      ) : null}
+    </div>
+  )
 }
 
 function LayerToggle({
@@ -1118,6 +1238,7 @@ function buildFlowModel(
   symbolClusterState: SymbolClusterState,
   expandedClusterIds: Set<string>,
   expandedClusterLayouts: Map<string, ExpandedClusterLayout>,
+  selectedNodeIds: Set<string>,
 ) {
   const hiddenNodeIds = new Set(layout.hiddenNodeIds)
   const annotationNodes = layout.annotations.map((annotation) => ({
@@ -1164,6 +1285,7 @@ function buildFlowModel(
         symbolClusterState,
         expandedClusterIds,
         expandedClusterLayouts,
+        selectedNodeIds,
       ),
     )
   const nodes = [...annotationNodes, ...codeNodes]
@@ -1223,6 +1345,7 @@ function buildFlowNode(
   symbolClusterState: SymbolClusterState,
   expandedClusterIds: Set<string>,
   expandedClusterLayouts: Map<string, ExpandedClusterLayout>,
+  selectedNodeIds: Set<string>,
 ): Node {
   if (viewMode === 'symbols' && isSymbolNode(node)) {
     const cluster = symbolClusterState.clusterByNodeId[node.id]
@@ -1260,6 +1383,7 @@ function buildFlowNode(
           ? symbolDimensions.height
           : (clusterLayout?.height ?? symbolDimensions.height),
       draggable: !isContainedNode,
+      selected: selectedNodeIds.has(node.id),
       parentId: isContainedNode && cluster ? cluster.rootNodeId : undefined,
       extent: isContainedNode ? 'parent' : undefined,
       data: {
@@ -1290,6 +1414,7 @@ function buildFlowNode(
     targetPosition: Position.Left,
     width: placement.width,
     height: placement.height,
+    selected: selectedNodeIds.has(node.id),
     data: {
       title: node.name,
       subtitle: getNodeSubtitle(node),
@@ -1890,6 +2015,44 @@ function getSelectedFile(
   }
 
   return files[0] ?? null
+}
+
+function getSelectedFiles(
+  snapshot: CodebaseSnapshot | null,
+  selectedNodeIds: string[],
+) {
+  if (!snapshot || selectedNodeIds.length === 0) {
+    return []
+  }
+
+  const selectedFiles: CodebaseFile[] = []
+  const seenFileIds = new Set<string>()
+
+  for (const nodeId of selectedNodeIds) {
+    const selectedNode = snapshot.nodes[nodeId]
+
+    if (!selectedNode) {
+      continue
+    }
+
+    const selectedFile = isFileNode(selectedNode)
+      ? selectedNode
+      : isSymbolNode(selectedNode)
+        ? (() => {
+            const fileNode = snapshot.nodes[selectedNode.fileId]
+            return fileNode && isFileNode(fileNode) ? fileNode : null
+          })()
+        : null
+
+    if (!selectedFile || seenFileIds.has(selectedFile.id)) {
+      continue
+    }
+
+    seenFileIds.add(selectedFile.id)
+    selectedFiles.push(selectedFile)
+  }
+
+  return selectedFiles
 }
 
 function getNodeSubtitle(node: ProjectNode) {
