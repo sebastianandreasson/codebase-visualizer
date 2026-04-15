@@ -1,5 +1,6 @@
 import type { LayoutNodeScope, LayoutStrategyKind } from './layout'
 import type { LayoutDraft } from './planner'
+import type { PreprocessedWorkspaceContext } from '../preprocessing/types'
 import type { GraphEdge, ProjectSnapshot } from './snapshot'
 import type { LayoutSpec } from './layout'
 import type {
@@ -40,6 +41,14 @@ export interface LayoutStateResponse {
   draftLayouts: LayoutDraft[]
   activeLayoutId: string | null
   activeDraftId: string | null
+}
+
+export interface PreprocessingContextResponse {
+  context: PreprocessedWorkspaceContext | null
+}
+
+export interface PreprocessingContextUpdateRequest {
+  context: PreprocessedWorkspaceContext
 }
 
 export interface DraftMutationResponse {

@@ -8,9 +8,18 @@ import type {
   AgentSessionSummary,
   AgentSettingsState,
 } from '../schema/agent'
-import type { CodebaseFile, ProjectNode, SourceRange, SymbolNode } from '../types'
+import type {
+  CodebaseFile,
+  PreprocessedWorkspaceContext,
+  ProjectNode,
+  SemanticPurposeSummaryRecord,
+  SourceRange,
+  SymbolNode,
+  WorkspaceProfile,
+} from '../types'
 
 const MAX_VISIBLE_CONTEXT_FILES = 6
+const MAX_VISIBLE_PURPOSE_SUMMARIES = 8
 
 interface AgentPanelProps {
   desktopHostAvailable?: boolean
@@ -22,7 +31,9 @@ interface AgentPanelProps {
   }
   onOpenSettings?: () => void
   onRunSettled?: () => Promise<void>
+  preprocessedWorkspaceContext?: PreprocessedWorkspaceContext | null
   settingsOnly?: boolean
+  workspaceProfile?: WorkspaceProfile | null
 }
 
 export function AgentPanel({
@@ -30,7 +41,9 @@ export function AgentPanel({
   inspectorContext,
   onOpenSettings,
   onRunSettled,
+  preprocessedWorkspaceContext = null,
   settingsOnly = false,
+  workspaceProfile = null,
 }: AgentPanelProps) {
   const agentClient = useMemo(() => new DesktopAgentClient(), [])
   const [bridgeInfo, setBridgeInfo] = useState<DesktopAgentBridgeInfo>(() =>
@@ -277,7 +290,12 @@ export function AgentPanel({
       setErrorMessage(null)
       await persistSettingsDraftIfNeeded()
       const ok = await agentClient.sendMessage(
-        buildInspectorScopedPrompt(nextPrompt, inspectorContext),
+        buildWorkspaceScopedPrompt(
+          nextPrompt,
+          workspaceProfile,
+          preprocessedWorkspaceContext,
+          inspectorContext,
+        ),
       )
 
       if (!ok) {
@@ -1157,6 +1175,153 @@ function buildInspectorScopedPrompt(
   }
 
   return `${contextLines.join('\n')}\n\nUser request:\n${prompt}`
+}
+
+function buildWorkspaceScopedPrompt(
+  prompt: string,
+  workspaceProfile: WorkspaceProfile | null | undefined,
+  preprocessedWorkspaceContext: PreprocessedWorkspaceContext | null | undefined,
+  inspectorContext: AgentPanelProps['inspectorContext'],
+) {
+  const scopedPrompt = buildInspectorScopedPrompt(prompt, inspectorContext)
+  const workspaceContextLines = workspaceProfile
+    ? [
+        'Workspace preprocessing context:',
+        `- root: ${workspaceProfile.rootDir}`,
+        `- summary: ${workspaceProfile.summary}`,
+        workspaceProfile.languages.length > 0
+          ? `- languages: ${workspaceProfile.languages.join(', ')}`
+          : '',
+        workspaceProfile.topDirectories.length > 0
+          ? `- dominant directories: ${workspaceProfile.topDirectories.join(', ')}`
+          : '',
+        workspaceProfile.entryFiles.length > 0
+          ? `- likely entry files: ${workspaceProfile.entryFiles.join(', ')}`
+          : '',
+        workspaceProfile.notableTags.length > 0
+          ? `- notable tags: ${workspaceProfile.notableTags.join(', ')}`
+          : '',
+      ].filter(Boolean)
+    : []
+  const purposeSummaryLines = buildPurposeSummaryContext(
+    preprocessedWorkspaceContext,
+    inspectorContext,
+  )
+
+  if (workspaceContextLines.length === 0 && purposeSummaryLines.length === 0) {
+    return scopedPrompt
+  }
+
+  return [
+    ...workspaceContextLines,
+    ...purposeSummaryLines,
+    'Use this preprocessed workspace context first, then inspect raw code only where needed.',
+    '',
+    scopedPrompt,
+  ].join('\n')
+}
+
+function buildPurposeSummaryContext(
+  preprocessedWorkspaceContext: PreprocessedWorkspaceContext | null | undefined,
+  inspectorContext: AgentPanelProps['inspectorContext'],
+) {
+  if (!preprocessedWorkspaceContext?.purposeSummaries.length) {
+    return []
+  }
+
+  const selectedSummaries = selectRelevantPurposeSummaries(
+    preprocessedWorkspaceContext.purposeSummaries,
+    inspectorContext,
+  )
+
+  if (selectedSummaries.length === 0) {
+    return []
+  }
+
+  return [
+    'Relevant preprocessed purpose summaries:',
+    ...selectedSummaries.map((summary) => {
+      const domains =
+        summary.domainHints.length > 0 ? ` domains=${summary.domainHints.join(', ')}` : ''
+      const sideEffects =
+        summary.sideEffects.length > 0 ? ` side_effects=${summary.sideEffects.join(', ')}` : ''
+      return `- ${summary.path}: ${summary.summary}${domains}${sideEffects}`
+    }),
+  ]
+}
+
+function selectRelevantPurposeSummaries(
+  summaries: SemanticPurposeSummaryRecord[],
+  inspectorContext: AgentPanelProps['inspectorContext'],
+) {
+  const selectedFileIds = new Set(
+    inspectorContext?.files.map((file) => file.id) ??
+      (inspectorContext?.file ? [inspectorContext.file.id] : []),
+  )
+  const selectedNodePath = inspectorContext?.node?.path ?? ''
+  const selectedSymbolId = inspectorContext?.symbol?.id ?? ''
+  const selectedSymbolPath = inspectorContext?.symbol?.path ?? ''
+
+  return [...summaries]
+    .map((summary) => ({
+      summary,
+      score: scorePurposeSummary(summary, {
+        selectedFileIds,
+        selectedNodePath,
+        selectedSymbolId,
+        selectedSymbolPath,
+      }),
+    }))
+    .sort((left, right) => {
+      if (right.score !== left.score) {
+        return right.score - left.score
+      }
+
+      return left.summary.path.localeCompare(right.summary.path)
+    })
+    .filter((entry) => entry.score > 0)
+    .slice(0, MAX_VISIBLE_PURPOSE_SUMMARIES)
+    .map((entry) => entry.summary)
+}
+
+function scorePurposeSummary(
+  summary: SemanticPurposeSummaryRecord,
+  input: {
+    selectedFileIds: Set<string>
+    selectedNodePath: string
+    selectedSymbolId: string
+    selectedSymbolPath: string
+  },
+) {
+  let score = 0
+
+  if (input.selectedFileIds.has(summary.fileId)) {
+    score += 8
+  }
+
+  if (input.selectedSymbolId && summary.symbolId === input.selectedSymbolId) {
+    score += 12
+  }
+
+  if (input.selectedSymbolPath && summary.path === input.selectedSymbolPath) {
+    score += 10
+  }
+
+  if (input.selectedNodePath && summary.path.startsWith(input.selectedNodePath)) {
+    score += 6
+  }
+
+  score += Math.min(summary.sideEffects.length, 3)
+  score += Math.min(summary.domainHints.length, 2)
+
+  if (
+    score === 0 &&
+    (summary.sideEffects.length > 0 || summary.domainHints.length > 0)
+  ) {
+    score = 1
+  }
+
+  return score
 }
 
 function describeInspectorContext(inspectorContext: {

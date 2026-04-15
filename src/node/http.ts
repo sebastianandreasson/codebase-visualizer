@@ -2,6 +2,10 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 
 import { ensureAgentInstructions } from '../cli/agentInstructions'
 import {
+  readPersistedPreprocessedWorkspaceContext,
+  writePersistedPreprocessedWorkspaceContext,
+} from './preprocessingPersistence'
+import {
   acceptLayoutDraft,
   listLayoutDrafts,
   listSavedLayouts,
@@ -13,6 +17,8 @@ import type {
   AgentBrokerLoginStartResponse,
   AgentBrokerSessionResponse,
   AgentPromptRequest,
+  PreprocessingContextResponse,
+  PreprocessingContextUpdateRequest,
   AgentSettingsResponse,
   AgentSettingsUpdateRequest,
   AgentStateResponse,
@@ -34,6 +40,7 @@ import {
   CODEBASE_VISUALIZER_AGENT_SESSION_ROUTE,
   CODEBASE_VISUALIZER_DRAFTS_ROUTE,
   CODEBASE_VISUALIZER_LAYOUTS_ROUTE,
+  CODEBASE_VISUALIZER_PREPROCESSING_ROUTE,
   CODEBASE_VISUALIZER_ROUTE,
 } from '../shared/constants'
 
@@ -94,6 +101,37 @@ export async function handleCodebaseVisualizerRequest(
 
       sendJson(response, 200, state)
       return true
+    }
+
+    if (pathname === CODEBASE_VISUALIZER_PREPROCESSING_ROUTE) {
+      if (method === 'GET') {
+        const result: PreprocessingContextResponse = {
+          context: await readPersistedPreprocessedWorkspaceContext(options.rootDir),
+        }
+
+        sendJson(response, 200, result)
+        return true
+      }
+
+      if (method === 'POST') {
+        const payload = await readJsonBody<PreprocessingContextUpdateRequest>(request)
+
+        if (!payload?.context?.snapshotId) {
+          sendJson(response, 400, {
+            message: 'A preprocessing context payload is required.',
+          })
+          return true
+        }
+
+        await writePersistedPreprocessedWorkspaceContext(options.rootDir, payload.context)
+
+        const result: PreprocessingContextResponse = {
+          context: payload.context,
+        }
+
+        sendJson(response, 200, result)
+        return true
+      }
     }
 
     if (pathname === CODEBASE_VISUALIZER_AGENT_SESSION_ROUTE) {

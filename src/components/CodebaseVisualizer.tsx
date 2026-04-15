@@ -34,13 +34,17 @@ import {
   type LayoutNodeScope,
   type LayoutSpec,
   type ProjectNode,
+  type PreprocessedWorkspaceContext,
+  type PreprocessingStatus,
   type SourceRange,
   type SymbolNode,
   type VisualizerViewMode,
+  type WorkspaceProfile,
 } from '../types'
 import { useVisualizerStore } from '../store/visualizerStore'
 import { buildStructuralLayout } from '../layouts/structuralLayout'
 import { buildSymbolLayout } from '../layouts/symbolLayout'
+import { buildSemanticLayout } from '../semantic/semanticLayout'
 import { CodebaseAnnotationNode } from './CodebaseAnnotationNode'
 import { AgentPanel } from './AgentPanel'
 import { CodebaseCanvasNode } from './CodebaseCanvasNode'
@@ -55,6 +59,9 @@ interface CodebaseVisualizerProps {
   layoutActionsPending?: boolean
   layoutSuggestionPending?: boolean
   layoutSuggestionError?: string | null
+  preprocessedWorkspaceContext?: PreprocessedWorkspaceContext | null
+  preprocessingStatus?: PreprocessingStatus | null
+  workspaceProfile?: WorkspaceProfile | null
 }
 
 type FlowEdgeData = Record<string, unknown> & {
@@ -155,6 +162,9 @@ export function CodebaseVisualizer({
   layoutActionsPending = false,
   layoutSuggestionPending = false,
   layoutSuggestionError = null,
+  preprocessedWorkspaceContext = null,
+  preprocessingStatus = null,
+  workspaceProfile = null,
 }: CodebaseVisualizerProps) {
   const [agentSettingsOpen, setAgentSettingsOpen] = useState(false)
   const [draftActionError, setDraftActionError] = useState<string | null>(null)
@@ -250,9 +260,11 @@ export function CodebaseVisualizer({
 
     const structuralLayout = buildStructuralLayout(effectiveSnapshot)
     const symbolLayout = buildSymbolLayout(effectiveSnapshot)
+    const semanticLayout = buildSemanticLayout(effectiveSnapshot)
     const nextLayouts = mergeLayoutsWithDefaults(layouts, [
       structuralLayout,
       symbolLayout,
+      semanticLayout,
     ])
 
     if (!areLayoutListsEquivalent(layouts, nextLayouts)) {
@@ -551,6 +563,15 @@ export function CodebaseVisualizer({
             ) : null}
             {workspaceActionError ? (
               <p className="cbv-workspace-error">{workspaceActionError}</p>
+            ) : null}
+            {preprocessingStatus ? (
+              <div
+                className={`cbv-preprocessing-status is-${preprocessingStatus.runState}`}
+                title={formatPreprocessingStatusTitle(preprocessingStatus)}
+              >
+                <span className="cbv-preprocessing-status-dot" />
+                <span>{formatPreprocessingStatusLabel(preprocessingStatus)}</span>
+              </div>
             ) : null}
           </div>
 
@@ -916,6 +937,8 @@ export function CodebaseVisualizer({
                   }}
                   onOpenSettings={() => setAgentSettingsOpen(true)}
                   onRunSettled={onAgentRunSettled}
+                  preprocessedWorkspaceContext={preprocessedWorkspaceContext}
+                  workspaceProfile={workspaceProfile}
                 />
               ) : inspectorTab === 'graph' ? (
                 <GraphInspector
@@ -980,7 +1003,9 @@ export function CodebaseVisualizer({
               </div>
               <AgentPanel
                 desktopHostAvailable={isDesktopHost}
+                preprocessedWorkspaceContext={preprocessedWorkspaceContext}
                 settingsOnly
+                workspaceProfile={workspaceProfile}
               />
             </section>
           </div>
@@ -994,6 +1019,35 @@ function getWorkspaceName(rootDir: string) {
   const normalizedRootDir = rootDir.replace(/[\\/]+$/, '')
   const segments = normalizedRootDir.split(/[\\/]/)
   return segments[segments.length - 1] || rootDir
+}
+
+function formatPreprocessingStatusLabel(status: PreprocessingStatus) {
+  switch (status.runState) {
+    case 'building':
+      return 'Building context…'
+    case 'stale':
+      return 'Refreshing context…'
+    case 'ready':
+      return `Context ready · ${status.purposeSummaryCount} summaries`
+    case 'error':
+      return 'Context build failed'
+    default:
+      return 'Context idle'
+  }
+}
+
+function formatPreprocessingStatusTitle(status: PreprocessingStatus) {
+  const parts = [formatPreprocessingStatusLabel(status)]
+
+  if (status.updatedAt) {
+    parts.push(`Updated ${new Date(status.updatedAt).toLocaleTimeString()}`)
+  }
+
+  if (status.lastError) {
+    parts.push(status.lastError)
+  }
+
+  return parts.join(' · ')
 }
 
 function MultiFileInspector({

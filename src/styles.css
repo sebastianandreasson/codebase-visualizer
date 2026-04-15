@@ -81,6 +81,40 @@
   font-size: 0.88rem;
 }
 
+.cbv-preprocessing-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.42rem;
+  width: fit-content;
+  padding: 0.26rem 0.58rem;
+  border: 1px solid #d5d0c7;
+  border-radius: 999px;
+  background: #fffaf3;
+  color: #5f5446;
+  font-size: 0.76rem;
+}
+
+.cbv-preprocessing-status-dot {
+  width: 0.52rem;
+  height: 0.52rem;
+  border-radius: 999px;
+  background: #b7ac9e;
+  flex: 0 0 auto;
+}
+
+.cbv-preprocessing-status.is-building .cbv-preprocessing-status-dot,
+.cbv-preprocessing-status.is-stale .cbv-preprocessing-status-dot {
+  background: #c58b2b;
+}
+
+.cbv-preprocessing-status.is-ready .cbv-preprocessing-status-dot {
+  background: #4b8f4e;
+}
+
+.cbv-preprocessing-status.is-error .cbv-preprocessing-status-dot {
+  background: #b5452b;
+}
+
 .cbv-layout-controls {
   align-items: center;
 }

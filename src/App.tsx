@@ -1,11 +1,19 @@
-import { startTransition, useEffect, useState } from 'react'
+import { startTransition, useEffect, useRef, useState } from 'react'
 
 import { CodebaseVisualizer } from './index'
+import {
+  getPreprocessedSnapshotId,
+  hydratePreprocessedWorkspaceContext,
+  preprocessWorkspaceSnapshot,
+} from './preprocessing/preprocessingService'
 import type {
   AgentStateResponse,
   CodebaseSnapshot,
   DraftMutationResponse,
   LayoutStateResponse,
+  PreprocessedWorkspaceContext,
+  PreprocessingContextResponse,
+  PreprocessingStatus,
 } from './types'
 import { useVisualizerStore } from './store/visualizerStore'
 import {
@@ -13,6 +21,7 @@ import {
   CODEBASE_VISUALIZER_AGENT_SESSION_ROUTE,
   buildCodebaseVisualizerDraftActionRoute,
   CODEBASE_VISUALIZER_LAYOUTS_ROUTE,
+  CODEBASE_VISUALIZER_PREPROCESSING_ROUTE,
   CODEBASE_VISUALIZER_ROUTE,
 } from './shared/constants'
 
@@ -20,6 +29,17 @@ export default function App() {
   const [layoutActionPending, setLayoutActionPending] = useState(false)
   const [layoutSuggestionPending, setLayoutSuggestionPending] = useState(false)
   const [layoutSuggestionError, setLayoutSuggestionError] = useState<string | null>(null)
+  const [preprocessedWorkspaceContext, setPreprocessedWorkspaceContext] =
+    useState<PreprocessedWorkspaceContext | null>(null)
+  const [preprocessingStatus, setPreprocessingStatus] = useState<PreprocessingStatus>({
+    runState: 'idle',
+    updatedAt: null,
+    purposeSummaryCount: 0,
+    lastError: null,
+    snapshotId: null,
+  })
+  const preprocessingRunIdRef = useRef(0)
+  const preprocessedWorkspaceContextRef = useRef<PreprocessedWorkspaceContext | null>(null)
   const status = useVisualizerStore((state) => state.status)
   const errorMessage = useVisualizerStore((state) => state.errorMessage)
   const activeDraftId = useVisualizerStore((state) => state.activeDraftId)
@@ -32,6 +52,10 @@ export default function App() {
   const setLayouts = useVisualizerStore((state) => state.setLayouts)
   const setSnapshot = useVisualizerStore((state) => state.setSnapshot)
   const setStatus = useVisualizerStore((state) => state.setStatus)
+
+  useEffect(() => {
+    preprocessedWorkspaceContextRef.current = preprocessedWorkspaceContext
+  }, [preprocessedWorkspaceContext])
 
   useEffect(() => {
     const desktopBridge = (
@@ -58,10 +82,17 @@ export default function App() {
       setStatus('loading')
 
       try {
-        const { layoutState, snapshot } = await fetchWorkspaceState()
+        const [{ layoutState, snapshot }, persistedContext] = await Promise.all([
+          fetchWorkspaceState(),
+          fetchPersistedPreprocessedWorkspaceContext(),
+        ])
 
         if (isCancelled) {
           return
+        }
+
+        if (persistedContext) {
+          hydratePreprocessedWorkspaceContext(persistedContext)
         }
 
         startTransition(() => {
@@ -70,9 +101,35 @@ export default function App() {
           setDraftLayouts(layoutState.draftLayouts)
           setActiveLayoutId(layoutState.activeLayoutId)
           setActiveDraftId(layoutState.activeDraftId)
+          setPreprocessedWorkspaceContext(persistedContext)
+          setPreprocessingStatus(
+            persistedContext
+              ? {
+                  runState:
+                    persistedContext.snapshotId === getPreprocessedSnapshotId(snapshot)
+                      ? 'ready'
+                      : 'stale',
+                  updatedAt: persistedContext.workspaceProfile.generatedAt,
+                  purposeSummaryCount: persistedContext.purposeSummaries.length,
+                  lastError: null,
+                  snapshotId: persistedContext.snapshotId,
+                }
+              : {
+                  runState: 'idle',
+                  updatedAt: null,
+                  purposeSummaryCount: 0,
+                  lastError: null,
+                  snapshotId: null,
+                },
+          )
           setErrorMessage(null)
           setStatus('ready')
         })
+
+        startBackgroundPreprocessing(
+          snapshot,
+          persistedContext ?? preprocessedWorkspaceContextRef.current,
+        )
       } catch (error) {
         if (isCancelled) {
           return
@@ -109,6 +166,82 @@ export default function App() {
       setDraftLayouts(layoutState.draftLayouts)
       setErrorMessage(null)
     })
+
+    startBackgroundPreprocessing(
+      snapshot,
+      preprocessedWorkspaceContextRef.current,
+    )
+  }
+
+  function startBackgroundPreprocessing(
+    nextSnapshot: CodebaseSnapshot,
+    existingContext: PreprocessedWorkspaceContext | null,
+  ) {
+    const runId = preprocessingRunIdRef.current + 1
+    preprocessingRunIdRef.current = runId
+
+    startTransition(() => {
+      setPreprocessingStatus((current) => ({
+        runState: existingContext ? 'stale' : 'building',
+        updatedAt: current.updatedAt,
+        purposeSummaryCount: current.purposeSummaryCount,
+        lastError: null,
+        snapshotId: current.snapshotId,
+      }))
+    })
+
+    window.setTimeout(() => {
+      void Promise.resolve()
+        .then(() => preprocessWorkspaceSnapshot(nextSnapshot))
+        .then((context) => {
+          if (preprocessingRunIdRef.current !== runId) {
+            return
+          }
+
+          startTransition(() => {
+            setPreprocessedWorkspaceContext(context)
+            setPreprocessingStatus({
+              runState: 'ready',
+              updatedAt: new Date().toISOString(),
+              purposeSummaryCount: context.purposeSummaries.length,
+              lastError: null,
+              snapshotId: context.snapshotId,
+            })
+          })
+
+          void persistPreprocessedWorkspaceContext(context).catch((error) => {
+            if (preprocessingRunIdRef.current !== runId) {
+              return
+            }
+
+            setPreprocessingStatus((current) => ({
+              ...current,
+              lastError:
+                error instanceof Error
+                  ? error.message
+                  : 'Failed to persist preprocessing cache.',
+            }))
+          })
+        })
+        .catch((error) => {
+          if (preprocessingRunIdRef.current !== runId) {
+            return
+          }
+
+          startTransition(() => {
+            setPreprocessingStatus((current) => ({
+              runState: 'error',
+              updatedAt: current.updatedAt,
+              purposeSummaryCount: current.purposeSummaryCount,
+              lastError:
+                error instanceof Error
+                  ? error.message
+                  : 'Failed to preprocess workspace context.',
+              snapshotId: current.snapshotId,
+            }))
+          })
+        })
+    }, 0)
   }
 
   async function refreshLayoutState() {
@@ -330,6 +463,9 @@ export default function App() {
           onAcceptDraft={handleAcceptDraft}
           onRejectDraft={handleRejectDraft}
           onSuggestLayout={handleSuggestLayout}
+          preprocessedWorkspaceContext={preprocessedWorkspaceContext}
+          preprocessingStatus={preprocessingStatus}
+          workspaceProfile={preprocessedWorkspaceContext?.workspaceProfile ?? null}
         />
       )}
     </main>
@@ -400,4 +536,37 @@ async function getResponseErrorMessage(
   }
 
   return fallbackMessage
+}
+
+async function fetchPersistedPreprocessedWorkspaceContext() {
+  const response = await fetch(CODEBASE_VISUALIZER_PREPROCESSING_ROUTE)
+
+  if (!response.ok) {
+    throw new Error(await getResponseErrorMessage(
+      response,
+      `Preprocessing context request failed with status ${response.status}.`,
+    ))
+  }
+
+  const payload = (await response.json()) as PreprocessingContextResponse
+  return payload.context
+}
+
+async function persistPreprocessedWorkspaceContext(
+  context: PreprocessedWorkspaceContext,
+) {
+  const response = await fetch(CODEBASE_VISUALIZER_PREPROCESSING_ROUTE, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ context }),
+  })
+
+  if (!response.ok) {
+    throw new Error(await getResponseErrorMessage(
+      response,
+      `Preprocessing persistence failed with status ${response.status}.`,
+    ))
+  }
 }

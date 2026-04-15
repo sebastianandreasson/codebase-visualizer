@@ -1,0 +1,129 @@
+import type { LayoutNodePlacement, LayoutSpec } from '../schema/layout'
+import {
+  isSymbolNode,
+  type ProjectSnapshot,
+  type SymbolKind,
+  type SymbolNode,
+} from '../schema/snapshot'
+import { embedTextsWithTfidf } from './embeddings/tfidfEmbeddingProvider'
+import { buildSemanticPurposeSummaryRecords } from './purposeSummaries'
+import { projectSemanticEmbeddings } from './projection/umap'
+import { refineSemanticLayout } from './projection/refinement'
+import type {
+  SemanticEmbeddingVectorRecord,
+  SemanticPurposeSummaryRecord,
+  SemanticProjectionRecord,
+} from './types'
+
+const SEMANTIC_SYMBOL_NODE_WIDTH = 248
+const SEMANTIC_SYMBOL_NODE_HEIGHT = 82
+const SEMANTIC_PROJECTION_SEED = 17
+
+const SUPPORTED_SYMBOL_KINDS = new Set<SymbolKind>([
+  'class',
+  'function',
+  'method',
+  'constant',
+  'variable',
+])
+
+export function buildSemanticLayout(snapshot: ProjectSnapshot): LayoutSpec {
+  const purposeSummaries = buildSemanticPurposeSummaryRecords(snapshot).filter((record) => {
+    const node = snapshot.nodes[record.symbolId]
+    return Boolean(node && isSupportedSemanticSymbol(node))
+  })
+  const embeddings = buildSemanticEmbeddingRecords(purposeSummaries)
+  const projection = projectSemanticEmbeddings({
+    seed: SEMANTIC_PROJECTION_SEED,
+    vectors: embeddings,
+  })
+  const baseLayout = buildSemanticLayoutFromProjection(snapshot, projection)
+
+  return refineSemanticLayout(projection, {
+    baseLayout,
+    minimumSpacing: 96,
+  })
+}
+
+export function buildSemanticLayoutScaffold(snapshot: ProjectSnapshot): LayoutSpec {
+  return {
+    id: `layout:semantic:${snapshot.rootDir}`,
+    title: 'Semantic symbols',
+    strategy: 'semantic',
+    nodeScope: 'symbols',
+    description: 'Experimental semantic symbol layout scaffold.',
+    placements: {},
+    groups: [],
+    lanes: [],
+    annotations: [],
+    hiddenNodeIds: [],
+    createdAt: snapshot.generatedAt,
+    updatedAt: snapshot.generatedAt,
+  }
+}
+
+export function buildSemanticLayoutFromProjection(
+  snapshot: ProjectSnapshot,
+  projection: SemanticProjectionRecord,
+): LayoutSpec {
+  const placements: Record<string, LayoutNodePlacement> = {}
+
+  for (const point of projection.points) {
+    placements[point.symbolId] = {
+      nodeId: point.symbolId,
+      x: point.x,
+      y: point.y,
+      width: SEMANTIC_SYMBOL_NODE_WIDTH,
+      height: SEMANTIC_SYMBOL_NODE_HEIGHT,
+    }
+  }
+
+  const visibleNodeIds = new Set(projection.symbolIds)
+
+  return {
+    id: `layout:semantic:${snapshot.rootDir}`,
+    title: 'Semantic symbols',
+    strategy: 'semantic',
+    nodeScope: 'symbols',
+    description: 'Experimental symbol layout based on semantic embeddings.',
+    placements,
+    groups: [],
+    lanes: [],
+    annotations: [],
+    hiddenNodeIds: Object.values(snapshot.nodes)
+      .filter((node) => !isSupportedSemanticSymbol(node) || !visibleNodeIds.has(node.id))
+      .map((node) => node.id),
+    createdAt: snapshot.generatedAt,
+    updatedAt: snapshot.generatedAt,
+  }
+}
+
+export function collectSemanticSymbolTexts(snapshot: ProjectSnapshot) {
+  return buildSemanticPurposeSummaryRecords(snapshot)
+}
+
+function buildSemanticEmbeddingRecords(
+  purposeSummaries: SemanticPurposeSummaryRecord[],
+): SemanticEmbeddingVectorRecord[] {
+  const embeddings = embedTextsWithTfidf(
+    purposeSummaries.map((record) => ({
+      id: record.symbolId,
+      text: record.embeddingText,
+    })),
+  )
+
+  return purposeSummaries.map((record) => ({
+    symbolId: record.symbolId,
+    modelId: 'local-purpose-tfidf-v1',
+    dimensions: embeddings[record.symbolId]?.length ?? 0,
+    textHash: record.sourceHash,
+    values: embeddings[record.symbolId] ?? [],
+    generatedAt: record.generatedAt,
+  }))
+}
+
+function isSupportedSemanticSymbol(
+  node: ProjectSnapshot['nodes'][string],
+): node is SymbolNode {
+  return isSymbolNode(node) && SUPPORTED_SYMBOL_KINDS.has(node.symbolKind)
+}

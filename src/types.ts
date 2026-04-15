@@ -69,6 +69,8 @@ export type {
   AgentBrokerLoginStartResponse,
   AgentBrokerSessionResponse,
   AgentPromptRequest,
+  PreprocessingContextResponse,
+  PreprocessingContextUpdateRequest,
   AgentSettingsResponse,
   AgentSettingsUpdateRequest,
   AgentStateResponse,
@@ -103,6 +105,28 @@ export type {
   ValidationIssueSeverity,
   ValidationResult,
 } from './schema/planner'
+export type {
+  SemanticCacheManifest,
+  SemanticCacheSnapshot,
+  SemanticEmbeddingProvider,
+  SemanticEmbeddingProviderKind,
+  SemanticEmbeddingVectorRecord,
+  SemanticIndexState,
+  SemanticLayoutBuildResult,
+  SemanticPurposeSummaryRecord,
+  SemanticProjectionPoint,
+  SemanticProjectionRecord,
+  SemanticRefinementInput,
+  SemanticSymbolTextRecord,
+  SemanticUmapInput,
+} from './semantic/types'
+export type {
+  PreprocessedWorkspaceContext,
+  PreprocessingRunState,
+  PreprocessingStatus,
+  PreprocessingResult,
+  WorkspaceProfile,
+} from './preprocessing/types'
 export {
   DEFAULT_PROJECT_TAGS,
   PROJECT_SNAPSHOT_SCHEMA_VERSION,
@@ -116,3 +140,35 @@ export {
 } from './schema/layout'
 export { DEFAULT_GRAPH_LAYER_VISIBILITY } from './schema/store'
 export { DEFAULT_LAYOUT_PLANNER_CONSTRAINTS } from './schema/planner'
+export {
+  buildSemanticSymbolText,
+  buildSemanticSymbolTextRecord,
+  buildSemanticSymbolTextRecords,
+  hashSemanticText,
+} from './semantic/symbolText'
+export {
+  buildSemanticPurposeSummaryPrompt,
+  buildSemanticPurposeSummaryRecord,
+  buildSemanticPurposeSummaryRecords,
+} from './semantic/purposeSummaries'
+export { preprocessWorkspaceSnapshot } from './preprocessing/preprocessingService'
+export {
+  buildSemanticLayout,
+  buildSemanticLayoutFromProjection,
+  collectSemanticSymbolTexts,
+} from './semantic/semanticLayout'
+export {
+  createEmptySemanticCacheSnapshot,
+  createSemanticCacheManifest,
+  mergeSemanticCacheSnapshot,
+  SEMANTIC_CACHE_VERSION,
+} from './semantic/semanticCache'
+export { createSemanticEmbeddingProvider } from './semantic/embeddings/provider'
+export {
+  createLocalSemanticEmbeddingProvider,
+  type LocalSemanticEmbeddingProviderOptions,
+  embedTextsLocally,
+} from './semantic/embeddings/localEmbeddingProvider'
+export { embedTextsWithTfidf } from './semantic/embeddings/tfidfEmbeddingProvider'
+export { projectSemanticEmbeddings } from './semantic/projection/umap'
+export { refineSemanticLayout } from './semantic/projection/refinement'

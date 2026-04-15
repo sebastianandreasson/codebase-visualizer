@@ -1,4 +1,4 @@
-export type LayoutStrategyKind = 'structural' | 'rule' | 'agent'
+export type LayoutStrategyKind = 'structural' | 'rule' | 'agent' | 'semantic'
 export type LayoutNodeScope = 'filesystem' | 'symbols' | 'mixed'
 export type VisualizerViewMode = 'filesystem' | 'symbols'
 

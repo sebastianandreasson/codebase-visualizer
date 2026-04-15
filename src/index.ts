@@ -4,6 +4,7 @@ import './styles.css'
 export { CodebaseVisualizer } from './components/CodebaseVisualizer'
 export { buildStructuralLayout } from './layouts/structuralLayout'
 export { buildSymbolLayout } from './layouts/symbolLayout'
+export { buildSemanticLayout } from './semantic/semanticLayout'
 export {
   createVisualizerStore,
   useVisualizerStore,
