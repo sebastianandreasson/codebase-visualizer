@@ -10,6 +10,8 @@ import type {
 } from '../schema/agent'
 import type { CodebaseFile, ProjectNode, SourceRange, SymbolNode } from '../types'
 
+const MAX_VISIBLE_CONTEXT_FILES = 6
+
 interface AgentPanelProps {
   desktopHostAvailable?: boolean
   inspectorContext?: {
@@ -976,13 +978,21 @@ export function AgentPanel({
             </p>
             {inspectorContext.files.length > 1 ? (
               <ul className="cbv-agent-context-list">
-                {inspectorContext.files.map((file, index) => (
+                {inspectorContext.files
+                  .slice(0, MAX_VISIBLE_CONTEXT_FILES)
+                  .map((file, index) => (
                   <li key={file.id}>
                     <strong>{index === 0 ? 'Primary' : `File ${index + 1}`}</strong>
                     <span>{file.path}</span>
                   </li>
                 ))}
               </ul>
+            ) : null}
+            {inspectorContext.files.length > MAX_VISIBLE_CONTEXT_FILES ? (
+              <p className="cbv-agent-context-more">
+                + {inspectorContext.files.length - MAX_VISIBLE_CONTEXT_FILES} more selected file
+                {inspectorContext.files.length - MAX_VISIBLE_CONTEXT_FILES === 1 ? '' : 's'}
+              </p>
             ) : null}
           </div>
         ) : null}

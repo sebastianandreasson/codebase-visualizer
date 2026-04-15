@@ -1,7 +1,10 @@
 .cbv-shell {
   display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
   gap: 0.625rem;
-  min-height: calc(100vh - 1.25rem);
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .cbv-toolbar,
@@ -219,7 +222,9 @@
     0.75rem
     minmax(0, var(--cbv-inspector-width, 40%));
   gap: 0.625rem;
-  min-height: calc(100vh - 5.75rem);
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .cbv-workspace.is-inspector-closed {
@@ -228,13 +233,20 @@
 
 .cbv-canvas,
 .cbv-inspector {
-  min-height: calc(100vh - 5.75rem);
+  height: 100%;
+  min-height: 0;
+}
+
+.cbv-inspector {
+  display: grid;
+  grid-template-rows: auto auto auto minmax(0, 1fr);
 }
 
 .cbv-workspace-resize-handle {
   position: relative;
   width: 100%;
-  min-height: calc(100vh - 5.75rem);
+  height: 100%;
+  min-height: 0;
   padding: 0;
   border: 0;
   border-radius: 999px;
@@ -790,6 +802,12 @@
   word-break: break-word;
 }
 
+.cbv-multi-file-overflow {
+  margin: 0.65rem 0 0;
+  color: #665a4b;
+  font-size: 0.84rem;
+}
+
 .cbv-graph-inspector {
   display: grid;
   gap: 0.85rem;
@@ -993,6 +1011,11 @@
   white-space: pre-wrap;
 }
 
+.cbv-inspector-body {
+  min-height: 0;
+  overflow: auto;
+}
+
 .cbv-agent-composer {
   display: grid;
   gap: 0.65rem;
@@ -1041,6 +1064,12 @@
   color: #665a4b;
   font-size: 0.83rem;
   word-break: break-word;
+}
+
+.cbv-agent-context-more {
+  margin: 0;
+  color: #665a4b;
+  font-size: 0.82rem;
 }
 
 .cbv-agent-composer textarea {
@@ -1130,6 +1159,7 @@
 @media (max-width: 960px) {
   .cbv-workspace {
     grid-template-columns: 1fr;
+    overflow: auto;
   }
 
   .cbv-workspace-resize-handle {
@@ -1137,7 +1167,7 @@
   }
 
   .cbv-shell {
-    min-height: calc(100vh - 1rem);
+    height: 100%;
   }
 
   .cbv-code {

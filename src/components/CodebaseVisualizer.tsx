@@ -124,6 +124,7 @@ const COMPACT_SYMBOL_NODE_HEIGHT = 74
 const DEFAULT_CANVAS_WIDTH_RATIO = 0.6
 const MIN_CANVAS_WIDTH_RATIO = 0.32
 const MAX_CANVAS_WIDTH_RATIO = 0.78
+const MAX_VISIBLE_SELECTED_FILES = 8
 
 const nodeTypes = {
   annotationNode: CodebaseAnnotationNode,
@@ -903,50 +904,52 @@ export function CodebaseVisualizer({
               </button>
             </div>
 
-            {inspectorTab === 'agent' ? (
-              <AgentPanel
-                desktopHostAvailable={isDesktopHost}
-                inspectorContext={{
-                  file: selectedFile,
-                  files: selectedFiles,
-                  node: selectedNode,
-                  symbol: selectedSymbol,
-                }}
-                onOpenSettings={() => setAgentSettingsOpen(true)}
-                onRunSettled={onAgentRunSettled}
-              />
-            ) : inspectorTab === 'graph' ? (
-              <GraphInspector
-                selectedEdge={selectedEdge}
-                selectedNode={selectedNode}
-                summary={graphSummary}
-              />
-            ) : selectedFiles.length > 1 ? (
-              <MultiFileInspector
-                primaryFile={selectedFile}
-                selectedFiles={selectedFiles}
-              />
-            ) : selectedFile ? (
-              <>
-                <div className="cbv-preview-meta">
-                  <span>{formatFileSize(selectedFile.size)}</span>
-                  <span>{selectedFile.extension || 'no extension'}</span>
-                  <span>{describeContentState(selectedFile)}</span>
-                  {selectedSymbol ? (
-                    <span>
-                      {selectedSymbol.symbolKind}
-                      {selectedSymbol.range ? ` · line ${selectedSymbol.range.start.line}` : ''}
-                    </span>
-                  ) : null}
+            <div className="cbv-inspector-body">
+              {inspectorTab === 'agent' ? (
+                <AgentPanel
+                  desktopHostAvailable={isDesktopHost}
+                  inspectorContext={{
+                    file: selectedFile,
+                    files: selectedFiles,
+                    node: selectedNode,
+                    symbol: selectedSymbol,
+                  }}
+                  onOpenSettings={() => setAgentSettingsOpen(true)}
+                  onRunSettled={onAgentRunSettled}
+                />
+              ) : inspectorTab === 'graph' ? (
+                <GraphInspector
+                  selectedEdge={selectedEdge}
+                  selectedNode={selectedNode}
+                  summary={graphSummary}
+                />
+              ) : selectedFiles.length > 1 ? (
+                <MultiFileInspector
+                  primaryFile={selectedFile}
+                  selectedFiles={selectedFiles}
+                />
+              ) : selectedFile ? (
+                <>
+                  <div className="cbv-preview-meta">
+                    <span>{formatFileSize(selectedFile.size)}</span>
+                    <span>{selectedFile.extension || 'no extension'}</span>
+                    <span>{describeContentState(selectedFile)}</span>
+                    {selectedSymbol ? (
+                      <span>
+                        {selectedSymbol.symbolKind}
+                        {selectedSymbol.range ? ` · line ${selectedSymbol.range.start.line}` : ''}
+                      </span>
+                    ) : null}
+                  </div>
+                  <CodePreview file={selectedFile} highlightedRange={selectedSymbol?.range} />
+                </>
+              ) : (
+                <div className="cbv-empty">
+                  <h2>No file selected</h2>
+                  <p>Select a node on the canvas to inspect its contents.</p>
                 </div>
-                <CodePreview file={selectedFile} highlightedRange={selectedSymbol?.range} />
-              </>
-            ) : (
-              <div className="cbv-empty">
-                <h2>No file selected</h2>
-                <p>Select a node on the canvas to inspect its contents.</p>
-              </div>
-            )}
+              )}
+            </div>
           </aside>
           ) : null}
         </div>
@@ -1000,6 +1003,8 @@ function MultiFileInspector({
   primaryFile: CodebaseFile | null
   selectedFiles: CodebaseFile[]
 }) {
+  const visibleFiles = selectedFiles.slice(0, MAX_VISIBLE_SELECTED_FILES)
+  const hiddenFileCount = Math.max(0, selectedFiles.length - visibleFiles.length)
   const additionalFiles = primaryFile
     ? selectedFiles.filter((file) => file.id !== primaryFile.id)
     : selectedFiles
@@ -1017,13 +1022,18 @@ function MultiFileInspector({
       <div className="cbv-multi-file-list-card">
         <p className="cbv-eyebrow">Selected files</p>
         <ul className="cbv-multi-file-list">
-          {selectedFiles.map((file, index) => (
+          {visibleFiles.map((file, index) => (
             <li key={file.id}>
               <strong>{index === 0 ? 'Primary' : `File ${index + 1}`}</strong>
               <span>{file.path}</span>
             </li>
           ))}
         </ul>
+        {hiddenFileCount > 0 ? (
+          <p className="cbv-multi-file-overflow">
+            + {hiddenFileCount} more selected file{hiddenFileCount === 1 ? '' : 's'}
+          </p>
+        ) : null}
       </div>
 
       {primaryFile ? (
