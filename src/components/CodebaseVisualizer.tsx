@@ -50,7 +50,10 @@ interface CodebaseVisualizerProps {
   snapshot?: CodebaseSnapshot | null
   onAcceptDraft?: (draftId: string) => Promise<void>
   onRejectDraft?: (draftId: string) => Promise<void>
+  onSuggestLayout?: (brief: string) => Promise<void>
   layoutActionsPending?: boolean
+  layoutSuggestionPending?: boolean
+  layoutSuggestionError?: string | null
 }
 
 type FlowEdgeData = Record<string, unknown> & {
@@ -145,9 +148,13 @@ export function CodebaseVisualizer({
   snapshot,
   onAcceptDraft,
   onRejectDraft,
+  onSuggestLayout,
   layoutActionsPending = false,
+  layoutSuggestionPending = false,
+  layoutSuggestionError = null,
 }: CodebaseVisualizerProps) {
   const [draftActionError, setDraftActionError] = useState<string | null>(null)
+  const [layoutSuggestionText, setLayoutSuggestionText] = useState('')
   const [canvasWidthRatio, setCanvasWidthRatio] = useState(DEFAULT_CANVAS_WIDTH_RATIO)
   const [activeResizePointerId, setActiveResizePointerId] = useState<number | null>(null)
   const [inspectorOpen, setInspectorOpen] = useState(false)
@@ -764,6 +771,48 @@ export function CodebaseVisualizer({
                 />
               )}
             </ReactFlow>
+
+            {onSuggestLayout ? (
+              <form
+                className={`cbv-layout-suggestion${layoutSuggestionPending ? ' is-pending' : ''}`}
+                onSubmit={(event) => {
+                  event.preventDefault()
+
+                  if (!onSuggestLayout || layoutSuggestionPending) {
+                    return
+                  }
+
+                  void onSuggestLayout(layoutSuggestionText)
+                }}
+              >
+                <div className="cbv-layout-suggestion-shell">
+                  <input
+                    aria-label="Suggest layout"
+                    className="cbv-layout-suggestion-input"
+                    disabled={layoutSuggestionPending}
+                    onChange={(event) => {
+                      setLayoutSuggestionText(event.target.value)
+                    }}
+                    placeholder="Suggest layout"
+                    value={layoutSuggestionText}
+                  />
+                  <button
+                    className="cbv-layout-suggestion-submit"
+                    disabled={layoutSuggestionPending || !layoutSuggestionText.trim()}
+                    type="submit"
+                  >
+                    {layoutSuggestionPending ? 'Working…' : 'Go'}
+                  </button>
+                </div>
+                {layoutSuggestionPending ? (
+                  <p className="cbv-layout-suggestion-status">
+                    Generating a new layout draft…
+                  </p>
+                ) : layoutSuggestionError ? (
+                  <p className="cbv-layout-suggestion-error">{layoutSuggestionError}</p>
+                ) : null}
+              </form>
+            ) : null}
           </section>
 
           {inspectorOpen ? (

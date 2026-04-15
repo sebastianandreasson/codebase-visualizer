@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 
+import { ensureAgentInstructions } from '../cli/agentInstructions'
 import {
   acceptLayoutDraft,
   listLayoutDrafts,
@@ -142,6 +143,7 @@ export async function handleCodebaseVisualizerRequest(
         return true
       }
 
+      await ensureAgentInstructions(options.rootDir)
       void options.agentRuntime.promptWorkspaceSession(options.rootDir, payload.message).catch((error) => {
         console.error(
           '[codebase-visualizer][agent] Background prompt failed:',

@@ -1,5 +1,6 @@
 import { mkdir, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const INSTRUCTIONS_DIRECTORY = '.codebase-visualizer'
 const INSTRUCTIONS_FILENAME = 'INSTRUCTIONS.md'
@@ -7,14 +8,26 @@ const INSTRUCTIONS_FILENAME = 'INSTRUCTIONS.md'
 export async function ensureAgentInstructions(rootDir: string) {
   const instructionsDirectory = join(rootDir, INSTRUCTIONS_DIRECTORY)
   const instructionsPath = join(instructionsDirectory, INSTRUCTIONS_FILENAME)
+  const localModulePaths = resolveLocalModulePaths()
 
   await mkdir(instructionsDirectory, { recursive: true })
-  await writeFile(instructionsPath, buildAgentInstructionsMarkdown(rootDir), 'utf8')
+  await writeFile(
+    instructionsPath,
+    buildAgentInstructionsMarkdown(rootDir, localModulePaths),
+    'utf8',
+  )
 
   return instructionsPath
 }
 
-function buildAgentInstructionsMarkdown(rootDir: string) {
+function buildAgentInstructionsMarkdown(
+  rootDir: string,
+  localModulePaths: {
+    packageRoot: string
+    nodeModuleImport: string
+    plannerModuleImport: string
+  },
+) {
   return [
     '# Codebase Visualizer Agent Instructions',
     '',
@@ -33,10 +46,12 @@ function buildAgentInstructionsMarkdown(rootDir: string) {
     '- Draft layouts directory: `.codebase-visualizer/layouts/drafts/`',
     '- Accepted layouts directory: `.codebase-visualizer/layouts/`',
     '- This instruction file: `.codebase-visualizer/INSTRUCTIONS.md`',
+    `- Local Codebase Visualizer repo: \`${localModulePaths.packageRoot}\``,
     '',
     '## Preferred Workflow',
     '',
-    'Use the installed npm package APIs instead of inventing your own file format.',
+    'Use the local Codebase Visualizer APIs instead of inventing your own file format.',
+    'Do not rely on package-name resolution from the target repository; import from the exact local module paths below.',
     '',
     '1. Read a fresh snapshot of the repository.',
     '2. Build a planner context for the requested prompt.',
@@ -48,14 +63,14 @@ function buildAgentInstructionsMarkdown(rootDir: string) {
     '## Package APIs',
     '',
     '```ts',
-    "import { readProjectSnapshot } from 'codebase-visualizer/node'",
+    `import { readProjectSnapshot } from '${localModulePaths.nodeModuleImport}'`,
     'import {',
     '  buildLayoutPlannerContext,',
     '  validateLayoutPlannerProposal,',
     '  materializeAgentLayout,',
     '  saveLayoutDraft,',
     '  listSavedLayouts,',
-    "} from 'codebase-visualizer/planner'",
+    `} from '${localModulePaths.plannerModuleImport}'`,
     '```',
     '',
     '## Required Draft Shape',
@@ -181,4 +196,16 @@ function buildAgentInstructionsMarkdown(rootDir: string) {
     '- If the user asks for headings, add them as annotations.',
     '- If a request is ambiguous, record that ambiguity in `proposalEnvelope.ambiguities` instead of hiding the uncertainty.',
   ].join('\n')
+}
+
+function resolveLocalModulePaths() {
+  const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
+  const nodeModulePath = join(packageRoot, 'dist', 'node', 'index.js')
+  const plannerModulePath = join(packageRoot, 'dist', 'planner.js')
+
+  return {
+    packageRoot,
+    nodeModuleImport: pathToFileURL(nodeModulePath).href,
+    plannerModuleImport: pathToFileURL(plannerModulePath).href,
+  }
 }
