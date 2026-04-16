@@ -37,7 +37,6 @@ import {
   type ProjectNode,
   type PreprocessedWorkspaceContext,
   type PreprocessingStatus,
-  type SourceRange,
   type SymbolNode,
   type VisualizerViewMode,
   type WorkspaceProfile,
@@ -51,6 +50,10 @@ import { CodebaseAnnotationNode } from './CodebaseAnnotationNode'
 import { AgentPanel } from './AgentPanel'
 import { CodebaseCanvasNode } from './CodebaseCanvasNode'
 import { CodebaseSymbolNode } from './CodebaseSymbolNode'
+import { InspectorPane } from './inspector/InspectorPane'
+import { getInspectorHeaderSummary } from './inspector/inspectorUtils'
+import { ProjectsSidebar } from './shell/ProjectsSidebar'
+import { WorkspaceToolbar } from './shell/WorkspaceToolbar'
 import {
   canCompareLayoutAgainstSemantic,
   resolveCanvasScene,
@@ -143,8 +146,6 @@ const COMPACT_SYMBOL_NODE_HEIGHT = 74
 const DEFAULT_CANVAS_WIDTH_RATIO = 0.6
 const MIN_CANVAS_WIDTH_RATIO = 0.32
 const MAX_CANVAS_WIDTH_RATIO = 0.78
-const MAX_VISIBLE_SELECTED_FILES = 8
-
 const nodeTypes = {
   annotationNode: CodebaseAnnotationNode,
   codebaseNode: CodebaseCanvasNode,
@@ -396,6 +397,22 @@ export function Semanticode({
       : activeLayout
         ? layoutSyncById.get(activeLayout.id) ?? null
         : null
+  const layoutOptions = useMemo(
+    () => [
+      ...layouts.map((layout) => ({
+        label: formatLayoutOptionLabel(layout.title, layoutSyncById.get(layout.id)),
+        value: `layout:${layout.id}`,
+      })),
+      ...availableDraftLayouts.map((draft) => ({
+        label: formatLayoutOptionLabel(
+          `Draft: ${draft.layout?.title ?? draft.id}`,
+          draftSyncById.get(draft.id),
+        ),
+        value: `draft:${draft.id}`,
+      })),
+    ],
+    [availableDraftLayouts, draftSyncById, layoutSyncById, layouts],
+  )
   const resolvedScene = useMemo(
     () =>
       resolveCanvasScene({
@@ -576,6 +593,32 @@ export function Semanticode({
   const workspaceName = effectiveSnapshot
     ? getWorkspaceName(effectiveSnapshot.rootDir)
     : 'Workspace'
+  const formattedPreprocessingStatus = preprocessingStatus
+      ? {
+        canBuildEmbeddings: preprocessingStatus.purposeSummaryCount > 0,
+        embeddingActionLabel: formatEmbeddingActionLabel(preprocessingStatus),
+        label: formatPreprocessingStatusLabel(preprocessingStatus),
+        lastError: preprocessingStatus.lastError,
+        preprocessingActionLabel: formatPreprocessingActionLabel(preprocessingStatus),
+        progressPercent: getPreprocessingProgressPercent(preprocessingStatus),
+        runState: preprocessingStatus.runState,
+        title: formatPreprocessingStatusTitle(preprocessingStatus),
+        workspaceSync: workspaceSyncStatus
+          ? {
+              isOutdated: hasWorkspaceSyncUpdates(workspaceSyncStatus),
+              label: formatWorkspaceSyncLabel(workspaceSyncStatus),
+              title: formatWorkspaceSyncTitle(workspaceSyncStatus),
+            }
+          : null,
+      }
+    : null
+  const activeLayoutSyncNote =
+    activeLayoutSync?.state === 'outdated'
+      ? {
+          label: formatLayoutSyncLabel(activeLayoutSync),
+          title: formatLayoutSyncTitle(activeLayoutSync),
+        }
+      : null
   const visibleLayerToggles = getLayerTogglesForViewMode(viewMode)
   const inspectorWidthRatio = 1 - canvasWidthRatio
 
@@ -787,6 +830,46 @@ export function Semanticode({
     setInspectorTab('file')
   }
 
+  function handleLayoutSelectionChange(value: string) {
+    if (!value) {
+      return
+    }
+
+    if (value.startsWith('draft:')) {
+      const nextDraftId = value.slice('draft:'.length)
+      const nextDraft =
+        availableDraftLayouts.find((draft) => draft.id === nextDraftId) ?? null
+
+      setBaseScene({
+        kind: 'active_layout',
+      })
+      clearCompareOverlay()
+      setActiveDraftId(nextDraftId)
+      setDraftActionError(null)
+
+      if (nextDraft?.layout) {
+        setViewMode(getPreferredViewModeForLayout(nextDraft.layout))
+      }
+
+      return
+    }
+
+    const nextLayoutId = value.slice('layout:'.length)
+    const nextLayout = layouts.find((layout) => layout.id === nextLayoutId) ?? null
+
+    setBaseScene({
+      kind: 'active_layout',
+    })
+    clearCompareOverlay()
+    setActiveDraftId(null)
+    setActiveLayoutId(nextLayoutId)
+    setDraftActionError(null)
+
+    if (nextLayout) {
+      setViewMode(getPreferredViewModeForLayout(nextLayout))
+    }
+  }
+
   if (!effectiveSnapshot) {
     return (
       <section className="cbv-shell">
@@ -803,244 +886,35 @@ export function Semanticode({
       <div
         className={`cbv-app-shell${desktopHostAvailable ? ' is-desktop-host' : ''}${projectsSidebarOpen ? ' is-projects-open' : ''}`}
       >
-        {desktopHostAvailable ? (
-          <aside
-            className={`cbv-projects-sidebar${projectsSidebarOpen ? '' : ' is-collapsed'}`}
-          >
-            <div className="cbv-projects-sidebar-header">
-              <div>
-                <p className="cbv-eyebrow">Projects</p>
-                <strong>{recentProjects.length ? `${recentProjects.length} recent` : 'Folders'}</strong>
-              </div>
-              <button
-                className="cbv-inspector-close"
-                onClick={() => setProjectsSidebarOpen(false)}
-                type="button"
-              >
-                ×
-              </button>
-            </div>
-            <div className="cbv-projects-sidebar-actions">
-              <button
-                disabled={workspaceActionPending}
-                onClick={() => {
-                  void handleOpenAnotherWorkspace()
-                }}
-                type="button"
-              >
-                Open Folder
-              </button>
-              <button
-                className="is-secondary"
-                disabled={workspaceActionPending}
-                onClick={() => {
-                  void handleCloseWorkspace()
-                }}
-                type="button"
-              >
-                Close Current
-              </button>
-            </div>
-            <div className="cbv-projects-list">
-              {recentProjects.length > 0 ? (
-                recentProjects.map((project) => {
-                  const isActive = project.rootDir === effectiveSnapshot.rootDir
-
-                  return (
-                    <button
-                      className={`cbv-projects-item${isActive ? ' is-active' : ''}`}
-                      disabled={workspaceActionPending || isActive}
-                      key={project.rootDir}
-                      onClick={() => {
-                        void handleOpenRecentProject(project.rootDir)
-                      }}
-                      type="button"
-                    >
-                      <strong>{project.name}</strong>
-                      <span>{project.rootDir}</span>
-                      <small>
-                        {isActive
-                          ? 'Current folder'
-                          : `Opened ${new Date(project.lastOpenedAt).toLocaleString()}`}
-                      </small>
-                    </button>
-                  )
-                })
-              ) : (
-                <p className="cbv-projects-empty">
-                  Open a folder to keep it in the recent projects list.
-                </p>
-              )}
-            </div>
-            {workspaceActionError ? (
-              <p className="cbv-workspace-error">{workspaceActionError}</p>
-            ) : null}
-          </aside>
-        ) : null}
+        <ProjectsSidebar
+          currentRootDir={effectiveSnapshot.rootDir}
+          desktopHostAvailable={desktopHostAvailable}
+          onClose={() => setProjectsSidebarOpen(false)}
+          onCloseWorkspace={() => {
+            void handleCloseWorkspace()
+          }}
+          onOpenRecentProject={(rootDir) => {
+            void handleOpenRecentProject(rootDir)
+          }}
+          onOpenWorkspace={() => {
+            void handleOpenAnotherWorkspace()
+          }}
+          open={projectsSidebarOpen}
+          recentProjects={recentProjects}
+          workspaceActionError={workspaceActionError}
+          workspaceActionPending={workspaceActionPending}
+        />
         <section className="cbv-shell">
-        <header className="cbv-toolbar">
-          <div className="cbv-toolbar-left">
-            <div className="cbv-workspace-summary">
-              <strong>{workspaceName}</strong>
-              <p className="cbv-toolbar-path">{effectiveSnapshot.rootDir}</p>
-            </div>
-            {preprocessingStatus ? (
-              <div className="cbv-preprocessing-status-block">
-                <div className="cbv-preprocessing-inline">
-                  <div
-                    className={`cbv-preprocessing-status is-${preprocessingStatus.runState}`}
-                    title={formatPreprocessingStatusTitle(preprocessingStatus)}
-                  >
-                    <span className="cbv-preprocessing-status-dot" />
-                    <span>{formatPreprocessingStatusLabel(preprocessingStatus)}</span>
-                  </div>
-                  {onStartPreprocessing ? (
-                    <button
-                      className="cbv-preprocessing-action"
-                      disabled={preprocessingStatus.runState === 'building'}
-                      onClick={(event) => {
-                        event.preventDefault()
-                        event.stopPropagation()
-                        onStartPreprocessing()
-                      }}
-                      title="Use the agent to generate semantic purpose summaries."
-                      type="button"
-                    >
-                      {formatPreprocessingActionLabel(preprocessingStatus)}
-                    </button>
-                  ) : null}
-                  {onBuildSemanticEmbeddings ? (
-                    <button
-                      className="cbv-preprocessing-action is-secondary"
-                      disabled={
-                        preprocessingStatus.runState === 'building' ||
-                        preprocessingStatus.purposeSummaryCount === 0
-                      }
-                      onClick={(event) => {
-                        event.preventDefault()
-                        event.stopPropagation()
-                        onBuildSemanticEmbeddings()
-                      }}
-                      title="Build local semantic embeddings from cached summaries."
-                      type="button"
-                    >
-                      {formatEmbeddingActionLabel(preprocessingStatus)}
-                    </button>
-                  ) : null}
-                </div>
-                {preprocessingStatus.runState === 'building' ||
-                preprocessingStatus.runState === 'stale' ? (
-                  <div className="cbv-preprocessing-progress">
-                    <div
-                      className="cbv-preprocessing-progress-bar"
-                      style={{
-                        width: `${getPreprocessingProgressPercent(preprocessingStatus)}%`,
-                      }}
-                    />
-                  </div>
-                ) : null}
-                {preprocessingStatus.lastError ? (
-                  <p className="cbv-preprocessing-error">
-                    {preprocessingStatus.lastError}
-                  </p>
-                ) : null}
-                {workspaceSyncStatus ? (
-                  <p
-                    className={`cbv-sync-summary${hasWorkspaceSyncUpdates(workspaceSyncStatus) ? ' is-outdated' : ''}`}
-                    title={formatWorkspaceSyncTitle(workspaceSyncStatus)}
-                  >
-                    {formatWorkspaceSyncLabel(workspaceSyncStatus)}
-                  </p>
-                ) : null}
-              </div>
-            ) : null}
-          </div>
-
-	          <div className="cbv-toolbar-center">
-              <div className="cbv-layout-controls">
-            <label className="cbv-layout-picker">
-              <span className="cbv-eyebrow">Layouts</span>
-              <select
-                onChange={(event) => {
-                  const value = event.target.value
-
-                  if (!value) {
-                    return
-                  }
-
-                  if (value.startsWith('draft:')) {
-                    const nextDraftId = value.slice('draft:'.length)
-                    const nextDraft =
-                      availableDraftLayouts.find((draft) => draft.id === nextDraftId) ?? null
-
-                    setBaseScene({
-                      kind: 'active_layout',
-                    })
-                    clearCompareOverlay()
-                    setActiveDraftId(nextDraftId)
-                    setDraftActionError(null)
-
-                    if (nextDraft?.layout) {
-                      setViewMode(getPreferredViewModeForLayout(nextDraft.layout))
-                    }
-
-                    return
-                  }
-
-                  const nextLayoutId = value.slice('layout:'.length)
-                  const nextLayout =
-                    layouts.find((layout) => layout.id === nextLayoutId) ?? null
-
-                  setBaseScene({
-                    kind: 'active_layout',
-                  })
-                  clearCompareOverlay()
-                  setActiveDraftId(null)
-                  setActiveLayoutId(nextLayoutId)
-                  setDraftActionError(null)
-
-                  if (nextLayout) {
-                    setViewMode(getPreferredViewModeForLayout(nextLayout))
-                  }
-                }}
-                value={selectedLayoutValue}
-              >
-                {layouts.map((layout) => (
-                  <option key={layout.id} value={`layout:${layout.id}`}>
-                    {formatLayoutOptionLabel(layout.title, layoutSyncById.get(layout.id))}
-                  </option>
-                ))}
-                {availableDraftLayouts.map((draft) => (
-                  <option key={draft.id} value={`draft:${draft.id}`}>
-                    {formatLayoutOptionLabel(
-                      `Draft: ${draft.layout?.title ?? draft.id}`,
-                      draftSyncById.get(draft.id),
-                    )}
-                  </option>
-                ))}
-              </select>
-            </label>
-            {activeLayoutSync?.state === 'outdated' ? (
-              <p
-                className="cbv-layout-sync-note"
-                title={formatLayoutSyncTitle(activeLayoutSync)}
-              >
-                {formatLayoutSyncLabel(activeLayoutSync)}
-              </p>
-            ) : null}
-              </div>
-	          </div>
-
-            <div className="cbv-toolbar-right">
-            {activeDraft ? (
-              <div className="cbv-draft-actions">
-                <button
-                  disabled={layoutActionsPending || !onAcceptDraft}
-                  onClick={async () => {
-                    if (!onAcceptDraft) {
-                      return
-                    }
-
+          <WorkspaceToolbar
+            activeDraft={Boolean(activeDraft)}
+            activeLayoutSyncNote={activeLayoutSyncNote}
+            compareOverlayActive={compareOverlayActive}
+            isDesktopHost={isDesktopHost}
+            layoutActionsPending={layoutActionsPending}
+            layoutOptions={layoutOptions}
+            onAcceptDraft={
+              activeDraft && onAcceptDraft
+                ? async () => {
                     try {
                       setDraftActionError(null)
                       await onAcceptDraft(activeDraft.id)
@@ -1051,19 +925,18 @@ export function Semanticode({
                           : 'Failed to accept draft.',
                       )
                     }
-                  }}
-                  type="button"
-                >
-                  Accept Draft
-                </button>
-                <button
-                  className="is-danger"
-                  disabled={layoutActionsPending || !onRejectDraft}
-                  onClick={async () => {
-                    if (!onRejectDraft) {
-                      return
-                    }
-
+                  }
+                : undefined
+            }
+            onActivateCompareOverlay={
+              currentCompareSource ? handleActivateCompareOverlay : undefined
+            }
+            onBuildSemanticEmbeddings={onBuildSemanticEmbeddings}
+            onClearCompareOverlay={compareOverlayActive ? handleClearCompareOverlay : undefined}
+            onOpenAgentSettings={() => setAgentSettingsOpen(true)}
+            onRejectDraft={
+              activeDraft && onRejectDraft
+                ? async () => {
                     try {
                       setDraftActionError(null)
                       await onRejectDraft(activeDraft.id)
@@ -1074,55 +947,23 @@ export function Semanticode({
                           : 'Failed to reject draft.',
                       )
                     }
-                  }}
-                  type="button"
-                >
-                  Reject Draft
-                </button>
-              </div>
-            ) : null}
-            {currentCompareSource ? (
-              <div className="cbv-compare-actions">
-                <button
-                  className={`cbv-toolbar-button${compareOverlayActive ? ' is-active' : ''}`}
-                  onClick={handleActivateCompareOverlay}
-                  type="button"
-                >
-                  {compareOverlayActive
-                    ? 'Comparing in Semantic View'
-                    : 'Compare in Semantic View'}
-                </button>
-                {compareOverlayActive ? (
-                  <button
-                    className="cbv-toolbar-button is-secondary"
-                    onClick={handleClearCompareOverlay}
-                    type="button"
-                  >
-                    Clear Compare
-                  </button>
-                ) : null}
-              </div>
-            ) : null}
-            {isDesktopHost ? (
-              <button
-                className={`cbv-toolbar-button is-secondary${projectsSidebarOpen ? ' is-active' : ''}`}
-                onClick={() => setProjectsSidebarOpen((current) => !current)}
-                type="button"
-              >
-                {projectsSidebarOpen ? 'Hide Projects' : 'Show Projects'}
-              </button>
-            ) : null}
-            <button
-              aria-label="Agent Settings"
-              className="cbv-toolbar-icon-button"
-              onClick={() => setAgentSettingsOpen(true)}
-              title="Agent Settings"
-              type="button"
-            >
-              ⚙
-            </button>
-            </div>
-	        </header>
+                  }
+                : undefined
+            }
+            onSelectLayoutValue={handleLayoutSelectionChange}
+            onStartPreprocessing={onStartPreprocessing}
+            onToggleProjectsSidebar={
+              isDesktopHost
+                ? () => setProjectsSidebarOpen((current) => !current)
+                : undefined
+            }
+            preprocessingStatus={formattedPreprocessingStatus}
+            projectsSidebarOpen={projectsSidebarOpen}
+            selectedLayoutValue={selectedLayoutValue}
+            showCompareAction={Boolean(currentCompareSource)}
+            workspaceName={workspaceName}
+            workspaceRootDir={effectiveSnapshot.rootDir}
+          />
 
 	        <div
             className={`cbv-workspace${inspectorOpen ? '' : ' is-inspector-closed'}`}
@@ -1270,167 +1111,30 @@ export function Semanticode({
           ) : null}
 
           {inspectorOpen ? (
-          <aside className="cbv-inspector">
-            <div className="cbv-panel-header">
-              <div className="cbv-panel-header-copy">
-                <p className="cbv-eyebrow">
-                  {inspectorHeader.eyebrow ?? 'Inspector'}
-                </p>
-                <strong title={inspectorHeader.title}>
-                  {inspectorHeader.title}
-                </strong>
-              </div>
-              <button
-                aria-label="Close inspector"
-                className="cbv-inspector-close"
-                onClick={() => setInspectorOpen(false)}
-                type="button"
-              >
-                ×
-              </button>
-            </div>
-
-            {activeDraft ? (
-              <div className="cbv-draft-summary">
-                <strong>Draft Layout</strong>
-                <p>{activeDraft.proposalEnvelope.rationale}</p>
-                {activeDraft.proposalEnvelope.warnings[0] ? (
-                  <p className="cbv-draft-warning">
-                    {activeDraft.proposalEnvelope.warnings[0]}
-                  </p>
-                ) : null}
-                {draftActionError ? (
-                  <p className="cbv-draft-error">{draftActionError}</p>
-                ) : null}
-              </div>
-            ) : null}
-            {compareOverlayActive && resolvedCompareOverlay ? (
-              <div className="cbv-compare-summary">
-                <div className="cbv-compare-summary-header">
-                  <div>
-                    <p className="cbv-eyebrow">Semantic Compare</p>
-                    <strong>{resolvedCompareOverlay.sourceTitle}</strong>
-                  </div>
-                  <button
-                    className="cbv-toolbar-button is-secondary"
-                    onClick={handleClearCompareOverlay}
-                    type="button"
-                  >
-                    Clear
-                  </button>
-                </div>
-                <p>
-                  {resolvedCompareOverlay.nodeIds.length} symbol
-                  {resolvedCompareOverlay.nodeIds.length === 1 ? '' : 's'} highlighted
-                  {resolvedCompareOverlay.missingNodeIds.length > 0
-                    ? ` · ${resolvedCompareOverlay.missingNodeIds.length} missing from projection`
-                    : ''}
-                </p>
-                {resolvedCompareOverlay.groupTitles[0] || resolvedCompareOverlay.laneTitles[0] ? (
-                  <p className="cbv-compare-summary-meta">
-                    {resolvedCompareOverlay.groupTitles[0]
-                      ? `${resolvedCompareOverlay.groupTitles.length} group${resolvedCompareOverlay.groupTitles.length === 1 ? '' : 's'}`
-                      : null}
-                    {resolvedCompareOverlay.groupTitles[0] &&
-                    resolvedCompareOverlay.laneTitles[0]
-                      ? ' · '
-                      : ''}
-                    {resolvedCompareOverlay.laneTitles[0]
-                      ? `${resolvedCompareOverlay.laneTitles.length} lane${resolvedCompareOverlay.laneTitles.length === 1 ? '' : 's'}`
-                      : null}
-                  </p>
-                ) : null}
-              </div>
-            ) : null}
-
-            <div className="cbv-inspector-tabs">
-              <button
-                className={inspectorTab === 'file' ? 'is-active' : ''}
-                onClick={() => setInspectorTab('file')}
-                type="button"
-              >
-                File
-              </button>
-              <button
-                className={inspectorTab === 'agent' ? 'is-active' : ''}
-                onClick={() => setInspectorTab('agent')}
-                type="button"
-              >
-                Agent
-              </button>
-              <button
-                className={inspectorTab === 'graph' ? 'is-active' : ''}
-                onClick={() => setInspectorTab('graph')}
-                type="button"
-              >
-                Graph
-              </button>
-            </div>
-
-            <div className="cbv-inspector-body" ref={inspectorBodyRef}>
-              {inspectorTab === 'agent' ? (
-                <AgentPanel
-                  desktopHostAvailable={isDesktopHost}
-                  inspectorContext={{
-                    file: selectedFile,
-                    files: selectedFiles,
-                    node: selectedNode,
-                    symbol: selectedSymbol,
-                    symbols: selectedSymbols,
-                  }}
-                  onOpenSettings={() => setAgentSettingsOpen(true)}
-                  onRunSettled={onAgentRunSettled}
-                  preprocessedWorkspaceContext={preprocessedWorkspaceContext}
-                  workspaceProfile={workspaceProfile}
-                />
-              ) : inspectorTab === 'graph' ? (
-                <GraphInspector
-                  selectedEdge={selectedEdge}
-                  selectedNode={selectedNode}
-                  summary={graphSummary}
-                />
-              ) : selectedSymbols.length > 1 ? (
-                <MultiSymbolInspector
-                  preprocessedWorkspaceContext={preprocessedWorkspaceContext}
-                  primarySymbol={selectedSymbol}
-                  selectedSymbols={selectedSymbols}
-                />
-              ) : selectedFiles.length > 1 ? (
-                <MultiFileInspector
-                  primaryFile={selectedFile}
-                  selectedFiles={selectedFiles}
-                />
-              ) : selectedFile ? (
-                <>
-                  {selectedSymbol ? (
-                    <SemanticPurposeSummaryCard
-                      summary={findPurposeSummary(
-                        preprocessedWorkspaceContext,
-                        selectedSymbol.id,
-                      )}
-                    />
-                  ) : null}
-                  <div className="cbv-preview-meta">
-                    <span>{formatFileSize(selectedFile.size)}</span>
-                    <span>{selectedFile.extension || 'no extension'}</span>
-                    <span>{describeContentState(selectedFile)}</span>
-                    {selectedSymbol ? (
-                      <span>
-                        {selectedSymbol.symbolKind}
-                        {selectedSymbol.range ? ` · line ${selectedSymbol.range.start.line}` : ''}
-                      </span>
-                    ) : null}
-                  </div>
-                  <CodePreview file={selectedFile} highlightedRange={selectedSymbol?.range} />
-                </>
-              ) : (
-                <div className="cbv-empty">
-                  <h2>No file selected</h2>
-                  <p>Select a node on the canvas to inspect its contents.</p>
-                </div>
-              )}
-            </div>
-          </aside>
+            <InspectorPane
+              activeDraft={activeDraft}
+              compareOverlayActive={compareOverlayActive}
+              desktopHostAvailable={isDesktopHost}
+              draftActionError={draftActionError}
+              graphSummary={graphSummary}
+              header={inspectorHeader}
+              inspectorBodyRef={inspectorBodyRef}
+              inspectorTab={inspectorTab}
+              onAgentRunSettled={onAgentRunSettled}
+              onClearCompareOverlay={handleClearCompareOverlay}
+              onClose={() => setInspectorOpen(false)}
+              onOpenAgentSettings={() => setAgentSettingsOpen(true)}
+              onSetInspectorTab={setInspectorTab}
+              preprocessedWorkspaceContext={preprocessedWorkspaceContext}
+              resolvedCompareOverlay={resolvedCompareOverlay}
+              selectedEdge={selectedEdge}
+              selectedFile={selectedFile}
+              selectedFiles={selectedFiles}
+              selectedNode={selectedNode}
+              selectedSymbol={selectedSymbol}
+              selectedSymbols={selectedSymbols}
+              workspaceProfile={workspaceProfile}
+            />
           ) : null}
         </div>
         {agentSettingsOpen ? (
@@ -1477,46 +1181,6 @@ function getWorkspaceName(rootDir: string) {
   const normalizedRootDir = rootDir.replace(/[\\/]+$/, '')
   const segments = normalizedRootDir.split(/[\\/]/)
   return segments[segments.length - 1] || rootDir
-}
-
-function getInspectorHeaderSummary(input: {
-  selectedFile: CodebaseFile | null
-  selectedFiles: CodebaseFile[]
-  selectedNode: ProjectNode | null
-  selectedSymbols: SymbolNode[]
-}) {
-  if (input.selectedSymbols.length > 1) {
-    return {
-      eyebrow: 'Symbol selection',
-      title: `${input.selectedSymbols.length} symbols selected`,
-    }
-  }
-
-  if (input.selectedFiles.length > 1) {
-    return {
-      eyebrow: 'File selection',
-      title: `${input.selectedFiles.length} files selected`,
-    }
-  }
-
-  if (input.selectedNode) {
-    return {
-      eyebrow: input.selectedNode.path,
-      title: input.selectedNode.name,
-    }
-  }
-
-  if (input.selectedFile) {
-    return {
-      eyebrow: input.selectedFile.path,
-      title: input.selectedFile.name,
-    }
-  }
-
-  return {
-    eyebrow: 'Inspector',
-    title: 'Nothing selected',
-  }
 }
 
 function formatPreprocessingStatusLabel(status: PreprocessingStatus) {
@@ -1726,177 +1390,6 @@ function formatLayoutSyncTitle(
   return parts.join(' · ')
 }
 
-function MultiFileInspector({
-  primaryFile,
-  selectedFiles,
-}: {
-  primaryFile: CodebaseFile | null
-  selectedFiles: CodebaseFile[]
-}) {
-  const visibleFiles = selectedFiles.slice(0, MAX_VISIBLE_SELECTED_FILES)
-  const hiddenFileCount = Math.max(0, selectedFiles.length - visibleFiles.length)
-  const additionalFiles = primaryFile
-    ? selectedFiles.filter((file) => file.id !== primaryFile.id)
-    : selectedFiles
-
-  return (
-    <div className="cbv-multi-file-inspector">
-      <div className="cbv-multi-file-summary">
-        <strong>{selectedFiles.length} files selected</strong>
-        <p>
-          Cmd, Ctrl, or Shift-click files on the canvas to build an edit set for the
-          agent.
-        </p>
-      </div>
-
-      <div className="cbv-multi-file-list-card">
-        <p className="cbv-eyebrow">Selected files</p>
-        <ul className="cbv-multi-file-list">
-          {visibleFiles.map((file, index) => (
-            <li key={file.id}>
-              <strong>{index === 0 ? 'Primary' : `File ${index + 1}`}</strong>
-              <span>{file.path}</span>
-            </li>
-          ))}
-        </ul>
-        {hiddenFileCount > 0 ? (
-          <p className="cbv-multi-file-overflow">
-            + {hiddenFileCount} more selected file{hiddenFileCount === 1 ? '' : 's'}
-          </p>
-        ) : null}
-      </div>
-
-      {primaryFile ? (
-        <>
-          <div className="cbv-preview-meta">
-            <span>{formatFileSize(primaryFile.size)}</span>
-            <span>{primaryFile.extension || 'no extension'}</span>
-            <span>{describeContentState(primaryFile)}</span>
-            <span>
-              {additionalFiles.length > 0
-                ? `${additionalFiles.length} additional files in scope`
-                : 'Primary preview'}
-            </span>
-          </div>
-          <CodePreview file={primaryFile} />
-        </>
-      ) : null}
-    </div>
-  )
-}
-
-function MultiSymbolInspector({
-  preprocessedWorkspaceContext,
-  primarySymbol,
-  selectedSymbols,
-}: {
-  preprocessedWorkspaceContext: PreprocessedWorkspaceContext | null
-  primarySymbol: SymbolNode | null
-  selectedSymbols: SymbolNode[]
-}) {
-  const visibleSymbols = selectedSymbols.slice(0, MAX_VISIBLE_SELECTED_FILES)
-  const hiddenSymbolCount = Math.max(0, selectedSymbols.length - visibleSymbols.length)
-  const primarySummary = primarySymbol
-    ? findPurposeSummary(preprocessedWorkspaceContext, primarySymbol.id)
-    : null
-
-  return (
-    <div className="cbv-multi-file-inspector">
-      <div className="cbv-multi-file-summary">
-        <strong>{selectedSymbols.length} symbols selected</strong>
-        <p>
-          Cmd, Ctrl, or Shift-click symbols on the canvas to build a scoped edit set
-          for the agent.
-        </p>
-      </div>
-
-      <div className="cbv-multi-file-list-card">
-        <p className="cbv-eyebrow">Selected symbols</p>
-        <ul className="cbv-multi-file-list">
-          {visibleSymbols.map((symbol, index) => (
-            <li key={symbol.id}>
-              <strong>{index === 0 ? 'Primary' : `Symbol ${index + 1}`}</strong>
-              <span>{symbol.path}</span>
-            </li>
-          ))}
-        </ul>
-        {hiddenSymbolCount > 0 ? (
-          <p className="cbv-multi-file-overflow">
-            + {hiddenSymbolCount} more selected symbol{hiddenSymbolCount === 1 ? '' : 's'}
-          </p>
-        ) : null}
-      </div>
-
-      {primarySymbol ? (
-        <>
-          <SemanticPurposeSummaryCard summary={primarySummary} />
-          <div className="cbv-preview-meta">
-            <span>{primarySymbol.symbolKind}</span>
-            <span>{primarySymbol.language || 'unknown language'}</span>
-            <span>
-              {primarySymbol.range ? `lines ${formatRange(primarySymbol.range)}` : 'no range'}
-            </span>
-            <span>Primary symbol</span>
-          </div>
-        </>
-      ) : null}
-    </div>
-  )
-}
-
-function SemanticPurposeSummaryCard({
-  summary,
-}: {
-  summary:
-    | PreprocessedWorkspaceContext['purposeSummaries'][number]
-    | null
-    | undefined
-}) {
-  if (!summary) {
-    return null
-  }
-
-  return (
-    <section className="cbv-purpose-summary">
-      <p className="cbv-eyebrow">Semantic Summary</p>
-      <strong>{summary.path}</strong>
-      <p>{summary.summary}</p>
-      {summary.domainHints.length > 0 ? (
-        <div className="cbv-purpose-summary-tags">
-          {summary.domainHints.map((hint) => (
-            <span className="cbv-purpose-summary-tag" key={`hint:${hint}`}>
-              {hint}
-            </span>
-          ))}
-        </div>
-      ) : null}
-      {summary.sideEffects.length > 0 ? (
-        <div className="cbv-purpose-summary-tags">
-          {summary.sideEffects.map((effect) => (
-            <span
-              className="cbv-purpose-summary-tag is-side-effect"
-              key={`effect:${effect}`}
-            >
-              {effect}
-            </span>
-          ))}
-        </div>
-      ) : null}
-    </section>
-  )
-}
-
-function findPurposeSummary(
-  preprocessedWorkspaceContext: PreprocessedWorkspaceContext | null,
-  symbolId: string,
-) {
-  return (
-    preprocessedWorkspaceContext?.purposeSummaries.find(
-      (summary) => summary.symbolId === symbolId,
-    ) ?? null
-  )
-}
-
 function LayerToggle({
   active,
   label,
@@ -1930,120 +1423,6 @@ function SymbolKindLegend() {
         </span>
       ))}
     </div>
-  )
-}
-
-function GraphInspector({
-  selectedEdge,
-  selectedNode,
-  summary,
-}: {
-  selectedEdge: Edge | null
-  selectedNode: ProjectNode | null
-  summary: GraphSummary
-}) {
-  return (
-    <div className="cbv-graph-inspector">
-      {selectedEdge ? (
-        <section className="cbv-graph-card">
-          <p className="cbv-eyebrow">Selected edge</p>
-          <strong>{selectedEdge.label ?? getFlowEdgeData(selectedEdge)?.kind ?? 'Graph edge'}</strong>
-          <p>
-            {selectedEdge.source} → {selectedEdge.target}
-          </p>
-        </section>
-      ) : null}
-
-      <section className="cbv-graph-card">
-        <p className="cbv-eyebrow">Selection</p>
-        <strong>{selectedNode?.path ?? 'No node selected'}</strong>
-        <p>
-          {summary.incoming} incoming, {summary.outgoing} outgoing, {summary.neighbors.length}{' '}
-          connected nodes
-        </p>
-      </section>
-
-      <section className="cbv-graph-card">
-        <p className="cbv-eyebrow">Neighbors</p>
-        {summary.neighbors.length ? (
-          <ul className="cbv-neighbor-list">
-            {summary.neighbors.slice(0, 12).map((neighbor) => (
-              <li key={neighbor.id}>
-                <strong>{neighbor.name}</strong>
-                <span>{neighbor.path}</span>
-              </li>
-            ))}
-          </ul>
-        ) : (
-          <p>No visible graph neighbors for the current layer selection.</p>
-        )}
-      </section>
-    </div>
-  )
-}
-
-function CodePreview({
-  file,
-  highlightedRange,
-}: {
-  file: CodebaseFile
-  highlightedRange?: SourceRange
-}) {
-  const previewRef = useRef<HTMLPreElement | null>(null)
-
-  useEffect(() => {
-    if (!previewRef.current || !highlightedRange) {
-      return
-    }
-
-    const targetLine = previewRef.current.querySelector(
-      `[data-line="${highlightedRange.start.line}"]`,
-    )
-
-    if (targetLine instanceof HTMLElement) {
-      targetLine.scrollIntoView({
-        block: 'center',
-      })
-    }
-  }, [file.id, highlightedRange])
-
-  if (!file.content) {
-    return (
-      <pre className="cbv-code">
-        <code>{'// File content unavailable.'}</code>
-      </pre>
-    )
-  }
-
-  const lines = file.content.split('\n')
-  const highlightedStartLine = highlightedRange?.start.line ?? -1
-  const highlightedEndLine = highlightedRange?.end.line ?? -1
-
-  return (
-    <pre className="cbv-code" ref={previewRef}>
-      <code>
-        {lines.map((line, index) => {
-          const lineNumber = index + 1
-          const isHighlighted =
-            highlightedRange !== undefined &&
-            lineNumber >= highlightedStartLine &&
-            lineNumber <= highlightedEndLine
-
-          return (
-            <span
-              className={`cbv-code-line${isHighlighted ? ' is-highlighted' : ''}`}
-              data-line={lineNumber}
-              key={`${file.id}:${lineNumber}`}
-            >
-              <span className="cbv-code-line-number">{lineNumber}</span>
-              <span className="cbv-code-line-content">
-                {line.length > 0 ? line : ' '}
-              </span>
-            </span>
-          )
-        })}
-      </code>
-    </pre>
   )
 }
 
@@ -2974,13 +2353,6 @@ function getSelectedSymbols(
     .filter(isSymbolNode)
 }
 
-function formatRange(range: SourceRange) {
-  const startLine = range.start.line
-  const endLine = range.end.line
-
-  return startLine === endLine ? `${startLine}` : `${startLine}-${endLine}`
-}
-
 function getNodeSubtitle(node: ProjectNode) {
   if (node.kind === 'directory') {
     return `${node.childIds.length} children`
@@ -3518,21 +2890,4 @@ function formatFileSize(size: number) {
   }
 
   return `${(size / 1_048_576).toFixed(1)} MB`
-}
-
-function describeContentState(file: CodebaseFile) {
-  if (file.content) {
-    return 'loaded'
-  }
-
-  switch (file.contentOmittedReason) {
-    case 'binary':
-      return 'binary file'
-    case 'too_large':
-      return 'content capped'
-    case 'read_error':
-      return 'read failed'
-    default:
-      return 'metadata only'
-  }
 }
