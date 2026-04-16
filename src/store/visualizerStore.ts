@@ -29,6 +29,12 @@ const INITIAL_VISUALIZER_STATE: VisualizerStoreState = {
   viewport: DEFAULT_VIEWPORT_STATE,
   selection: DEFAULT_SELECTION_STATE,
   viewMode: 'filesystem',
+  baseScene: {
+    kind: 'active_layout',
+  },
+  compareOverlay: null,
+  overlayVisibility: true,
+  overlayFocusMode: 'highlight_dim',
   expandedSymbolClusterIds: [],
   graphLayers: DEFAULT_GRAPH_LAYER_VISIBILITY,
 }
@@ -120,6 +126,10 @@ export function createVisualizerStore(
     setViewMode: (viewMode) => {
       set((state) => ({
         viewMode,
+        baseScene:
+          viewMode === 'symbols' ? state.baseScene : { kind: 'active_layout' },
+        compareOverlay: viewMode === 'symbols' ? state.compareOverlay : null,
+        overlayVisibility: viewMode === 'symbols' ? state.overlayVisibility : true,
         graphLayers:
           viewMode === 'symbols'
             ? {
@@ -143,6 +153,21 @@ export function createVisualizerStore(
           ),
         },
       }))
+    },
+    setBaseScene: (baseScene) => {
+      set({ baseScene })
+    },
+    setCompareOverlay: (compareOverlay) => {
+      set({ compareOverlay })
+    },
+    clearCompareOverlay: () => {
+      set({ compareOverlay: null, overlayVisibility: true })
+    },
+    setOverlayVisibility: (overlayVisibility) => {
+      set({ overlayVisibility })
+    },
+    setOverlayFocusMode: (overlayFocusMode) => {
+      set({ overlayFocusMode })
     },
     toggleSymbolCluster: (clusterId) => {
       set((state) => ({
@@ -334,11 +359,7 @@ function snapshotOrNull(state: VisualizerStore) {
   return state.snapshot
 }
 
-function isMultiSelectableNode(
-  snapshot: ProjectSnapshot,
-  nodeId: string,
-  viewMode: VisualizerViewMode,
-) {
+function isMultiSelectableNode(snapshot: ProjectSnapshot, nodeId: string, viewMode: VisualizerViewMode) {
   const node = snapshot.nodes[nodeId]
   if (!node) {
     return false

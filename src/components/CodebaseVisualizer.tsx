@@ -11,6 +11,7 @@ import {
   type Edge,
   type Node,
   Position,
+  type ReactFlowInstance,
   type XYPosition,
 } from '@xyflow/react'
 import {
@@ -49,6 +50,11 @@ import { CodebaseAnnotationNode } from './CodebaseAnnotationNode'
 import { AgentPanel } from './AgentPanel'
 import { CodebaseCanvasNode } from './CodebaseCanvasNode'
 import { CodebaseSymbolNode } from './CodebaseSymbolNode'
+import {
+  canCompareLayoutAgainstSemantic,
+  resolveCanvasScene,
+  resolveLayoutCompareOverlay,
+} from '../visualizer/canvasScene'
 
 interface CodebaseVisualizerProps {
   snapshot?: CodebaseSnapshot | null
@@ -69,6 +75,8 @@ interface CodebaseVisualizerProps {
 type FlowEdgeData = Record<string, unknown> & {
   kind: GraphEdgeKind
   count?: number
+  dimmed?: boolean
+  highlighted?: boolean
 }
 
 interface GraphSummary {
@@ -175,6 +183,7 @@ export function CodebaseVisualizer({
   const [layoutSuggestionText, setLayoutSuggestionText] = useState('')
   const [canvasWidthRatio, setCanvasWidthRatio] = useState(DEFAULT_CANVAS_WIDTH_RATIO)
   const [activeResizePointerId, setActiveResizePointerId] = useState<number | null>(null)
+  const [flowInstance, setFlowInstance] = useState<ReactFlowInstance<Node, Edge> | null>(null)
   const [inspectorOpen, setInspectorOpen] = useState(false)
   const [workspaceActionPending, setWorkspaceActionPending] = useState(false)
   const [workspaceActionError, setWorkspaceActionError] = useState<string | null>(null)
@@ -191,6 +200,10 @@ export function CodebaseVisualizer({
   const viewport = useVisualizerStore((state) => state.viewport)
   const graphLayers = useVisualizerStore((state) => state.graphLayers)
   const viewMode = useVisualizerStore((state) => state.viewMode)
+  const baseScene = useVisualizerStore((state) => state.baseScene)
+  const compareOverlay = useVisualizerStore((state) => state.compareOverlay)
+  const overlayVisibility = useVisualizerStore((state) => state.overlayVisibility)
+  const overlayFocusMode = useVisualizerStore((state) => state.overlayFocusMode)
   const expandedSymbolClusterIds = useVisualizerStore(
     (state) => state.expandedSymbolClusterIds,
   )
@@ -201,6 +214,10 @@ export function CodebaseVisualizer({
   const setActiveLayoutId = useVisualizerStore((state) => state.setActiveLayoutId)
   const setViewport = useVisualizerStore((state) => state.setViewport)
   const setViewMode = useVisualizerStore((state) => state.setViewMode)
+  const setBaseScene = useVisualizerStore((state) => state.setBaseScene)
+  const setCompareOverlay = useVisualizerStore((state) => state.setCompareOverlay)
+  const clearCompareOverlay = useVisualizerStore((state) => state.clearCompareOverlay)
+  const setOverlayVisibility = useVisualizerStore((state) => state.setOverlayVisibility)
   const setExpandedSymbolClusterIds = useVisualizerStore(
     (state) => state.setExpandedSymbolClusterIds,
   )
@@ -215,6 +232,7 @@ export function CodebaseVisualizer({
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([])
   const workspaceRef = useRef<HTMLDivElement | null>(null)
   const inspectorBodyRef = useRef<HTMLDivElement | null>(null)
+  const lastFittedCompareKeyRef = useRef<string | null>(null)
   const selectedNodeIdSet = useMemo(() => new Set(selectedNodeIds), [selectedNodeIds])
   const desktopBridge = (
     globalThis as typeof globalThis & {
@@ -312,26 +330,91 @@ export function CodebaseVisualizer({
     layouts.find((layout) => layout.id === activeLayoutId) ??
     layouts[0] ??
     null
+  const resolvedScene = useMemo(
+    () =>
+      resolveCanvasScene({
+        activeLayout,
+        baseScene,
+        layouts,
+      }),
+    [activeLayout, baseScene, layouts],
+  )
+  const resolvedCompareOverlay = useMemo(
+    () =>
+      effectiveSnapshot
+        ? resolveLayoutCompareOverlay({
+            snapshot: effectiveSnapshot,
+            compareOverlay,
+            draftLayouts,
+            layouts,
+            scene: resolvedScene,
+          })
+        : null,
+    [compareOverlay, draftLayouts, effectiveSnapshot, layouts, resolvedScene],
+  )
+  const overlayNodeIdSet = useMemo(
+    () => new Set(resolvedCompareOverlay?.nodeIds ?? []),
+    [resolvedCompareOverlay],
+  )
+  const compareOverlayActive =
+    Boolean(resolvedCompareOverlay) &&
+    overlayVisibility &&
+    overlayFocusMode === 'highlight_dim'
+  const currentCompareSource = useMemo(() => {
+    if (activeDraft?.layout && canCompareLayoutAgainstSemantic(activeDraft.layout)) {
+      return {
+        sourceType: 'draft' as const,
+        sourceId: activeDraft.id,
+        title: activeDraft.layout.title,
+      }
+    }
+
+    if (activeLayout && canCompareLayoutAgainstSemantic(activeLayout)) {
+      return {
+        sourceType: 'layout' as const,
+        sourceId: activeLayout.id,
+        title: activeLayout.title,
+      }
+    }
+
+    return null
+  }, [activeDraft, activeLayout])
+  const editableDraftLayout = resolvedScene?.kind === 'layout' ? activeDraft : null
+  const editableLayout = resolvedScene?.layoutSpec ?? activeLayout
 
   useEffect(() => {
-    if (!activeLayout) {
+    if (!resolvedScene) {
       return
     }
 
-    const layoutViewMode = getPreferredViewModeForLayout(activeLayout)
+    const layoutViewMode = getPreferredViewModeForLayout(resolvedScene.layoutSpec)
 
     if (viewMode !== layoutViewMode) {
       setViewMode(layoutViewMode)
     }
-  }, [activeLayout, setViewMode, viewMode])
+  }, [resolvedScene, setViewMode, viewMode])
 
   useEffect(() => {
     setExpandedSymbolClusterIds([])
-  }, [activeLayout?.id, setExpandedSymbolClusterIds])
+  }, [resolvedScene?.layoutSpec.id, setExpandedSymbolClusterIds])
+
+  useEffect(() => {
+    if (
+      compareOverlay &&
+      (baseScene.kind !== 'semantic_projection' || !resolvedCompareOverlay)
+    ) {
+      clearCompareOverlay()
+    }
+  }, [baseScene.kind, clearCompareOverlay, compareOverlay, resolvedCompareOverlay])
 
   const symbolClusterState = useMemo(
-    () => deriveSymbolClusterState(effectiveSnapshot, activeLayout, viewMode),
-    [activeLayout, effectiveSnapshot, viewMode],
+    () =>
+      deriveSymbolClusterState(
+        effectiveSnapshot,
+        resolvedScene?.layoutSpec ?? null,
+        viewMode,
+      ),
+    [effectiveSnapshot, resolvedScene, viewMode],
   )
   const expandedClusterIds = useMemo(
     () => new Set(expandedSymbolClusterIds),
@@ -341,15 +424,15 @@ export function CodebaseVisualizer({
     () =>
       buildExpandedClusterLayouts(
         effectiveSnapshot,
-        activeLayout,
+        resolvedScene?.layoutSpec ?? null,
         symbolClusterState,
         expandedClusterIds,
       ),
-    [activeLayout, effectiveSnapshot, expandedClusterIds, symbolClusterState],
+    [effectiveSnapshot, expandedClusterIds, resolvedScene, symbolClusterState],
   )
 
   useEffect(() => {
-    if (!effectiveSnapshot || !activeLayout) {
+    if (!effectiveSnapshot || !resolvedScene) {
       setNodes([])
       setEdges([])
       return
@@ -357,23 +440,29 @@ export function CodebaseVisualizer({
 
     const flowModel = buildFlowModel(
       effectiveSnapshot,
-      activeLayout,
+      resolvedScene.layoutSpec,
       graphLayers,
       viewMode,
       symbolClusterState,
       expandedClusterIds,
       expandedClusterLayouts,
       selectedNodeIdSet,
+      {
+        active: compareOverlayActive,
+        nodeIds: overlayNodeIdSet,
+      },
     )
 
     setNodes(flowModel.nodes)
     setEdges(flowModel.edges)
   }, [
-    activeLayout,
+    compareOverlayActive,
     expandedClusterLayouts,
     effectiveSnapshot,
     expandedClusterIds,
     graphLayers,
+    overlayNodeIdSet,
+    resolvedScene,
     selectedNodeIdSet,
     setEdges,
     setNodes,
@@ -383,16 +472,16 @@ export function CodebaseVisualizer({
 
   const visibleNodeCount = useMemo(
     () =>
-      effectiveSnapshot && activeLayout
+      effectiveSnapshot && resolvedScene
         ? countVisibleLayoutNodes(
             effectiveSnapshot,
-            activeLayout,
+            resolvedScene.layoutSpec,
             viewMode,
             symbolClusterState,
             expandedClusterIds,
           )
         : 0,
-    [activeLayout, effectiveSnapshot, expandedClusterIds, symbolClusterState, viewMode],
+    [effectiveSnapshot, expandedClusterIds, resolvedScene, symbolClusterState, viewMode],
   )
   const denseCanvasMode = viewMode === 'symbols' && visibleNodeCount > 250
   const files = useMemo(
@@ -423,6 +512,44 @@ export function CodebaseVisualizer({
       setInspectorOpen(true)
     }
   }, [selectedEdgeId, selectedNodeIds])
+
+  useEffect(() => {
+    if (!compareOverlayActive || !resolvedCompareOverlay || !flowInstance) {
+      lastFittedCompareKeyRef.current = null
+      return
+    }
+
+    const compareKey = `${resolvedCompareOverlay.sourceType}:${resolvedCompareOverlay.sourceId}:${resolvedCompareOverlay.nodeIds.join(',')}`
+
+    if (
+      lastFittedCompareKeyRef.current === compareKey ||
+      resolvedCompareOverlay.nodeIds.length === 0
+    ) {
+      return
+    }
+
+    const nodesToFit = nodes.filter((node) => overlayNodeIdSet.has(node.id))
+
+    if (nodesToFit.length === 0) {
+      return
+    }
+
+    lastFittedCompareKeyRef.current = compareKey
+    window.setTimeout(() => {
+      void flowInstance.fitView({
+        duration: 280,
+        maxZoom: 1.4,
+        nodes: nodesToFit,
+        padding: 0.22,
+      })
+    }, 0)
+  }, [
+    compareOverlayActive,
+    flowInstance,
+    nodes,
+    overlayNodeIdSet,
+    resolvedCompareOverlay,
+  ])
 
   useEffect(() => {
     if (!inspectorOpen || !inspectorBodyRef.current) {
@@ -538,6 +665,31 @@ export function CodebaseVisualizer({
     } finally {
       setWorkspaceActionPending(false)
     }
+  }
+
+  function handleClearCompareOverlay() {
+    clearCompareOverlay()
+    setBaseScene({
+      kind: 'active_layout',
+    })
+  }
+
+  function handleActivateCompareOverlay() {
+    if (!currentCompareSource) {
+      return
+    }
+
+    setOverlayVisibility(true)
+    setBaseScene({
+      kind: 'semantic_projection',
+    })
+    setCompareOverlay({
+      kind: 'layout_compare',
+      sourceType: currentCompareSource.sourceType,
+      sourceId: currentCompareSource.sourceId,
+    })
+    setInspectorOpen(true)
+    setInspectorTab('file')
   }
 
   if (!effectiveSnapshot) {
@@ -668,6 +820,8 @@ export function CodebaseVisualizer({
                     setViewMode,
                     setActiveDraftId,
                     setActiveLayoutId,
+                    setBaseScene,
+                    clearCompareOverlay,
                   )
                 }
                 type="button"
@@ -684,6 +838,8 @@ export function CodebaseVisualizer({
                     setViewMode,
                     setActiveDraftId,
                     setActiveLayoutId,
+                    setBaseScene,
+                    clearCompareOverlay,
                   )
                 }
                 type="button"
@@ -707,6 +863,10 @@ export function CodebaseVisualizer({
                     const nextDraft =
                       availableDraftLayouts.find((draft) => draft.id === nextDraftId) ?? null
 
+                    setBaseScene({
+                      kind: 'active_layout',
+                    })
+                    clearCompareOverlay()
                     setActiveDraftId(nextDraftId)
                     setDraftActionError(null)
 
@@ -721,6 +881,10 @@ export function CodebaseVisualizer({
                   const nextLayout =
                     layouts.find((layout) => layout.id === nextLayoutId) ?? null
 
+                  setBaseScene({
+                    kind: 'active_layout',
+                  })
+                  clearCompareOverlay()
                   setActiveDraftId(null)
                   setActiveLayoutId(nextLayoutId)
                   setDraftActionError(null)
@@ -793,6 +957,28 @@ export function CodebaseVisualizer({
                 </button>
               </div>
             ) : null}
+            {currentCompareSource ? (
+              <div className="cbv-compare-actions">
+                <button
+                  className={`cbv-toolbar-button${compareOverlayActive ? ' is-active' : ''}`}
+                  onClick={handleActivateCompareOverlay}
+                  type="button"
+                >
+                  {compareOverlayActive
+                    ? 'Comparing in Semantic View'
+                    : 'Compare in Semantic View'}
+                </button>
+                {compareOverlayActive ? (
+                  <button
+                    className="cbv-toolbar-button is-secondary"
+                    onClick={handleClearCompareOverlay}
+                    type="button"
+                  >
+                    Clear Compare
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
             <button
               className="cbv-toolbar-button is-secondary"
               onClick={() => setAgentSettingsOpen(true)}
@@ -828,7 +1014,7 @@ export function CodebaseVisualizer({
 	                <SymbolKindLegend />
 	              </div>
 	            ) : null}
-	            <ReactFlow
+            <ReactFlow
               defaultViewport={viewport}
               edges={edges}
               fitView
@@ -836,6 +1022,7 @@ export function CodebaseVisualizer({
               nodeTypes={nodeTypes}
               nodes={nodes}
               onlyRenderVisibleElements
+              onInit={setFlowInstance}
               onEdgeClick={(_, edge) => {
                 selectEdge(edge.id)
                 setInspectorOpen(true)
@@ -865,8 +1052,8 @@ export function CodebaseVisualizer({
                 updateLayoutPlacement(
                   node.id,
                   node.position,
-                  activeLayout,
-                  activeDraft,
+                  editableLayout,
+                  editableDraftLayout,
                   layouts,
                   draftLayouts,
                   setLayouts,
@@ -980,6 +1167,44 @@ export function CodebaseVisualizer({
                 ) : null}
                 {draftActionError ? (
                   <p className="cbv-draft-error">{draftActionError}</p>
+                ) : null}
+              </div>
+            ) : null}
+            {compareOverlayActive && resolvedCompareOverlay ? (
+              <div className="cbv-compare-summary">
+                <div className="cbv-compare-summary-header">
+                  <div>
+                    <p className="cbv-eyebrow">Semantic Compare</p>
+                    <strong>{resolvedCompareOverlay.sourceTitle}</strong>
+                  </div>
+                  <button
+                    className="cbv-toolbar-button is-secondary"
+                    onClick={handleClearCompareOverlay}
+                    type="button"
+                  >
+                    Clear
+                  </button>
+                </div>
+                <p>
+                  {resolvedCompareOverlay.nodeIds.length} symbol
+                  {resolvedCompareOverlay.nodeIds.length === 1 ? '' : 's'} highlighted
+                  {resolvedCompareOverlay.missingNodeIds.length > 0
+                    ? ` · ${resolvedCompareOverlay.missingNodeIds.length} missing from projection`
+                    : ''}
+                </p>
+                {resolvedCompareOverlay.groupTitles[0] || resolvedCompareOverlay.laneTitles[0] ? (
+                  <p className="cbv-compare-summary-meta">
+                    {resolvedCompareOverlay.groupTitles[0]
+                      ? `${resolvedCompareOverlay.groupTitles.length} group${resolvedCompareOverlay.groupTitles.length === 1 ? '' : 's'}`
+                      : null}
+                    {resolvedCompareOverlay.groupTitles[0] &&
+                    resolvedCompareOverlay.laneTitles[0]
+                      ? ' · '
+                      : ''}
+                    {resolvedCompareOverlay.laneTitles[0]
+                      ? `${resolvedCompareOverlay.laneTitles.length} lane${resolvedCompareOverlay.laneTitles.length === 1 ? '' : 's'}`
+                      : null}
+                  </p>
                 ) : null}
               </div>
             ) : null}
@@ -1563,6 +1788,10 @@ function buildFlowModel(
   expandedClusterIds: Set<string>,
   expandedClusterLayouts: Map<string, ExpandedClusterLayout>,
   selectedNodeIds: Set<string>,
+  compareOverlayState: {
+    active: boolean
+    nodeIds: Set<string>
+  },
 ) {
   const hiddenNodeIds = new Set(layout.hiddenNodeIds)
   const annotationNodes = layout.annotations.map((annotation) => ({
@@ -1610,6 +1839,7 @@ function buildFlowModel(
         expandedClusterIds,
         expandedClusterLayouts,
         selectedNodeIds,
+        compareOverlayState,
       ),
     )
   const nodes = [...annotationNodes, ...codeNodes]
@@ -1623,7 +1853,17 @@ function buildFlowModel(
           (edge) =>
             visibleNodeIds.has(edge.source) && visibleNodeIds.has(edge.target),
         )
-        .map((edge) => buildFlowEdge(edge.id, 'contains', edge.source, edge.target)),
+        .map((edge) =>
+          buildFlowEdge(
+            edge.id,
+            'contains',
+            edge.source,
+            edge.target,
+            undefined,
+            undefined,
+            compareOverlayState,
+          ),
+        ),
     )
   }
 
@@ -1636,7 +1876,15 @@ function buildFlowModel(
             visibleNodeIds.has(edge.source) && visibleNodeIds.has(edge.target),
         )
         .map((edge) =>
-          buildFlowEdge(edge.id, 'imports', edge.source, edge.target, edge.label),
+          buildFlowEdge(
+            edge.id,
+            'imports',
+            edge.source,
+            edge.target,
+            edge.label,
+            undefined,
+            compareOverlayState,
+          ),
         ),
     )
   }
@@ -1650,6 +1898,7 @@ function buildFlowModel(
             visibleNodeIds,
             symbolClusterState,
             expandedClusterIds,
+            compareOverlayState,
           )
         : aggregateFileEdges(snapshot, 'calls').filter(
             (edge) =>
@@ -1670,7 +1919,14 @@ function buildFlowNode(
   expandedClusterIds: Set<string>,
   expandedClusterLayouts: Map<string, ExpandedClusterLayout>,
   selectedNodeIds: Set<string>,
+  compareOverlayState: {
+    active: boolean
+    nodeIds: Set<string>
+  },
 ): Node {
+  const isCompareMember = compareOverlayState.nodeIds.has(node.id)
+  const dimmed = compareOverlayState.active && !isCompareMember
+
   if (viewMode === 'symbols' && isSymbolNode(node)) {
     const cluster = symbolClusterState.clusterByNodeId[node.id]
     const clusterSize =
@@ -1722,7 +1978,8 @@ function buildFlowNode(
         sharedCallerCount: symbolClusterState.callerCounts[node.id],
         contained: isContainedNode,
         compact: symbolDimensions.compact,
-        dimmed: false,
+        dimmed,
+        highlighted: isCompareMember,
       },
     }
   }
@@ -1745,7 +2002,8 @@ function buildFlowNode(
       subtitle: getNodeSubtitle(node),
       kind: node.kind,
       tags: node.tags.slice(0, 3),
-      dimmed: false,
+      dimmed,
+      highlighted: isCompareMember,
     },
   }
 }
@@ -1777,23 +2035,39 @@ function buildFlowEdge(
   target: string,
   label?: string,
   data?: FlowEdgeData,
+  compareOverlayState?: {
+    active: boolean
+    nodeIds: Set<string>
+  },
 ): Edge {
   const stroke = getEdgeColor(kind)
+  const highlighted = Boolean(
+    compareOverlayState?.active &&
+      compareOverlayState.nodeIds.has(source) &&
+      compareOverlayState.nodeIds.has(target),
+  )
+  const dimmed = Boolean(compareOverlayState?.active && !highlighted)
 
   return {
     id,
     source,
     target,
     label,
-    data: data ?? { kind },
+    data: {
+      kind,
+      ...data,
+      dimmed,
+      highlighted,
+    },
     animated: kind !== 'contains',
     markerEnd: {
       type: MarkerType.ArrowClosed,
       color: stroke,
     },
     style: {
+      opacity: dimmed ? 0.2 : 1,
       stroke,
-      strokeWidth: kind === 'contains' ? 1.2 : 1.8,
+      strokeWidth: highlighted ? 2.4 : kind === 'contains' ? 1.2 : 1.8,
     },
   }
 }
@@ -1852,6 +2126,10 @@ function aggregateSymbolEdges(
   visibleNodeIds: Set<string>,
   symbolClusterState: SymbolClusterState,
   expandedClusterIds: Set<string>,
+  compareOverlayState?: {
+    active: boolean
+    nodeIds: Set<string>
+  },
 ) {
   const edges = new Map<string, Edge>()
 
@@ -1892,7 +2170,7 @@ function aggregateSymbolEdges(
         buildFlowEdge(key, kind, mappedSource, mappedTarget, undefined, {
           kind,
           count: 1,
-        }),
+        }, compareOverlayState),
       )
       continue
     }
@@ -2887,7 +3165,13 @@ function activateViewMode(
   setViewMode: (viewMode: VisualizerViewMode) => void,
   setActiveDraftId: (draftId: string | null) => void,
   setActiveLayoutId: (layoutId: string | null) => void,
+  setBaseScene: (scene: { kind: 'active_layout' }) => void,
+  clearCompareOverlay: () => void,
 ) {
+  setBaseScene({
+    kind: 'active_layout',
+  })
+  clearCompareOverlay()
   setViewMode(nextViewMode)
 
   const matchingDraft = draftLayouts.find(

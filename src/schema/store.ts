@@ -7,6 +7,11 @@ import type {
 import type { LayoutDraft } from './planner'
 import type { AnalysisState } from './api'
 import type { ProjectSnapshot } from './snapshot'
+import type {
+  CanvasBaseScene,
+  LayoutCompareOverlayReference,
+  OverlayFocusMode,
+} from './scene'
 
 export type GraphLayerKey = 'contains' | 'imports' | 'calls'
 
@@ -23,6 +28,10 @@ export interface VisualizerStoreState {
   viewport: ViewportState
   selection: SelectionState
   viewMode: VisualizerViewMode
+  baseScene: CanvasBaseScene
+  compareOverlay: LayoutCompareOverlayReference | null
+  overlayVisibility: boolean
+  overlayFocusMode: OverlayFocusMode
   expandedSymbolClusterIds: string[]
   graphLayers: GraphLayerVisibility
 }
@@ -38,6 +47,11 @@ export interface VisualizerStoreActions {
   setViewport: (viewport: Partial<ViewportState>) => void
   setSelection: (selection: Partial<SelectionState>) => void
   setViewMode: (viewMode: VisualizerViewMode) => void
+  setBaseScene: (scene: CanvasBaseScene) => void
+  setCompareOverlay: (overlay: LayoutCompareOverlayReference | null) => void
+  clearCompareOverlay: () => void
+  setOverlayVisibility: (visible: boolean) => void
+  setOverlayFocusMode: (mode: OverlayFocusMode) => void
   toggleSymbolCluster: (clusterId: string) => void
   setExpandedSymbolClusterIds: (clusterIds: string[]) => void
   selectNode: (nodeId: string | null, options?: { additive?: boolean }) => void

@@ -9,6 +9,7 @@ type CodebaseSymbolNodeData = Record<string, unknown> & {
   kindClass?: string
   tags: string[]
   dimmed: boolean
+  highlighted?: boolean
   clusterSize?: number
   sharedCallerCount?: number
   clusterExpanded?: boolean
@@ -33,6 +34,7 @@ export const CodebaseSymbolNode = memo(function CodebaseSymbolNode({
         nodeData.compact ? 'is-compact' : '',
         selected ? 'is-selected' : '',
         nodeData.dimmed ? 'is-dimmed' : '',
+        nodeData.highlighted ? 'is-compare-highlighted' : '',
       ]
         .filter(Boolean)
         .join(' ')}

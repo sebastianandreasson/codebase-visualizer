@@ -50,6 +50,12 @@ export type {
   VisualizerStoreState,
 } from './schema/store'
 export type {
+  CanvasBaseScene,
+  CompareOverlaySourceType,
+  LayoutCompareOverlayReference,
+  OverlayFocusMode,
+} from './schema/scene'
+export type {
   InspectorTab,
   LayoutAnnotation,
   LayoutGroup,

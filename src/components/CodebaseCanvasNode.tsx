@@ -8,6 +8,7 @@ type CodebaseCanvasNodeData = Record<string, unknown> & {
   kind: 'directory' | 'file'
   tags: string[]
   dimmed: boolean
+  highlighted?: boolean
 }
 
 export const CodebaseCanvasNode = memo(function CodebaseCanvasNode({
@@ -23,6 +24,7 @@ export const CodebaseCanvasNode = memo(function CodebaseCanvasNode({
         nodeData.kind === 'directory' ? 'is-directory' : 'is-file',
         selected ? 'is-selected' : '',
         nodeData.dimmed ? 'is-dimmed' : '',
+        nodeData.highlighted ? 'is-compare-highlighted' : '',
       ]
         .filter(Boolean)
         .join(' ')}

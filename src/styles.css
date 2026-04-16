@@ -225,6 +225,13 @@
   align-items: center;
 }
 
+.cbv-compare-actions {
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
 .cbv-draft-actions button {
   border: 1px solid #d5d0c7;
   border-radius: 0.72rem;
@@ -253,6 +260,12 @@
 .cbv-toolbar-button.is-secondary {
   background: #f7f1e5;
   color: #5b5042;
+}
+
+.cbv-toolbar-button.is-active {
+  background: #2f6c60;
+  border-color: #2f6c60;
+  color: #f7f1e5;
 }
 
 .cbv-draft-actions button.is-danger {
@@ -531,6 +544,35 @@
   color: #5b5042;
 }
 
+.cbv-compare-summary {
+  display: grid;
+  gap: 0.45rem;
+  padding: 1rem 1.25rem 0;
+  color: #5b5042;
+}
+
+.cbv-compare-summary p,
+.cbv-compare-summary strong {
+  margin: 0;
+}
+
+.cbv-compare-summary-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  align-items: start;
+}
+
+.cbv-compare-summary-header .cbv-toolbar-button {
+  padding: 0.28rem 0.64rem;
+  font-size: 0.76rem;
+}
+
+.cbv-compare-summary-meta {
+  color: #756b5e;
+  font-size: 0.82rem;
+}
+
 .cbv-draft-summary p,
 .cbv-draft-summary strong {
   margin: 0;
@@ -691,6 +733,13 @@
 .cbv-node.is-selected {
   border-color: #2f6c60;
   box-shadow: 0 8px 18px rgba(47, 108, 96, 0.14);
+}
+
+.cbv-node.is-compare-highlighted {
+  border-color: #c58b2b;
+  box-shadow:
+    0 0 0 2px rgba(197, 139, 43, 0.16),
+    0 10px 24px rgba(197, 139, 43, 0.14);
 }
 
 .cbv-node.is-dimmed {

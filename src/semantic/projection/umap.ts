@@ -1,68 +1,114 @@
-import type { SemanticProjectionPoint, SemanticProjectionRecord, SemanticUmapInput } from '../types'
+import { UMAP } from 'umap-js'
+
+import type {
+  SemanticProjectionPoint,
+  SemanticProjectionRecord,
+  SemanticUmapInput,
+} from '../types'
+
+const PROJECTION_WIDTH = 3200
+const PROJECTION_HEIGHT = 2200
 
 export function projectSemanticEmbeddings(
   input: SemanticUmapInput,
 ): SemanticProjectionRecord {
-  const axisX = buildDeterministicAxis(
-    input.vectors[0]?.dimensions ?? 0,
-    input.seed ^ 0x9e3779b9,
-  )
-  const axisY = buildDeterministicAxis(
-    input.vectors[0]?.dimensions ?? 0,
-    input.seed ^ 0x7f4a7c15,
-  )
+  const vectors = input.vectors.filter((vector) => vector.values.length > 0)
 
-  const rawPoints = input.vectors.map((vector): SemanticProjectionPoint => ({
-    symbolId: vector.symbolId,
-    x: dotProduct(vector.values, axisX),
-    y: dotProduct(vector.values, axisY),
-  }))
-  const points = normalizeProjection(rawPoints)
+  if (vectors.length === 0) {
+    return {
+      id: `semantic-projection:${input.seed}:0`,
+      modelId: input.vectors[0]?.modelId ?? 'unknown',
+      symbolIds: [],
+      points: [],
+      seed: input.seed,
+      generatedAt: new Date().toISOString(),
+    }
+  }
+
+  const points =
+    vectors.length <= 2
+      ? normalizeProjection(projectSmallVectorSet(vectors))
+      : normalizeProjection(projectWithUmap(vectors, input.seed))
 
   return {
-    id: `semantic-projection:${input.seed}:${input.vectors.length}`,
-    modelId: input.vectors[0]?.modelId ?? 'unknown',
-    symbolIds: input.vectors.map((vector) => vector.symbolId),
+    id: `semantic-projection:${input.seed}:${vectors[0]?.modelId ?? 'unknown'}:${vectors.length}`,
+    modelId: vectors[0]?.modelId ?? 'unknown',
+    symbolIds: vectors.map((vector) => vector.symbolId),
     points,
     seed: input.seed,
     generatedAt: new Date().toISOString(),
   }
 }
 
-function buildDeterministicAxis(dimensions: number, seed: number) {
-  const axis = new Array<number>(dimensions)
+function projectWithUmap(input: SemanticUmapInput['vectors'], seed: number) {
+  const random = createSeededRandom(seed)
+  const nNeighbors = Math.max(3, Math.min(20, input.length - 1))
+  const umap = new UMAP({
+    nComponents: 2,
+    nEpochs: 350,
+    nNeighbors,
+    minDist: 0.12,
+    spread: 1.35,
+    distanceFn: cosineDistance,
+    random,
+  })
+  const embedding = umap.fit(input.map((vector) => vector.values))
+
+  return input.map((vector, index): SemanticProjectionPoint => ({
+    symbolId: vector.symbolId,
+    x: embedding[index]?.[0] ?? 0,
+    y: embedding[index]?.[1] ?? 0,
+  }))
+}
+
+function projectSmallVectorSet(
+  input: SemanticUmapInput['vectors'],
+): SemanticProjectionPoint[] {
+  if (input.length === 1) {
+    return [
+      {
+        symbolId: input[0].symbolId,
+        x: 0,
+        y: 0,
+      },
+    ]
+  }
+
+  return input.map((vector, index) => ({
+    symbolId: vector.symbolId,
+    x: index,
+    y: 0,
+  }))
+}
+
+function createSeededRandom(seed: number) {
   let value = seed >>> 0
 
-  for (let index = 0; index < dimensions; index += 1) {
-    value = nextSeed(value)
-    axis[index] = ((value / 0xffffffff) * 2) - 1
+  return () => {
+    value = (Math.imul(value, 1664525) + 1013904223) >>> 0
+    return value / 0xffffffff
   }
-
-  return normalizeAxis(axis)
 }
 
-function normalizeAxis(axis: number[]) {
-  const magnitude = Math.sqrt(axis.reduce((sum, value) => sum + value * value, 0))
+function cosineDistance(left: number[], right: number[]) {
+  const leftMagnitude = Math.sqrt(left.reduce((sum, value) => sum + value * value, 0))
+  const rightMagnitude = Math.sqrt(
+    right.reduce((sum, value) => sum + value * value, 0),
+  )
 
-  if (magnitude === 0) {
-    return axis
+  if (leftMagnitude === 0 || rightMagnitude === 0) {
+    return 1
   }
 
-  return axis.map((value) => value / magnitude)
-}
-
-function dotProduct(left: number[], right: number[]) {
-  let sum = 0
+  let dotProduct = 0
 
   for (let index = 0; index < left.length; index += 1) {
-    sum += left[index] * (right[index] ?? 0)
+    dotProduct += left[index] * (right[index] ?? 0)
   }
 
-  return sum
-}
+  const similarity = dotProduct / (leftMagnitude * rightMagnitude)
 
-function nextSeed(seed: number) {
-  return (Math.imul(seed, 1664525) + 1013904223) >>> 0
+  return 1 - Math.max(-1, Math.min(1, similarity))
 }
 
 function normalizeProjection(points: SemanticProjectionPoint[]) {
@@ -81,7 +127,7 @@ function normalizeProjection(points: SemanticProjectionPoint[]) {
 
   return points.map((point) => ({
     symbolId: point.symbolId,
-    x: ((point.x - minX) / xRange) * 3200,
-    y: ((point.y - minY) / yRange) * 2200,
+    x: ((point.x - minX) / xRange) * PROJECTION_WIDTH,
+    y: ((point.y - minY) / yRange) * PROJECTION_HEIGHT,
   }))
 }
