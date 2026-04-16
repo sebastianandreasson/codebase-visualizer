@@ -56,6 +56,7 @@ interface CodebaseVisualizerProps {
   onAgentRunSettled?: () => Promise<void>
   onRejectDraft?: (draftId: string) => Promise<void>
   onSuggestLayout?: (brief: string) => Promise<void>
+  onStartPreprocessing?: () => void
   layoutActionsPending?: boolean
   layoutSuggestionPending?: boolean
   layoutSuggestionError?: string | null
@@ -159,6 +160,7 @@ export function CodebaseVisualizer({
   onAgentRunSettled,
   onRejectDraft,
   onSuggestLayout,
+  onStartPreprocessing,
   layoutActionsPending = false,
   layoutSuggestionPending = false,
   layoutSuggestionError = null,
@@ -210,6 +212,7 @@ export function CodebaseVisualizer({
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>([])
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([])
   const workspaceRef = useRef<HTMLDivElement | null>(null)
+  const inspectorBodyRef = useRef<HTMLDivElement | null>(null)
   const selectedNodeIdSet = useMemo(() => new Set(selectedNodeIds), [selectedNodeIds])
   const desktopBridge = (
     globalThis as typeof globalThis & {
@@ -260,7 +263,10 @@ export function CodebaseVisualizer({
 
     const structuralLayout = buildStructuralLayout(effectiveSnapshot)
     const symbolLayout = buildSymbolLayout(effectiveSnapshot)
-    const semanticLayout = buildSemanticLayout(effectiveSnapshot)
+    const semanticLayout = buildSemanticLayout(
+      effectiveSnapshot,
+      preprocessedWorkspaceContext,
+    )
     const nextLayouts = mergeLayoutsWithDefaults(layouts, [
       structuralLayout,
       symbolLayout,
@@ -286,6 +292,7 @@ export function CodebaseVisualizer({
     setDraftLayouts,
     setLayouts,
     viewMode,
+    preprocessedWorkspaceContext,
   ])
 
   const availableDraftLayouts = draftLayouts.filter(
@@ -393,6 +400,7 @@ export function CodebaseVisualizer({
   const selectedNode =
     selectedNodeId && effectiveSnapshot ? effectiveSnapshot.nodes[selectedNodeId] : null
   const selectedSymbol = selectedNode && isSymbolNode(selectedNode) ? selectedNode : null
+  const selectedSymbols = getSelectedSymbols(effectiveSnapshot, selectedNodeIds)
   const selectedFile = getSelectedFile(effectiveSnapshot, selectedNode, files)
   const selectedFiles = getSelectedFiles(effectiveSnapshot, selectedNodeIds)
   const selectedEdge =
@@ -413,6 +421,18 @@ export function CodebaseVisualizer({
       setInspectorOpen(true)
     }
   }, [selectedEdgeId, selectedNodeIds])
+
+  useEffect(() => {
+    if (!inspectorOpen || !inspectorBodyRef.current) {
+      return
+    }
+
+    inspectorBodyRef.current.scrollTo({
+      top: 0,
+      left: 0,
+      behavior: 'auto',
+    })
+  }, [inspectorOpen, inspectorTab, selectedEdgeId, selectedNodeId, selectedNodeIds])
 
   useEffect(() => {
     if (activeResizePointerId == null) {
@@ -565,12 +585,49 @@ export function CodebaseVisualizer({
               <p className="cbv-workspace-error">{workspaceActionError}</p>
             ) : null}
             {preprocessingStatus ? (
-              <div
-                className={`cbv-preprocessing-status is-${preprocessingStatus.runState}`}
-                title={formatPreprocessingStatusTitle(preprocessingStatus)}
-              >
-                <span className="cbv-preprocessing-status-dot" />
-                <span>{formatPreprocessingStatusLabel(preprocessingStatus)}</span>
+              <div className="cbv-preprocessing-status-block">
+                <div
+                  className={`cbv-preprocessing-status is-${preprocessingStatus.runState}`}
+                  title={formatPreprocessingStatusTitle(preprocessingStatus)}
+                >
+                  <span className="cbv-preprocessing-status-dot" />
+                  <span>{formatPreprocessingStatusLabel(preprocessingStatus)}</span>
+                </div>
+                {onStartPreprocessing ? (
+                  <div className="cbv-preprocessing-actions">
+                    <button
+                      className="cbv-preprocessing-action"
+                      disabled={preprocessingStatus.runState === 'building'}
+                      onClick={(event) => {
+                        event.preventDefault()
+                        event.stopPropagation()
+                        onStartPreprocessing()
+                      }}
+                      type="button"
+                    >
+                      {formatPreprocessingActionLabel(preprocessingStatus)}
+                    </button>
+                    <span className="cbv-preprocessing-help">
+                      Uses the agent to generate purpose summaries for semantic indexing.
+                    </span>
+                  </div>
+                ) : null}
+                {preprocessingStatus.runState === 'building' ||
+                preprocessingStatus.runState === 'stale' ? (
+                  <div className="cbv-preprocessing-progress">
+                    <div
+                      className="cbv-preprocessing-progress-bar"
+                      style={{
+                        width: `${getPreprocessingProgressPercent(preprocessingStatus)}%`,
+                      }}
+                    />
+                  </div>
+                ) : null}
+                {preprocessingStatus.lastError ? (
+                  <p className="cbv-preprocessing-error">
+                    {preprocessingStatus.lastError}
+                  </p>
+                ) : null}
               </div>
             ) : null}
           </div>
@@ -871,7 +928,9 @@ export function CodebaseVisualizer({
               <div>
                 <p className="cbv-eyebrow">Inspector</p>
                 <strong>
-                  {selectedFiles.length > 1
+                  {selectedSymbols.length > 1
+                    ? `${selectedSymbols.length} symbols selected`
+                    : selectedFiles.length > 1
                     ? `${selectedFiles.length} files selected`
                     : selectedNode?.path ?? selectedFile?.path ?? 'Nothing selected'}
                 </strong>
@@ -925,7 +984,7 @@ export function CodebaseVisualizer({
               </button>
             </div>
 
-            <div className="cbv-inspector-body">
+            <div className="cbv-inspector-body" ref={inspectorBodyRef}>
               {inspectorTab === 'agent' ? (
                 <AgentPanel
                   desktopHostAvailable={isDesktopHost}
@@ -934,6 +993,7 @@ export function CodebaseVisualizer({
                     files: selectedFiles,
                     node: selectedNode,
                     symbol: selectedSymbol,
+                    symbols: selectedSymbols,
                   }}
                   onOpenSettings={() => setAgentSettingsOpen(true)}
                   onRunSettled={onAgentRunSettled}
@@ -946,6 +1006,12 @@ export function CodebaseVisualizer({
                   selectedNode={selectedNode}
                   summary={graphSummary}
                 />
+              ) : selectedSymbols.length > 1 ? (
+                <MultiSymbolInspector
+                  preprocessedWorkspaceContext={preprocessedWorkspaceContext}
+                  primarySymbol={selectedSymbol}
+                  selectedSymbols={selectedSymbols}
+                />
               ) : selectedFiles.length > 1 ? (
                 <MultiFileInspector
                   primaryFile={selectedFile}
@@ -953,6 +1019,14 @@ export function CodebaseVisualizer({
                 />
               ) : selectedFile ? (
                 <>
+                  {selectedSymbol ? (
+                    <SemanticPurposeSummaryCard
+                      summary={findPurposeSummary(
+                        preprocessedWorkspaceContext,
+                        selectedSymbol.id,
+                      )}
+                    />
+                  ) : null}
                   <div className="cbv-preview-meta">
                     <span>{formatFileSize(selectedFile.size)}</span>
                     <span>{selectedFile.extension || 'no extension'}</span>
@@ -1024,15 +1098,29 @@ function getWorkspaceName(rootDir: string) {
 function formatPreprocessingStatusLabel(status: PreprocessingStatus) {
   switch (status.runState) {
     case 'building':
-      return 'Building context…'
+      return `Building context… ${status.processedSymbols}/${status.totalSymbols || 0}`
     case 'stale':
-      return 'Refreshing context…'
+      return `Refreshing context… ${status.processedSymbols}/${status.totalSymbols || 0}`
     case 'ready':
       return `Context ready · ${status.purposeSummaryCount} summaries`
     case 'error':
       return 'Context build failed'
     default:
-      return 'Context idle'
+      return `Context not built · ${status.totalSymbols || 0} symbols`
+  }
+}
+
+function formatPreprocessingActionLabel(status: PreprocessingStatus) {
+  switch (status.runState) {
+    case 'ready':
+    case 'stale':
+      return 'Rebuild With Agent'
+    case 'building':
+      return 'Building With Agent…'
+    case 'error':
+      return 'Retry Build With Agent'
+    default:
+      return 'Build With Agent'
   }
 }
 
@@ -1048,6 +1136,17 @@ function formatPreprocessingStatusTitle(status: PreprocessingStatus) {
   }
 
   return parts.join(' · ')
+}
+
+function getPreprocessingProgressPercent(status: PreprocessingStatus) {
+  if (status.totalSymbols <= 0) {
+    return 0
+  }
+
+  return Math.max(
+    0,
+    Math.min(100, (status.processedSymbols / status.totalSymbols) * 100),
+  )
 }
 
 function MultiFileInspector({
@@ -1106,6 +1205,118 @@ function MultiFileInspector({
         </>
       ) : null}
     </div>
+  )
+}
+
+function MultiSymbolInspector({
+  preprocessedWorkspaceContext,
+  primarySymbol,
+  selectedSymbols,
+}: {
+  preprocessedWorkspaceContext: PreprocessedWorkspaceContext | null
+  primarySymbol: SymbolNode | null
+  selectedSymbols: SymbolNode[]
+}) {
+  const visibleSymbols = selectedSymbols.slice(0, MAX_VISIBLE_SELECTED_FILES)
+  const hiddenSymbolCount = Math.max(0, selectedSymbols.length - visibleSymbols.length)
+  const primarySummary = primarySymbol
+    ? findPurposeSummary(preprocessedWorkspaceContext, primarySymbol.id)
+    : null
+
+  return (
+    <div className="cbv-multi-file-inspector">
+      <div className="cbv-multi-file-summary">
+        <strong>{selectedSymbols.length} symbols selected</strong>
+        <p>
+          Cmd, Ctrl, or Shift-click symbols on the canvas to build a scoped edit set
+          for the agent.
+        </p>
+      </div>
+
+      <div className="cbv-multi-file-list-card">
+        <p className="cbv-eyebrow">Selected symbols</p>
+        <ul className="cbv-multi-file-list">
+          {visibleSymbols.map((symbol, index) => (
+            <li key={symbol.id}>
+              <strong>{index === 0 ? 'Primary' : `Symbol ${index + 1}`}</strong>
+              <span>{symbol.path}</span>
+            </li>
+          ))}
+        </ul>
+        {hiddenSymbolCount > 0 ? (
+          <p className="cbv-multi-file-overflow">
+            + {hiddenSymbolCount} more selected symbol{hiddenSymbolCount === 1 ? '' : 's'}
+          </p>
+        ) : null}
+      </div>
+
+      {primarySymbol ? (
+        <>
+          <SemanticPurposeSummaryCard summary={primarySummary} />
+          <div className="cbv-preview-meta">
+            <span>{primarySymbol.symbolKind}</span>
+            <span>{primarySymbol.language || 'unknown language'}</span>
+            <span>
+              {primarySymbol.range ? `lines ${formatRange(primarySymbol.range)}` : 'no range'}
+            </span>
+            <span>Primary symbol</span>
+          </div>
+        </>
+      ) : null}
+    </div>
+  )
+}
+
+function SemanticPurposeSummaryCard({
+  summary,
+}: {
+  summary:
+    | PreprocessedWorkspaceContext['purposeSummaries'][number]
+    | null
+    | undefined
+}) {
+  if (!summary) {
+    return null
+  }
+
+  return (
+    <section className="cbv-purpose-summary">
+      <p className="cbv-eyebrow">Semantic Summary</p>
+      <strong>{summary.path}</strong>
+      <p>{summary.summary}</p>
+      {summary.domainHints.length > 0 ? (
+        <div className="cbv-purpose-summary-tags">
+          {summary.domainHints.map((hint) => (
+            <span className="cbv-purpose-summary-tag" key={`hint:${hint}`}>
+              {hint}
+            </span>
+          ))}
+        </div>
+      ) : null}
+      {summary.sideEffects.length > 0 ? (
+        <div className="cbv-purpose-summary-tags">
+          {summary.sideEffects.map((effect) => (
+            <span
+              className="cbv-purpose-summary-tag is-side-effect"
+              key={`effect:${effect}`}
+            >
+              {effect}
+            </span>
+          ))}
+        </div>
+      ) : null}
+    </section>
+  )
+}
+
+function findPurposeSummary(
+  preprocessedWorkspaceContext: PreprocessedWorkspaceContext | null,
+  symbolId: string,
+) {
+  return (
+    preprocessedWorkspaceContext?.purposeSummaries.find(
+      (summary) => summary.symbolId === symbolId,
+    ) ?? null
   )
 }
 
@@ -1446,7 +1657,7 @@ function buildFlowNode(
         isContainedNode
           ? symbolDimensions.height
           : (clusterLayout?.height ?? symbolDimensions.height),
-      draggable: !isContainedNode,
+      draggable: true,
       selected: selectedNodeIds.has(node.id),
       parentId: isContainedNode && cluster ? cluster.rootNodeId : undefined,
       extent: isContainedNode ? 'parent' : undefined,
@@ -1478,6 +1689,7 @@ function buildFlowNode(
     targetPosition: Position.Left,
     width: placement.width,
     height: placement.height,
+    draggable: true,
     selected: selectedNodeIds.has(node.id),
     data: {
       title: node.name,
@@ -2119,6 +2331,26 @@ function getSelectedFiles(
   return selectedFiles
 }
 
+function getSelectedSymbols(
+  snapshot: CodebaseSnapshot | null,
+  selectedNodeIds: string[],
+) {
+  if (!snapshot || selectedNodeIds.length === 0) {
+    return []
+  }
+
+  return selectedNodeIds
+    .map((nodeId) => snapshot.nodes[nodeId])
+    .filter(isSymbolNode)
+}
+
+function formatRange(range: SourceRange) {
+  const startLine = range.start.line
+  const endLine = range.end.line
+
+  return startLine === endLine ? `${startLine}` : `${startLine}-${endLine}`
+}
+
 function getNodeSubtitle(node: ProjectNode) {
   if (node.kind === 'directory') {
     return `${node.childIds.length} children`
@@ -2507,10 +2739,16 @@ function mergeLayoutsWithDefaults(
   layouts: LayoutSpec[],
   defaultLayouts: LayoutSpec[],
 ) {
+  const existingLayoutById = new Map(layouts.map((layout) => [layout.id, layout]))
   const defaultLayoutIds = new Set(defaultLayouts.map((layout) => layout.id))
   const customLayouts = layouts.filter((layout) => !defaultLayoutIds.has(layout.id))
 
-  return [...defaultLayouts, ...customLayouts]
+  return [
+    ...defaultLayouts.map((layout) =>
+      mergeDefaultLayoutWithExisting(layout, existingLayoutById.get(layout.id)),
+    ),
+    ...customLayouts,
+  ]
 }
 
 function areLayoutListsEquivalent(
@@ -2527,9 +2765,70 @@ function areLayoutListsEquivalent(
     return (
       layout.id === rightLayout?.id &&
       layout.updatedAt === rightLayout?.updatedAt &&
-      getLayoutNodeScope(layout) === getLayoutNodeScope(rightLayout)
+      getLayoutNodeScope(layout) === getLayoutNodeScope(rightLayout) &&
+      Object.keys(layout.placements).length === Object.keys(rightLayout?.placements ?? {}).length &&
+      layout.annotations.length === (rightLayout?.annotations.length ?? 0) &&
+      layout.hiddenNodeIds.length === (rightLayout?.hiddenNodeIds.length ?? 0)
     )
   })
+}
+
+function mergeDefaultLayoutWithExisting(
+  generatedLayout: LayoutSpec,
+  existingLayout: LayoutSpec | undefined,
+) {
+  if (!existingLayout) {
+    return generatedLayout
+  }
+
+  const mergedPlacements = { ...generatedLayout.placements }
+
+  for (const [nodeId, placement] of Object.entries(existingLayout.placements)) {
+    if (!mergedPlacements[nodeId]) {
+      continue
+    }
+
+    mergedPlacements[nodeId] = {
+      ...mergedPlacements[nodeId],
+      x: placement.x,
+      y: placement.y,
+      width: placement.width,
+      height: placement.height,
+    }
+  }
+
+  return {
+    ...generatedLayout,
+    placements: mergedPlacements,
+    hiddenNodeIds: existingLayout.hiddenNodeIds.filter((nodeId) => Boolean(mergedPlacements[nodeId])),
+    annotations: existingLayout.annotations,
+    updatedAt:
+      layoutsDifferMeaningfully(existingLayout, generatedLayout, mergedPlacements)
+        ? generatedLayout.updatedAt
+        : existingLayout.updatedAt,
+  }
+}
+
+function layoutsDifferMeaningfully(
+  existingLayout: LayoutSpec,
+  generatedLayout: LayoutSpec,
+  mergedPlacements: LayoutSpec['placements'],
+) {
+  if (
+    existingLayout.annotations.length !== generatedLayout.annotations.length ||
+    existingLayout.hiddenNodeIds.length !== generatedLayout.hiddenNodeIds.length
+  ) {
+    return true
+  }
+
+  const existingPlacementIds = Object.keys(existingLayout.placements)
+  const generatedPlacementIds = Object.keys(generatedLayout.placements)
+
+  if (existingPlacementIds.length !== generatedPlacementIds.length) {
+    return true
+  }
+
+  return generatedPlacementIds.some((nodeId) => !mergedPlacements[nodeId])
 }
 
 function activateViewMode(

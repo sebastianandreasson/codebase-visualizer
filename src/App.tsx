@@ -2,28 +2,43 @@ import { startTransition, useEffect, useRef, useState } from 'react'
 
 import { CodebaseVisualizer } from './index'
 import {
+  countPreprocessableSymbols,
+  getPreprocessableSymbols,
   getPreprocessedSnapshotId,
   hydratePreprocessedWorkspaceContext,
-  preprocessWorkspaceSnapshot,
+  preprocessWorkspaceSnapshotIncrementally,
 } from './preprocessing/preprocessingService'
+import { buildWorkspaceProfile } from './preprocessing/workspaceProfile'
+import {
+  buildSemanticPurposeSummaryPrompt,
+  buildSemanticPurposeSummaryRecordFromModelOutput,
+  parseSemanticPurposeSummaryResponse,
+} from './semantic/purposeSummaries'
+import { buildSemanticSymbolTextRecord } from './semantic/symbolText'
 import type {
   AgentStateResponse,
   CodebaseSnapshot,
   DraftMutationResponse,
   LayoutStateResponse,
   PreprocessedWorkspaceContext,
+  PreprocessingEmbeddingResponse,
   PreprocessingContextResponse,
+  PreprocessingSummaryResponse,
   PreprocessingStatus,
 } from './types'
-import { useVisualizerStore } from './store/visualizerStore'
+import { useVisualizerStore, visualizerStore } from './store/visualizerStore'
 import {
   CODEBASE_VISUALIZER_AGENT_MESSAGE_ROUTE,
   CODEBASE_VISUALIZER_AGENT_SESSION_ROUTE,
   buildCodebaseVisualizerDraftActionRoute,
   CODEBASE_VISUALIZER_LAYOUTS_ROUTE,
+  CODEBASE_VISUALIZER_PREPROCESSING_EMBEDDINGS_ROUTE,
   CODEBASE_VISUALIZER_PREPROCESSING_ROUTE,
+  CODEBASE_VISUALIZER_PREPROCESSING_SUMMARY_ROUTE,
   CODEBASE_VISUALIZER_ROUTE,
 } from './shared/constants'
+
+const SEMANTIC_EMBEDDING_MODEL_ID = 'nomic-ai/nomic-embed-text-v1.5'
 
 export default function App() {
   const [layoutActionPending, setLayoutActionPending] = useState(false)
@@ -36,7 +51,9 @@ export default function App() {
     updatedAt: null,
     purposeSummaryCount: 0,
     lastError: null,
+    processedSymbols: 0,
     snapshotId: null,
+    totalSymbols: 0,
   })
   const preprocessingRunIdRef = useRef(0)
   const preprocessedWorkspaceContextRef = useRef<PreprocessedWorkspaceContext | null>(null)
@@ -96,6 +113,16 @@ export default function App() {
         }
 
         startTransition(() => {
+          const totalSymbols = countPreprocessableSymbols(snapshot)
+          const isPersistedContextFresh =
+            persistedContext?.snapshotId === getPreprocessedSnapshotId(snapshot)
+          const isPersistedContextReady =
+            Boolean(
+              persistedContext &&
+                persistedContext.isComplete &&
+                isPersistedContextFresh,
+            )
+
           setSnapshot(snapshot)
           setLayouts(layoutState.layouts)
           setDraftLayouts(layoutState.draftLayouts)
@@ -105,31 +132,35 @@ export default function App() {
           setPreprocessingStatus(
             persistedContext
               ? {
-                  runState:
-                    persistedContext.snapshotId === getPreprocessedSnapshotId(snapshot)
-                      ? 'ready'
-                      : 'stale',
+                  runState: isPersistedContextReady ? 'ready' : 'stale',
                   updatedAt: persistedContext.workspaceProfile.generatedAt,
                   purposeSummaryCount: persistedContext.purposeSummaries.length,
                   lastError: null,
+                  processedSymbols: persistedContext.purposeSummaries.length,
                   snapshotId: persistedContext.snapshotId,
+                  totalSymbols,
                 }
               : {
                   runState: 'idle',
                   updatedAt: null,
                   purposeSummaryCount: 0,
                   lastError: null,
+                  processedSymbols: 0,
                   snapshotId: null,
+                  totalSymbols: countPreprocessableSymbols(snapshot),
                 },
           )
           setErrorMessage(null)
           setStatus('ready')
         })
 
-        startBackgroundPreprocessing(
-          snapshot,
-          persistedContext ?? preprocessedWorkspaceContextRef.current,
-        )
+        if (persistedContext?.isComplete) {
+          startBackgroundPreprocessing(
+            snapshot,
+            persistedContext ?? preprocessedWorkspaceContextRef.current,
+            true,
+          )
+        }
       } catch (error) {
         if (isCancelled) {
           return
@@ -167,16 +198,44 @@ export default function App() {
       setErrorMessage(null)
     })
 
-    startBackgroundPreprocessing(
-      snapshot,
-      preprocessedWorkspaceContextRef.current,
-    )
+    if (preprocessedWorkspaceContextRef.current) {
+      startBackgroundPreprocessing(
+        snapshot,
+        preprocessedWorkspaceContextRef.current,
+        true,
+      )
+    } else {
+      startTransition(() => {
+        setPreprocessingStatus({
+          runState: 'idle',
+          updatedAt: null,
+          purposeSummaryCount: 0,
+          lastError: null,
+          processedSymbols: 0,
+          snapshotId: null,
+          totalSymbols: countPreprocessableSymbols(snapshot),
+        })
+      })
+    }
   }
 
   function startBackgroundPreprocessing(
     nextSnapshot: CodebaseSnapshot,
     existingContext: PreprocessedWorkspaceContext | null,
+    automatic: boolean,
   ) {
+    if (!automatic && !existingContext) {
+      setPreprocessingStatus({
+        runState: 'building',
+        updatedAt: null,
+        purposeSummaryCount: 0,
+        lastError: null,
+        processedSymbols: 0,
+        snapshotId: null,
+        totalSymbols: countPreprocessableSymbols(nextSnapshot),
+      })
+    }
+
     const runId = preprocessingRunIdRef.current + 1
     preprocessingRunIdRef.current = runId
 
@@ -186,13 +245,31 @@ export default function App() {
         updatedAt: current.updatedAt,
         purposeSummaryCount: current.purposeSummaryCount,
         lastError: null,
+        processedSymbols: 0,
         snapshotId: current.snapshotId,
+        totalSymbols: countPreprocessableSymbols(nextSnapshot),
       }))
     })
 
     window.setTimeout(() => {
       void Promise.resolve()
-        .then(() => preprocessWorkspaceSnapshot(nextSnapshot))
+        .then(() =>
+          preprocessWorkspaceSnapshotIncrementally(nextSnapshot, {
+            onProgress: (progress) => {
+              if (preprocessingRunIdRef.current !== runId) {
+                return
+              }
+
+              setPreprocessingStatus((current) => ({
+                ...current,
+                processedSymbols: progress.processedSymbols,
+                purposeSummaryCount: progress.processedSymbols,
+                totalSymbols: progress.totalSymbols,
+              }))
+            },
+            previousContext: existingContext,
+          }),
+        )
         .then((context) => {
           if (preprocessingRunIdRef.current !== runId) {
             return
@@ -205,7 +282,9 @@ export default function App() {
               updatedAt: new Date().toISOString(),
               purposeSummaryCount: context.purposeSummaries.length,
               lastError: null,
+              processedSymbols: context.purposeSummaries.length,
               snapshotId: context.snapshotId,
+              totalSymbols: countPreprocessableSymbols(nextSnapshot),
             })
           })
 
@@ -237,11 +316,182 @@ export default function App() {
                 error instanceof Error
                   ? error.message
                   : 'Failed to preprocess workspace context.',
+              processedSymbols: current.processedSymbols,
               snapshotId: current.snapshotId,
+              totalSymbols: current.totalSymbols,
             }))
           })
         })
     }, 0)
+  }
+
+  function handleStartPreprocessing() {
+    const nextSnapshot = snapshot ?? visualizerStore.getState().snapshot
+
+    if (!nextSnapshot) {
+      startTransition(() => {
+        setPreprocessingStatus((current) => ({
+          ...current,
+          runState: 'error',
+          lastError: 'The workspace snapshot is not ready yet.',
+        }))
+      })
+      return
+    }
+
+    setPreprocessingStatus({
+      runState: 'building',
+      updatedAt: preprocessedWorkspaceContextRef.current?.workspaceProfile.generatedAt ?? null,
+      purposeSummaryCount: preprocessedWorkspaceContextRef.current?.purposeSummaries.length ?? 0,
+      lastError: null,
+      processedSymbols: 0,
+      snapshotId: preprocessedWorkspaceContextRef.current?.snapshotId ?? null,
+      totalSymbols: countPreprocessableSymbols(nextSnapshot),
+    })
+
+    void runLLMPreprocessing(nextSnapshot, preprocessedWorkspaceContextRef.current)
+  }
+
+  async function runLLMPreprocessing(
+    nextSnapshot: CodebaseSnapshot,
+    existingContext: PreprocessedWorkspaceContext | null,
+  ) {
+    const runId = preprocessingRunIdRef.current + 1
+    preprocessingRunIdRef.current = runId
+    const generatedAt = new Date().toISOString()
+    const workspaceProfile = buildWorkspaceProfile(nextSnapshot)
+    const symbols = getPreprocessableSymbols(nextSnapshot)
+    const previousSummaryBySymbolId = new Map(
+      existingContext?.purposeSummaries.map((summary) => [summary.symbolId, summary]) ?? [],
+    )
+    const previousEmbeddingBySymbolId = new Map(
+      existingContext?.semanticEmbeddings.map((embedding) => [embedding.symbolId, embedding]) ?? [],
+    )
+    const nextPurposeSummaries = []
+    const nextSemanticEmbeddings = []
+    let activeSymbolPath: string | null = null
+
+    startTransition(() => {
+      setPreprocessingStatus({
+        runState: 'building',
+        updatedAt: existingContext?.workspaceProfile.generatedAt ?? null,
+        purposeSummaryCount: 0,
+        lastError: null,
+        processedSymbols: 0,
+        snapshotId: existingContext?.snapshotId ?? null,
+        totalSymbols: countPreprocessableSymbols(nextSnapshot),
+      })
+    })
+
+    try {
+      for (const [index, symbol] of symbols.entries()) {
+        if (preprocessingRunIdRef.current !== runId) {
+          return
+        }
+
+        activeSymbolPath = symbol.path
+        const previousSummary = previousSummaryBySymbolId.get(symbol.id)
+        const sourceTextRecord = buildSemanticSymbolTextRecord(
+          nextSnapshot,
+          symbol,
+          generatedAt,
+        )
+        const record =
+          previousSummary &&
+          previousSummary.generator === 'llm' &&
+          previousSummary.sourceHash === sourceTextRecord.textHash
+            ? previousSummary
+            : buildSemanticPurposeSummaryRecordFromModelOutput(
+                nextSnapshot,
+                symbol,
+                parseSemanticPurposeSummaryResponse(
+                  await requestLLMSemanticSummary(
+                    buildSemanticPurposeSummaryPrompt(nextSnapshot, symbol),
+                  ),
+                ),
+                generatedAt,
+              )
+        nextPurposeSummaries.push(record)
+        const previousEmbedding = previousEmbeddingBySymbolId.get(symbol.id)
+        const embedding =
+          previousEmbedding &&
+          existingContext?.semanticEmbeddingModelId === SEMANTIC_EMBEDDING_MODEL_ID &&
+          previousEmbedding.textHash === record.sourceHash
+            ? previousEmbedding
+            : (
+                await requestSemanticEmbeddings([
+                  {
+                    id: record.symbolId,
+                    text: record.embeddingText,
+                    textHash: record.sourceHash,
+                  },
+                ])
+              )[0]
+        nextSemanticEmbeddings.push(embedding)
+        const partialContext: PreprocessedWorkspaceContext = {
+          snapshotId: getPreprocessedSnapshotId(nextSnapshot),
+          isComplete: false,
+          semanticEmbeddingModelId: SEMANTIC_EMBEDDING_MODEL_ID,
+          semanticEmbeddings: nextSemanticEmbeddings.slice(),
+          workspaceProfile,
+          purposeSummaries: nextPurposeSummaries.slice(),
+        }
+
+        hydratePreprocessedWorkspaceContext(partialContext)
+        setPreprocessedWorkspaceContext(partialContext)
+        await persistPreprocessedWorkspaceContext(partialContext)
+
+        startTransition(() => {
+          setPreprocessingStatus((current) => ({
+            ...current,
+            processedSymbols: index + 1,
+            purposeSummaryCount: index + 1,
+          }))
+        })
+      }
+
+      const context: PreprocessedWorkspaceContext = {
+        snapshotId: getPreprocessedSnapshotId(nextSnapshot),
+        isComplete: true,
+        semanticEmbeddingModelId: SEMANTIC_EMBEDDING_MODEL_ID,
+        semanticEmbeddings: nextSemanticEmbeddings,
+        workspaceProfile,
+        purposeSummaries: nextPurposeSummaries,
+      }
+
+      hydratePreprocessedWorkspaceContext(context)
+      startTransition(() => {
+        setPreprocessedWorkspaceContext(context)
+        setPreprocessingStatus({
+          runState: 'ready',
+          updatedAt: generatedAt,
+          purposeSummaryCount: context.purposeSummaries.length,
+          lastError: null,
+          processedSymbols: context.purposeSummaries.length,
+          snapshotId: context.snapshotId,
+          totalSymbols: context.purposeSummaries.length,
+        })
+      })
+
+      await persistPreprocessedWorkspaceContext(context)
+    } catch (error) {
+      if (preprocessingRunIdRef.current !== runId) {
+        return
+      }
+
+      startTransition(() => {
+        setPreprocessingStatus((current) => ({
+          ...current,
+          runState: 'error',
+          lastError:
+            activeSymbolPath
+              ? `Failed on ${activeSymbolPath}: ${error instanceof Error ? error.message : 'Unknown preprocessing error.'}`
+              : error instanceof Error
+                ? error.message
+                : 'Failed to build LLM preprocessing context.',
+        }))
+      })
+    }
   }
 
   async function refreshLayoutState() {
@@ -463,6 +713,7 @@ export default function App() {
           onAcceptDraft={handleAcceptDraft}
           onRejectDraft={handleRejectDraft}
           onSuggestLayout={handleSuggestLayout}
+          onStartPreprocessing={handleStartPreprocessing}
           preprocessedWorkspaceContext={preprocessedWorkspaceContext}
           preprocessingStatus={preprocessingStatus}
           workspaceProfile={preprocessedWorkspaceContext?.workspaceProfile ?? null}
@@ -569,4 +820,53 @@ async function persistPreprocessedWorkspaceContext(
       `Preprocessing persistence failed with status ${response.status}.`,
     ))
   }
+}
+
+async function requestLLMSemanticSummary(message: string) {
+  const response = await fetch(CODEBASE_VISUALIZER_PREPROCESSING_SUMMARY_ROUTE, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ message }),
+  })
+
+  if (!response.ok) {
+    throw new Error(await getResponseErrorMessage(
+      response,
+      `LLM preprocessing request failed with status ${response.status}.`,
+    ))
+  }
+
+  const payload = (await response.json()) as PreprocessingSummaryResponse
+  return payload.text
+}
+
+async function requestSemanticEmbeddings(
+  texts: {
+    id: string
+    text: string
+    textHash: string
+  }[],
+) {
+  const response = await fetch(CODEBASE_VISUALIZER_PREPROCESSING_EMBEDDINGS_ROUTE, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      modelId: SEMANTIC_EMBEDDING_MODEL_ID,
+      texts,
+    }),
+  })
+
+  if (!response.ok) {
+    throw new Error(await getResponseErrorMessage(
+      response,
+      `Semantic embedding request failed with status ${response.status}.`,
+    ))
+  }
+
+  const payload = (await response.json()) as PreprocessingEmbeddingResponse
+  return payload.embeddings
 }

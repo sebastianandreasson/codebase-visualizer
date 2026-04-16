@@ -69,7 +69,11 @@ export type {
   AgentBrokerLoginStartResponse,
   AgentBrokerSessionResponse,
   AgentPromptRequest,
+  PreprocessingEmbeddingRequest,
+  PreprocessingEmbeddingResponse,
   PreprocessingContextResponse,
+  PreprocessingSummaryRequest,
+  PreprocessingSummaryResponse,
   PreprocessingContextUpdateRequest,
   AgentSettingsResponse,
   AgentSettingsUpdateRequest,
@@ -122,6 +126,7 @@ export type {
 } from './semantic/types'
 export type {
   PreprocessedWorkspaceContext,
+  PreprocessingProgress,
   PreprocessingRunState,
   PreprocessingStatus,
   PreprocessingResult,

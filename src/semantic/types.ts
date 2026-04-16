@@ -21,6 +21,7 @@ export interface SemanticPurposeSummaryRecord {
   path: string
   language?: string
   symbolKind: SymbolNode['symbolKind']
+  generator: 'heuristic' | 'llm'
   summary: string
   domainHints: string[]
   sideEffects: string[]

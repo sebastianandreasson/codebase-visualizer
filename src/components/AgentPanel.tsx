@@ -28,6 +28,7 @@ interface AgentPanelProps {
     files: CodebaseFile[]
     node: ProjectNode | null
     symbol: SymbolNode | null
+    symbols: SymbolNode[]
   }
   onOpenSettings?: () => void
   onRunSettled?: () => Promise<void>
@@ -979,12 +980,15 @@ export function AgentPanel({
       <div className="cbv-agent-composer">
         {inspectorContext?.file ||
         inspectorContext?.files.length ||
+        inspectorContext?.symbols.length ||
         inspectorContext?.symbol ||
         inspectorContext?.node ? (
           <div className="cbv-agent-context">
             <p className="cbv-eyebrow">Current inspector target</p>
             <strong>
-              {inspectorContext.files.length > 1
+              {inspectorContext.symbols.length > 1
+                ? `${inspectorContext.symbols.length} selected symbols`
+                : inspectorContext.files.length > 1
                 ? `${inspectorContext.files.length} selected files`
                 : inspectorContext.symbol?.path ??
                 inspectorContext.file?.path ??
@@ -994,7 +998,18 @@ export function AgentPanel({
             <p>
               {describeInspectorContext(inspectorContext)}
             </p>
-            {inspectorContext.files.length > 1 ? (
+            {inspectorContext.symbols.length > 1 ? (
+              <ul className="cbv-agent-context-list">
+                {inspectorContext.symbols
+                  .slice(0, MAX_VISIBLE_CONTEXT_FILES)
+                  .map((symbol, index) => (
+                  <li key={symbol.id}>
+                    <strong>{index === 0 ? 'Primary' : `Symbol ${index + 1}`}</strong>
+                    <span>{symbol.path}</span>
+                  </li>
+                ))}
+              </ul>
+            ) : inspectorContext.files.length > 1 ? (
               <ul className="cbv-agent-context-list">
                 {inspectorContext.files
                   .slice(0, MAX_VISIBLE_CONTEXT_FILES)
@@ -1006,7 +1021,12 @@ export function AgentPanel({
                 ))}
               </ul>
             ) : null}
-            {inspectorContext.files.length > MAX_VISIBLE_CONTEXT_FILES ? (
+            {inspectorContext.symbols.length > MAX_VISIBLE_CONTEXT_FILES ? (
+              <p className="cbv-agent-context-more">
+                + {inspectorContext.symbols.length - MAX_VISIBLE_CONTEXT_FILES} more selected symbol
+                {inspectorContext.symbols.length - MAX_VISIBLE_CONTEXT_FILES === 1 ? '' : 's'}
+              </p>
+            ) : inspectorContext.files.length > MAX_VISIBLE_CONTEXT_FILES ? (
               <p className="cbv-agent-context-more">
                 + {inspectorContext.files.length - MAX_VISIBLE_CONTEXT_FILES} more selected file
                 {inspectorContext.files.length - MAX_VISIBLE_CONTEXT_FILES === 1 ? '' : 's'}
@@ -1125,6 +1145,7 @@ function buildInspectorScopedPrompt(
         files: CodebaseFile[]
         node: ProjectNode | null
         symbol: SymbolNode | null
+        symbols: SymbolNode[]
       }
     | undefined,
 ) {
@@ -1133,6 +1154,7 @@ function buildInspectorScopedPrompt(
     (
       !inspectorContext.file &&
       inspectorContext.files.length === 0 &&
+      inspectorContext.symbols.length === 0 &&
       !inspectorContext.node &&
       !inspectorContext.symbol
     )
@@ -1146,7 +1168,17 @@ function buildInspectorScopedPrompt(
     'If the user is asking for an edit, inspect and modify this file or symbol first unless they clearly redirect you elsewhere.',
   ]
 
-  if (inspectorContext.files.length > 1) {
+  if (inspectorContext.symbols.length > 1) {
+    contextLines.push('Selected symbols (primary first):')
+
+    for (const symbol of inspectorContext.symbols) {
+      contextLines.push(`- ${symbol.path}`)
+    }
+
+    contextLines.push(
+      'Treat this symbol set as the default edit scope for the request. Start with these symbols before searching elsewhere in the repository.',
+    )
+  } else if (inspectorContext.files.length > 1) {
     contextLines.push('Selected files (primary first):')
 
     for (const file of inspectorContext.files) {
@@ -1258,6 +1290,10 @@ function selectRelevantPurposeSummaries(
     inspectorContext?.files.map((file) => file.id) ??
       (inspectorContext?.file ? [inspectorContext.file.id] : []),
   )
+  const selectedSymbolIds = new Set(
+    inspectorContext?.symbols.map((symbol) => symbol.id) ??
+      (inspectorContext?.symbol ? [inspectorContext.symbol.id] : []),
+  )
   const selectedNodePath = inspectorContext?.node?.path ?? ''
   const selectedSymbolId = inspectorContext?.symbol?.id ?? ''
   const selectedSymbolPath = inspectorContext?.symbol?.path ?? ''
@@ -1267,6 +1303,7 @@ function selectRelevantPurposeSummaries(
       summary,
       score: scorePurposeSummary(summary, {
         selectedFileIds,
+        selectedSymbolIds,
         selectedNodePath,
         selectedSymbolId,
         selectedSymbolPath,
@@ -1288,6 +1325,7 @@ function scorePurposeSummary(
   summary: SemanticPurposeSummaryRecord,
   input: {
     selectedFileIds: Set<string>
+    selectedSymbolIds: Set<string>
     selectedNodePath: string
     selectedSymbolId: string
     selectedSymbolPath: string
@@ -1301,6 +1339,10 @@ function scorePurposeSummary(
 
   if (input.selectedSymbolId && summary.symbolId === input.selectedSymbolId) {
     score += 12
+  }
+
+  if (input.selectedSymbolIds.has(summary.symbolId)) {
+    score += 10
   }
 
   if (input.selectedSymbolPath && summary.path === input.selectedSymbolPath) {
@@ -1329,12 +1371,17 @@ function describeInspectorContext(inspectorContext: {
   files: CodebaseFile[]
   node: ProjectNode | null
   symbol: SymbolNode | null
+  symbols: SymbolNode[]
 }) {
   if (inspectorContext.symbol) {
     const rangeText = inspectorContext.symbol.range
       ? ` at lines ${formatRange(inspectorContext.symbol.range)}`
       : ''
     return `${inspectorContext.symbol.symbolKind}${rangeText}. Requests will default to this symbol.`
+  }
+
+  if (inspectorContext.symbols.length > 1) {
+    return `Requests will default to this ${inspectorContext.symbols.length}-symbol edit set.`
   }
 
   if (inspectorContext.files.length > 1) {

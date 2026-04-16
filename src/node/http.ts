@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 
 import { ensureAgentInstructions } from '../cli/agentInstructions'
+import { embedSemanticTexts } from './semanticEmbeddingService'
 import {
   readPersistedPreprocessedWorkspaceContext,
   writePersistedPreprocessedWorkspaceContext,
@@ -17,7 +18,11 @@ import type {
   AgentBrokerLoginStartResponse,
   AgentBrokerSessionResponse,
   AgentPromptRequest,
+  PreprocessingEmbeddingRequest,
+  PreprocessingEmbeddingResponse,
   PreprocessingContextResponse,
+  PreprocessingSummaryRequest,
+  PreprocessingSummaryResponse,
   PreprocessingContextUpdateRequest,
   AgentSettingsResponse,
   AgentSettingsUpdateRequest,
@@ -40,7 +45,9 @@ import {
   CODEBASE_VISUALIZER_AGENT_SESSION_ROUTE,
   CODEBASE_VISUALIZER_DRAFTS_ROUTE,
   CODEBASE_VISUALIZER_LAYOUTS_ROUTE,
+  CODEBASE_VISUALIZER_PREPROCESSING_EMBEDDINGS_ROUTE,
   CODEBASE_VISUALIZER_PREPROCESSING_ROUTE,
+  CODEBASE_VISUALIZER_PREPROCESSING_SUMMARY_ROUTE,
   CODEBASE_VISUALIZER_ROUTE,
 } from '../shared/constants'
 
@@ -57,6 +64,10 @@ export interface AgentRuntimeRequestBridge {
   getWorkspaceSessionSummary: (workspaceRootDir: string) => AgentStateResponse['session']
   logoutBrokeredAuthSession: () => Promise<AgentBrokerSessionResponse['brokerSession']>
   promptWorkspaceSession: (workspaceRootDir: string, message: string) => Promise<void>
+  runOneOffPrompt: (
+    workspaceRootDir: string,
+    input: { message: string; systemPrompt?: string },
+  ) => Promise<string>
   saveSettings: (settings: AgentSettingsUpdateRequest) => Promise<AgentSettingsResponse['settings']>
 }
 
@@ -132,6 +143,55 @@ export async function handleCodebaseVisualizerRequest(
         sendJson(response, 200, result)
         return true
       }
+    }
+
+    if (pathname === CODEBASE_VISUALIZER_PREPROCESSING_SUMMARY_ROUTE && method === 'POST') {
+      if (!options.agentRuntime) {
+        sendJson(response, 503, {
+          message: 'The embedded PI runtime is not available for this host.',
+        })
+        return true
+      }
+
+      const payload = await readJsonBody<PreprocessingSummaryRequest>(request)
+
+      if (!payload?.message?.trim()) {
+        sendJson(response, 400, {
+          message: 'A preprocessing prompt is required.',
+        })
+        return true
+      }
+
+      const result: PreprocessingSummaryResponse = {
+        text: await options.agentRuntime.runOneOffPrompt(options.rootDir, {
+          message: payload.message,
+          systemPrompt: payload.systemPrompt,
+        }),
+      }
+
+      sendJson(response, 200, result)
+      return true
+    }
+
+    if (pathname === CODEBASE_VISUALIZER_PREPROCESSING_EMBEDDINGS_ROUTE && method === 'POST') {
+      const payload = await readJsonBody<PreprocessingEmbeddingRequest>(request)
+
+      if (!payload?.texts?.length) {
+        sendJson(response, 400, {
+          message: 'A preprocessing embedding payload is required.',
+        })
+        return true
+      }
+
+      const result: PreprocessingEmbeddingResponse = {
+        embeddings: await embedSemanticTexts({
+          modelId: payload.modelId,
+          texts: payload.texts,
+        }),
+      }
+
+      sendJson(response, 200, result)
+      return true
     }
 
     if (pathname === CODEBASE_VISUALIZER_AGENT_SESSION_ROUTE) {

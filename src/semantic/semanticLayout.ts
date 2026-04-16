@@ -14,6 +14,7 @@ import type {
   SemanticPurposeSummaryRecord,
   SemanticProjectionRecord,
 } from './types'
+import type { PreprocessedWorkspaceContext } from '../preprocessing/types'
 
 const SEMANTIC_SYMBOL_NODE_WIDTH = 248
 const SEMANTIC_SYMBOL_NODE_HEIGHT = 82
@@ -27,12 +28,22 @@ const SUPPORTED_SYMBOL_KINDS = new Set<SymbolKind>([
   'variable',
 ])
 
-export function buildSemanticLayout(snapshot: ProjectSnapshot): LayoutSpec {
-  const purposeSummaries = buildSemanticPurposeSummaryRecords(snapshot).filter((record) => {
+export function buildSemanticLayout(
+  snapshot: ProjectSnapshot,
+  preprocessedWorkspaceContext: PreprocessedWorkspaceContext | null = null,
+): LayoutSpec {
+  const purposeSummaries = (
+    preprocessedWorkspaceContext?.purposeSummaries.length
+      ? preprocessedWorkspaceContext.purposeSummaries
+      : buildSemanticPurposeSummaryRecords(snapshot)
+  ).filter((record) => {
     const node = snapshot.nodes[record.symbolId]
     return Boolean(node && isSupportedSemanticSymbol(node))
   })
-  const embeddings = buildSemanticEmbeddingRecords(purposeSummaries)
+  const embeddings = buildSemanticEmbeddingRecords(
+    purposeSummaries,
+    preprocessedWorkspaceContext,
+  )
   const projection = projectSemanticEmbeddings({
     seed: SEMANTIC_PROJECTION_SEED,
     vectors: embeddings,
@@ -104,7 +115,14 @@ export function collectSemanticSymbolTexts(snapshot: ProjectSnapshot) {
 
 function buildSemanticEmbeddingRecords(
   purposeSummaries: SemanticPurposeSummaryRecord[],
+  preprocessedWorkspaceContext: PreprocessedWorkspaceContext | null,
 ): SemanticEmbeddingVectorRecord[] {
+  const cachedEmbeddingsBySymbolId = new Map(
+    preprocessedWorkspaceContext?.semanticEmbeddings.map((embedding) => [
+      embedding.symbolId,
+      embedding,
+    ]) ?? [],
+  )
   const embeddings = embedTextsWithTfidf(
     purposeSummaries.map((record) => ({
       id: record.symbolId,
@@ -112,14 +130,22 @@ function buildSemanticEmbeddingRecords(
     })),
   )
 
-  return purposeSummaries.map((record) => ({
-    symbolId: record.symbolId,
-    modelId: 'local-purpose-tfidf-v1',
-    dimensions: embeddings[record.symbolId]?.length ?? 0,
-    textHash: record.sourceHash,
-    values: embeddings[record.symbolId] ?? [],
-    generatedAt: record.generatedAt,
-  }))
+  return purposeSummaries.map((record) => {
+    const cachedEmbedding = cachedEmbeddingsBySymbolId.get(record.symbolId)
+
+    if (cachedEmbedding && cachedEmbedding.textHash === record.sourceHash) {
+      return cachedEmbedding
+    }
+
+    return {
+      symbolId: record.symbolId,
+      modelId: 'local-purpose-tfidf-v1',
+      dimensions: embeddings[record.symbolId]?.length ?? 0,
+      textHash: record.sourceHash,
+      values: embeddings[record.symbolId] ?? [],
+      generatedAt: record.generatedAt,
+    }
+  })
 }
 
 function isSupportedSemanticSymbol(

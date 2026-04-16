@@ -331,6 +331,71 @@ export class PiAgentService {
     }
   }
 
+  async runOneOffPrompt(
+    workspaceRootDir: string,
+    input: { message: string; systemPrompt?: string },
+  ) {
+    await this.settingsStore.applyConfiguredApiKeys()
+    const settings = await this.getSettings()
+    const provider = resolveProvider(settings)
+    const disabledReason = resolveDisabledReason(settings.authMode, provider, settings)
+
+    if (disabledReason) {
+      throw new Error(disabledReason)
+    }
+
+    const transport =
+      settings.authMode === 'brokered_oauth'
+        ? new CodexCliTransport({
+            authProvider: this.openAICodexProvider,
+            logger: this.logger,
+            workspaceRootDir,
+          })
+        : this.createTransport(provider)
+    const model =
+      settings.authMode === 'brokered_oauth'
+        ? createCodexCliModel(settings.modelId)
+        : resolveModel(provider, settings.modelId)
+    const agent = new Agent({
+      initialState: {
+        model,
+        systemPrompt: input.systemPrompt ?? buildWorkspaceSystemPrompt(workspaceRootDir),
+        thinkingLevel: 'medium',
+        tools: [],
+      },
+      transport,
+    })
+
+    let assistantText = ''
+    const unsubscribe = agent.subscribe((event) => {
+      if (
+        (event.type === 'message_end' || event.type === 'turn_end') &&
+        event.message.role === 'assistant'
+      ) {
+        const nextText = extractAssistantText(event.message)
+
+        if (nextText) {
+          assistantText = nextText
+        }
+      }
+    })
+
+    try {
+      await agent.prompt(input.message)
+      await agent.waitForIdle().catch(() => undefined)
+
+      if (!assistantText.trim()) {
+        throw new Error('The preprocessing prompt returned no assistant text.')
+      }
+
+      return assistantText.trim()
+    } finally {
+      unsubscribe()
+      agent.abort()
+      await agent.waitForIdle().catch(() => undefined)
+    }
+  }
+
   async cancelWorkspaceSession(workspaceRootDir: string) {
     const record = this.sessionsByWorkspaceRootDir.get(workspaceRootDir)
 
@@ -686,4 +751,19 @@ function normalizeAgentMessage(
     createdAt: new Date(message.timestamp ?? Date.now()).toISOString(),
     isStreaming,
   }
+}
+
+function extractAssistantText(message: Message | AssistantMessage) {
+  const contentBlocks = Array.isArray(message.content) ? message.content : []
+
+  return contentBlocks
+    .flatMap((block) => {
+      if (block.type === 'text') {
+        return [block.text]
+      }
+
+      return []
+    })
+    .join('\n')
+    .trim()
 }

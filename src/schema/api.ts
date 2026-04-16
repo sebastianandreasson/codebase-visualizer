@@ -51,6 +51,35 @@ export interface PreprocessingContextUpdateRequest {
   context: PreprocessedWorkspaceContext
 }
 
+export interface PreprocessingSummaryRequest {
+  message: string
+  systemPrompt?: string
+}
+
+export interface PreprocessingSummaryResponse {
+  text: string
+}
+
+export interface PreprocessingEmbeddingRequest {
+  modelId?: string
+  texts: {
+    id: string
+    text: string
+    textHash: string
+  }[]
+}
+
+export interface PreprocessingEmbeddingResponse {
+  embeddings: {
+    symbolId: string
+    modelId: string
+    dimensions: number
+    textHash: string
+    values: number[]
+    generatedAt: string
+  }[]
+}
+
 export interface DraftMutationResponse {
   ok: true
   draftId: string

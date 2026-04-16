@@ -173,9 +173,9 @@ export function createVisualizerStore(
         const canMultiSelect =
           additive &&
           snapshot !== null &&
-          isMultiSelectableNode(snapshot, nodeId) &&
+          isMultiSelectableNode(snapshot, nodeId, state.viewMode) &&
           state.selection.nodeIds.every((selectedNodeId) =>
-            isMultiSelectableNode(snapshot, selectedNodeId),
+            isMultiSelectableNode(snapshot, selectedNodeId, state.viewMode),
           )
 
         if (canMultiSelect) {
@@ -300,14 +300,14 @@ function getNextSelectedNodeIds(
   }
 
   const nextNodeIds = selection.nodeIds.filter((nodeId) =>
-    isMultiSelectableNode(snapshot, nodeId),
+    isMultiSelectableNode(snapshot, nodeId, viewMode),
   )
 
   if (nextNodeIds.length > 0) {
     return nextNodeIds
   }
 
-  return nextNodeId && isMultiSelectableNode(snapshot, nextNodeId) ? [nextNodeId] : []
+  return nextNodeId && isMultiSelectableNode(snapshot, nextNodeId, viewMode) ? [nextNodeId] : []
 }
 
 function getFirstFileNodeId(snapshot: ProjectSnapshot) {
@@ -334,9 +334,17 @@ function snapshotOrNull(state: VisualizerStore) {
   return state.snapshot
 }
 
-function isMultiSelectableNode(snapshot: ProjectSnapshot, nodeId: string) {
+function isMultiSelectableNode(
+  snapshot: ProjectSnapshot,
+  nodeId: string,
+  viewMode: VisualizerViewMode,
+) {
   const node = snapshot.nodes[nodeId]
-  return Boolean(node && isFileNode(node))
+  if (!node) {
+    return false
+  }
+
+  return viewMode === 'symbols' ? isSymbolNode(node) : isFileNode(node)
 }
 
 function findFirstFileNodeId(

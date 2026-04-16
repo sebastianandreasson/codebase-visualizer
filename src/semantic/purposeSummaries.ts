@@ -10,6 +10,12 @@ import {
 } from './symbolText'
 import type { SemanticPurposeSummaryRecord } from './types'
 
+export interface SemanticPurposeSummaryModelOutput {
+  domainHints?: string[]
+  sideEffects?: string[]
+  summary: string
+}
+
 const MAX_COMMENT_LINES = 6
 
 const VERB_PHRASE_BY_PREFIX: Record<string, string> = {
@@ -74,6 +80,7 @@ export function buildSemanticPurposeSummaryRecord(
     path: symbol.path,
     language: symbol.language,
     symbolKind: symbol.symbolKind,
+    generator: 'heuristic',
     summary,
     domainHints,
     sideEffects,
@@ -93,11 +100,80 @@ export function buildSemanticPurposeSummaryPrompt(
     'Summarize the semantic purpose of this code symbol for embedding-based clustering.',
     'Focus on what it does, what role it plays, and what side effects or data domains it touches.',
     'Avoid repeating exact code unless necessary.',
-    'Return JSON with this shape:',
+    'Return JSON only with this exact shape:',
     '{"summary":"...","domainHints":["..."],"sideEffects":["..."]}',
+    'Keep "summary" to one or two compact sentences.',
+    'Use short domain hint labels and side effect labels.',
     '',
     sourceText,
   ].join('\n')
+}
+
+export function buildSemanticPurposeSummaryRecordFromModelOutput(
+  snapshot: ProjectSnapshot,
+  symbol: SymbolNode,
+  output: SemanticPurposeSummaryModelOutput,
+  generatedAt: string = new Date().toISOString(),
+): SemanticPurposeSummaryRecord {
+  const sourceTextRecord = buildSemanticSymbolTextRecord(snapshot, symbol, generatedAt)
+  const summary = output.summary.trim()
+  const domainHints = uniqueStrings(output.domainHints ?? []).slice(0, 8)
+  const sideEffects = uniqueStrings(output.sideEffects ?? []).slice(0, 8)
+  const embeddingText = buildPurposeEmbeddingText({
+    summary,
+    domainHints,
+    sideEffects,
+    symbol,
+    snapshot,
+  })
+
+  return {
+    symbolId: symbol.id,
+    fileId: symbol.fileId,
+    path: symbol.path,
+    language: symbol.language,
+    symbolKind: symbol.symbolKind,
+    generator: 'llm',
+    summary,
+    domainHints,
+    sideEffects,
+    embeddingText,
+    sourceHash: sourceTextRecord.textHash,
+    generatedAt,
+  }
+}
+
+export function parseSemanticPurposeSummaryResponse(
+  text: string,
+): SemanticPurposeSummaryModelOutput {
+  const normalizedText = extractJsonObject(stripCodeFence(text.trim()))
+  const parsed = JSON.parse(normalizedText) as Partial<SemanticPurposeSummaryModelOutput>
+  const summary = parsed.summary?.trim()
+
+  if (!summary) {
+    throw new Error('The preprocessing response did not include a summary.')
+  }
+
+  return {
+    summary,
+    domainHints: Array.isArray(parsed.domainHints)
+      ? parsed.domainHints.filter((value): value is string => typeof value === 'string')
+      : [],
+    sideEffects: Array.isArray(parsed.sideEffects)
+      ? parsed.sideEffects.filter((value): value is string => typeof value === 'string')
+      : [],
+  }
+}
+
+function extractJsonObject(text: string) {
+  const startIndex = text.indexOf('{')
+  const endIndex = text.lastIndexOf('}')
+
+  if (startIndex >= 0 && endIndex > startIndex) {
+    return text.slice(startIndex, endIndex + 1)
+  }
+
+  return text
 }
 
 function deriveHeuristicPurposeSummary(
@@ -293,6 +369,17 @@ function buildContextPhrase(snapshot: ProjectSnapshot, symbol: SymbolNode) {
 
 function uniqueStrings(values: string[]) {
   return Array.from(new Set(values.filter(Boolean)))
+}
+
+function stripCodeFence(value: string) {
+  if (!value.startsWith('```')) {
+    return value
+  }
+
+  return value
+    .replace(/^```(?:json)?\s*/i, '')
+    .replace(/\s*```$/, '')
+    .trim()
 }
 
 function compareSymbolsForPurpose(left: SymbolNode, right: SymbolNode) {
