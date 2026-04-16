@@ -54,6 +54,7 @@ interface CodebaseVisualizerProps {
   snapshot?: CodebaseSnapshot | null
   onAcceptDraft?: (draftId: string) => Promise<void>
   onAgentRunSettled?: () => Promise<void>
+  onBuildSemanticEmbeddings?: () => void
   onRejectDraft?: (draftId: string) => Promise<void>
   onSuggestLayout?: (brief: string) => Promise<void>
   onStartPreprocessing?: () => void
@@ -158,6 +159,7 @@ export function CodebaseVisualizer({
   snapshot,
   onAcceptDraft,
   onAgentRunSettled,
+  onBuildSemanticEmbeddings,
   onRejectDraft,
   onSuggestLayout,
   onStartPreprocessing,
@@ -609,6 +611,28 @@ export function CodebaseVisualizer({
                     </button>
                     <span className="cbv-preprocessing-help">
                       Uses the agent to generate purpose summaries for semantic indexing.
+                    </span>
+                  </div>
+                ) : null}
+                {onBuildSemanticEmbeddings ? (
+                  <div className="cbv-preprocessing-actions">
+                    <button
+                      className="cbv-preprocessing-action is-secondary"
+                      disabled={
+                        preprocessingStatus.runState === 'building' ||
+                        preprocessingStatus.purposeSummaryCount === 0
+                      }
+                      onClick={(event) => {
+                        event.preventDefault()
+                        event.stopPropagation()
+                        onBuildSemanticEmbeddings()
+                      }}
+                      type="button"
+                    >
+                      {formatEmbeddingActionLabel(preprocessingStatus)}
+                    </button>
+                    <span className="cbv-preprocessing-help">
+                      Builds local semantic embeddings from cached summaries without rerunning the agent.
                     </span>
                   </div>
                 ) : null}
@@ -1098,13 +1122,19 @@ function getWorkspaceName(rootDir: string) {
 function formatPreprocessingStatusLabel(status: PreprocessingStatus) {
   switch (status.runState) {
     case 'building':
-      return `Building context… ${status.processedSymbols}/${status.totalSymbols || 0}`
+      return status.activity === 'embeddings'
+        ? `Building embeddings… ${status.processedSymbols}/${status.totalSymbols || 0}`
+        : `Building context… ${status.processedSymbols}/${status.totalSymbols || 0}`
     case 'stale':
-      return `Refreshing context… ${status.processedSymbols}/${status.totalSymbols || 0}`
+      return status.activity === 'embeddings'
+        ? `Refreshing embeddings… ${status.processedSymbols}/${status.totalSymbols || 0}`
+        : `Refreshing context… ${status.processedSymbols}/${status.totalSymbols || 0}`
     case 'ready':
-      return `Context ready · ${status.purposeSummaryCount} summaries`
+      return status.semanticEmbeddingCount > 0
+        ? `Context ready · ${status.purposeSummaryCount} summaries · ${status.semanticEmbeddingCount} embeddings`
+        : `Context ready · ${status.purposeSummaryCount} summaries`
     case 'error':
-      return 'Context build failed'
+      return status.activity === 'embeddings' ? 'Embedding build failed' : 'Context build failed'
     default:
       return `Context not built · ${status.totalSymbols || 0} symbols`
   }
@@ -1121,6 +1151,25 @@ function formatPreprocessingActionLabel(status: PreprocessingStatus) {
       return 'Retry Build With Agent'
     default:
       return 'Build With Agent'
+  }
+}
+
+function formatEmbeddingActionLabel(status: PreprocessingStatus) {
+  switch (status.runState) {
+    case 'building':
+      return status.activity === 'embeddings'
+        ? 'Building Embeddings…'
+        : 'Build Embeddings'
+    case 'error':
+      return status.activity === 'embeddings'
+        ? 'Retry Embeddings'
+        : status.semanticEmbeddingCount > 0
+          ? 'Rebuild Embeddings'
+          : 'Build Embeddings'
+    default:
+      return status.semanticEmbeddingCount > 0
+        ? 'Rebuild Embeddings'
+        : 'Build Embeddings'
   }
 }
 

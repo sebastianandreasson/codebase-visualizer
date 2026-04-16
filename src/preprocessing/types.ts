@@ -35,9 +35,11 @@ export interface PreprocessedWorkspaceContext {
 }
 
 export interface PreprocessingStatus {
+  activity: 'embeddings' | 'summaries' | null
   runState: PreprocessingRunState
   updatedAt: string | null
   purposeSummaryCount: number
+  semanticEmbeddingCount: number
   lastError: string | null
   processedSymbols: number
   snapshotId: string | null

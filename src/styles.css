@@ -138,6 +138,11 @@
   cursor: pointer;
 }
 
+.cbv-preprocessing-action.is-secondary {
+  background: #f7f1e5;
+  color: #2b251f;
+}
+
 .cbv-preprocessing-action:disabled {
   opacity: 0.7;
   cursor: wait;

@@ -9,6 +9,7 @@ import { embedTextsWithTfidf } from './embeddings/tfidfEmbeddingProvider'
 import { buildSemanticPurposeSummaryRecords } from './purposeSummaries'
 import { projectSemanticEmbeddings } from './projection/umap'
 import { refineSemanticLayout } from './projection/refinement'
+import { hashSemanticText } from './symbolText'
 import type {
   SemanticEmbeddingVectorRecord,
   SemanticPurposeSummaryRecord,
@@ -132,8 +133,9 @@ function buildSemanticEmbeddingRecords(
 
   return purposeSummaries.map((record) => {
     const cachedEmbedding = cachedEmbeddingsBySymbolId.get(record.symbolId)
+    const embeddingTextHash = hashSemanticText(record.embeddingText)
 
-    if (cachedEmbedding && cachedEmbedding.textHash === record.sourceHash) {
+    if (cachedEmbedding && cachedEmbedding.textHash === embeddingTextHash) {
       return cachedEmbedding
     }
 
@@ -141,7 +143,7 @@ function buildSemanticEmbeddingRecords(
       symbolId: record.symbolId,
       modelId: 'local-purpose-tfidf-v1',
       dimensions: embeddings[record.symbolId]?.length ?? 0,
-      textHash: record.sourceHash,
+      textHash: embeddingTextHash,
       values: embeddings[record.symbolId] ?? [],
       generatedAt: record.generatedAt,
     }
