@@ -57,6 +57,7 @@ import { CodebaseAnnotationNode } from './CodebaseAnnotationNode'
 import { CodebaseCanvasNode } from './CodebaseCanvasNode'
 import { CodebaseSymbolNode } from './CodebaseSymbolNode'
 import { getInspectorHeaderSummary } from './inspector/inspectorUtils'
+import { SemanticodeErrorBoundary } from './SemanticodeErrorBoundary'
 import type { ThemeMode } from './settings/GeneralSettingsPanel'
 import { ProjectsSidebar } from './shell/ProjectsSidebar'
 import { WorkspaceSyncModal } from './shell/WorkspaceSyncModal'
@@ -218,7 +219,7 @@ const LAYOUT_GROUP_PADDING_TOP = 112
 const LAYOUT_GROUP_PADDING_BOTTOM = 44
 const SEMANTIC_SEARCH_RESULT_LIMIT = 24
 const SEMANTIC_SEARCH_MIN_QUERY_LENGTH = 2
-const SEMANTIC_SEARCH_MIN_LIMIT = 5
+const SEMANTIC_SEARCH_MIN_LIMIT = 1
 const SEMANTIC_SEARCH_MAX_LIMIT = 60
 const SEMANTIC_SEARCH_DEFAULT_STRICTNESS = 35
 type SemanticSearchMode = 'symbols' | 'groups'
@@ -918,7 +919,11 @@ export function Semanticode({
 
       for (const match of semanticSearchMatches) {
         if (semanticSearchMode === 'groups') {
-          const groupMatch = match as GroupPrototypeSearchMatch
+          const groupMatch = match as Partial<GroupPrototypeSearchMatch>
+
+          if (!groupMatch.groupId || !Array.isArray(groupMatch.memberNodeIds)) {
+            continue
+          }
 
           nodeIds.add(getLayoutGroupNodeId(groupMatch.groupId))
           for (const nodeId of groupMatch.memberNodeIds) {
@@ -934,6 +939,12 @@ export function Semanticode({
     },
     [semanticSearchMatches, semanticSearchMode],
   )
+  const handleSemanticSearchModeChange = useCallback((mode: SemanticSearchMode) => {
+    setSemanticSearchMode(mode)
+    setSemanticSearchRankedMatches([])
+    setSemanticSearchError(null)
+    setSemanticSearchPending(false)
+  }, [])
   const semanticSearchHighlightActive =
     semanticSearchAvailable &&
     semanticSearchQuery.trim().length >= SEMANTIC_SEARCH_MIN_QUERY_LENGTH &&
@@ -1855,7 +1866,15 @@ export function Semanticode({
   }
 
   return (
-    <ReactFlowProvider>
+    <SemanticodeErrorBoundary
+      resetKey={[
+        effectiveSnapshot.rootDir,
+        activeLayoutId ?? 'no-layout',
+        activeDraftId ?? 'no-draft',
+        semanticSearchMode,
+      ].join('::')}
+    >
+      <ReactFlowProvider>
       <div
         className={`cbv-app-shell${canManageProjects ? ' is-desktop-host' : ''}${projectsSidebarOpen ? ' is-projects-open' : ''}`}
       >
@@ -1974,7 +1993,7 @@ export function Semanticode({
                 setSemanticSearchPending(false)
               }}
               onSemanticSearchLimitChange={setSemanticSearchMatchLimit}
-              onSemanticSearchModeChange={setSemanticSearchMode}
+              onSemanticSearchModeChange={handleSemanticSearchModeChange}
               onSemanticSearchStrictnessChange={setSemanticSearchStrictness}
               onToggleLayer={toggleGraphLayer}
               semanticSearchAvailable={semanticSearchAvailable}
@@ -2096,7 +2115,8 @@ export function Semanticode({
         />
       </section>
       </div>
-    </ReactFlowProvider>
+      </ReactFlowProvider>
+    </SemanticodeErrorBoundary>
   )
 }
 
