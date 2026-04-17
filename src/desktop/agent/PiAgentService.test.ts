@@ -4,6 +4,7 @@ import { PassThrough } from 'node:stream'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const spawnMock = vi.fn()
+const execFileMock = vi.fn()
 const mkdirMock = vi.fn()
 const readFileMock = vi.fn()
 
@@ -15,8 +16,10 @@ vi.mock('electron', () => ({
 
 vi.mock('node:child_process', () => ({
   default: {
+    execFile: execFileMock,
     spawn: spawnMock,
   },
+  execFile: execFileMock,
   spawn: spawnMock,
 }))
 
@@ -127,8 +130,13 @@ describe('PiAgentService brokered oauth integration', () => {
   beforeEach(() => {
     vi.resetModules()
     spawnMock.mockReset()
+    execFileMock.mockReset()
     mkdirMock.mockReset()
     readFileMock.mockReset()
+    execFileMock.mockImplementation((_file, _args, callback) => {
+      callback?.(new Error('rust-analyzer unavailable in test environment'), '', '')
+      return undefined as never
+    })
     mkdirMock.mockResolvedValue(undefined)
     readFileMock.mockResolvedValue('{}')
   })

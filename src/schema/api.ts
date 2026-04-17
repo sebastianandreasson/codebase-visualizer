@@ -8,6 +8,13 @@ import type { GroupPrototypeCacheSnapshot } from '../semantic/types'
 import type { GraphEdge, ProjectSnapshot } from './snapshot'
 import type { LayoutSpec } from './layout'
 import type {
+  AutonomousRunDetail,
+  AutonomousRunScope,
+  AutonomousRunStartRequest,
+  AutonomousRunSummary,
+  AutonomousRunTimelinePoint,
+} from './autonomous'
+import type {
   AgentBrokerSessionSummary,
   AgentMessage,
   AgentSessionSummary,
@@ -15,6 +22,14 @@ import type {
   AgentSettingsState,
 } from './agent'
 import type { UiPreferences } from './store'
+import type {
+  AgentHeatSample,
+  TelemetryActivityEvent,
+  TelemetryMode,
+  TelemetryOverview,
+  TelemetrySource,
+  TelemetryWindow,
+} from './telemetry'
 
 export type AnalysisState = 'idle' | 'loading' | 'ready' | 'error'
 
@@ -79,6 +94,7 @@ export interface PreprocessingContextUpdateRequest {
 
 export interface PreprocessingSummaryRequest {
   message: string
+  metadata?: AgentPromptRequest['metadata']
   systemPrompt?: string
 }
 
@@ -134,6 +150,12 @@ export interface AgentStateResponse {
 
 export interface AgentPromptRequest {
   message: string
+  metadata?: {
+    kind?: string
+    paths?: string[]
+    scope?: AutonomousRunScope | null
+    task?: string
+  }
 }
 
 export interface AgentSettingsResponse {
@@ -166,3 +188,49 @@ export interface AgentBrokerCallbackResult {
   message: string
   ok: boolean
 }
+
+export interface AutonomousRunsResponse {
+  activeRunId: string | null
+  detectedTaskFile: string | null
+  runs: AutonomousRunSummary[]
+}
+
+export interface AutonomousRunStartResponse {
+  activeRunId: string | null
+  detectedTaskFile: string | null
+  run: AutonomousRunDetail
+}
+
+export interface AutonomousRunDetailResponse {
+  run: AutonomousRunDetail | null
+}
+
+export interface AutonomousRunTimelineResponse {
+  timeline: AutonomousRunTimelinePoint[]
+}
+
+export interface AutonomousRunStopResponse {
+  ok: boolean
+  runId: string | null
+}
+
+export interface TelemetryOverviewResponse {
+  overview: TelemetryOverview
+}
+
+export interface TelemetryHeatmapRequest {
+  mode?: TelemetryMode
+  runId?: string
+  source?: TelemetrySource
+  window?: TelemetryWindow
+}
+
+export interface TelemetryHeatmapResponse {
+  samples: AgentHeatSample[]
+}
+
+export interface TelemetryActivityResponse {
+  events: TelemetryActivityEvent[]
+}
+
+export type AutonomousRunStartPayload = AutonomousRunStartRequest

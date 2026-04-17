@@ -56,6 +56,10 @@ export function useLayoutDraftController(
     try {
       await postAgentMessage(
         buildLayoutSuggestionPrompt(input.rootDir, trimmedBrief),
+        {
+          kind: 'layout_suggestion',
+          task: trimmedBrief,
+        },
       )
 
       const nextDraft = await waitForSuggestedLayoutDraft({

@@ -5,7 +5,11 @@ import { fileURLToPath } from 'node:url'
 
 import { ensureAgentInstructions } from '../cli/agentInstructions'
 import { handleSemanticodeRequest } from '../node/http'
-import type { AgentRuntimeRequestBridge } from '../node/http'
+import type {
+  AgentRuntimeRequestBridge,
+  AutonomousRunRequestBridge,
+  TelemetryRequestBridge,
+} from '../node/http'
 import type { UiPreferencesResponse } from '../schema/api'
 import type { UiPreferences } from '../schema/store'
 
@@ -18,6 +22,7 @@ const DARK_THEME_BACKGROUND = '#171a1f'
 
 export interface StartStandaloneServerOptions {
   agentRuntime?: AgentRuntimeRequestBridge
+  autonomousRunRuntime?: AutonomousRunRequestBridge
   getWorkspaceHistory?: () => Promise<{
     activeWorkspaceRootDir: string | null
     recentWorkspaces: {
@@ -28,6 +33,7 @@ export interface StartStandaloneServerOptions {
   }>
   getUiPreferences?: () => Promise<UiPreferencesResponse>
   setUiPreferences?: (preferences: UiPreferences) => Promise<UiPreferencesResponse>
+  telemetryRuntime?: TelemetryRequestBridge
   rootDir: string
   host?: string
   port?: number
@@ -58,9 +64,11 @@ export async function startStandaloneServer(
   const server = createServer(async (request, response) => {
     const handled = await handleSemanticodeRequest(request, response, {
       agentRuntime: options.agentRuntime,
+      autonomousRunRuntime: options.autonomousRunRuntime,
       rootDir,
       getUiPreferences: options.getUiPreferences,
       setUiPreferences: options.setUiPreferences,
+      telemetryRuntime: options.telemetryRuntime,
       getWorkspaceHistory: options.getWorkspaceHistory,
       analyzeCalls: true,
       analyzeImports: true,

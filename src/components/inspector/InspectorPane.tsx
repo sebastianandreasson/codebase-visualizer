@@ -70,6 +70,14 @@ interface InspectorPaneProps {
     symbol: SymbolNode
   }[]
   selectedLayoutGroupPrototype: GroupPrototypeRecord | null
+  selectedNodeTelemetry: {
+    confidence: 'exact' | 'attributed' | 'fallback'
+    lastSeenAt: string | null
+    requestCount: number
+    source: 'interactive' | 'autonomous' | 'all'
+    toolNames: string[]
+    totalTokens: number
+  } | null
   selectedNode: ProjectNode | null
   selectedSymbol: SymbolNode | null
   selectedSymbols: SymbolNode[]
@@ -103,6 +111,7 @@ export function InspectorPane({
   selectedLayoutGroup,
   selectedLayoutGroupNearbySymbols,
   selectedLayoutGroupPrototype,
+  selectedNodeTelemetry,
   selectedNode,
   selectedSymbol,
   selectedSymbols,
@@ -242,8 +251,50 @@ export function InspectorPane({
             <p>Select a node on the canvas to inspect its contents.</p>
           </div>
         )}
+        {selectedNodeTelemetry ? (
+          <TelemetrySummaryCard telemetry={selectedNodeTelemetry} />
+        ) : null}
       </div>
     </aside>
+  )
+}
+
+function TelemetrySummaryCard({
+  telemetry,
+}: {
+  telemetry: {
+    confidence: 'exact' | 'attributed' | 'fallback'
+    lastSeenAt: string | null
+    requestCount: number
+    source: 'interactive' | 'autonomous' | 'all'
+    toolNames: string[]
+    totalTokens: number
+  }
+}) {
+  return (
+    <section className="cbv-telemetry-summary">
+      <p className="cbv-eyebrow">Recent agent activity</p>
+      <div className="cbv-telemetry-summary-row">
+        <strong>{telemetry.requestCount} requests</strong>
+        <span>{Math.round(telemetry.totalTokens)} tokens</span>
+      </div>
+      <p>
+        {telemetry.source === 'all' ? 'Interactive + autonomous' : telemetry.source}{' '}
+        · {telemetry.confidence}
+        {telemetry.lastSeenAt
+          ? ` · ${new Date(telemetry.lastSeenAt).toLocaleTimeString()}`
+          : ''}
+      </p>
+      {telemetry.toolNames.length > 0 ? (
+        <div className="cbv-purpose-summary-tags">
+          {telemetry.toolNames.map((toolName) => (
+            <span className="cbv-purpose-summary-tag" key={toolName}>
+              {toolName}
+            </span>
+          ))}
+        </div>
+      ) : null}
+    </section>
   )
 }
 

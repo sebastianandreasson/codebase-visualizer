@@ -5,6 +5,8 @@ import { fileURLToPath } from 'node:url'
 
 import { PiAgentService } from './agent/PiAgentService'
 import { startStandaloneServer, type StandaloneServerHandle } from '../hosts/standaloneServer'
+import { AutonomousRunService } from '../node/autonomousRunService'
+import { AgentTelemetryService } from '../node/telemetryService'
 import {
   createEmptyWorkspaceHistoryState,
   loadWorkspaceHistoryState,
@@ -23,8 +25,14 @@ let serverHandle: StandaloneServerHandle | null = null
 let activeWorkspaceRootDir: string | null = null
 let workspaceHistoryState: WorkspaceHistoryState = createEmptyWorkspaceHistoryState()
 let uiPreferencesState: UiPreferences = {}
+const agentTelemetryService = new AgentTelemetryService()
 const piAgentService = new PiAgentService({
   openExternal: (url) => shell.openExternal(url),
+  telemetryService: agentTelemetryService,
+})
+const autonomousRunService = new AutonomousRunService({
+  logger: console,
+  telemetryService: agentTelemetryService,
 })
 
 void app.whenReady().then(async () => {
@@ -100,15 +108,38 @@ void app.whenReady().then(async () => {
     return piAgentService.ensureWorkspaceSession(activeWorkspaceRootDir)
   })
 
-  ipcMain.handle('semanticode:agent:send-message', async (_event, message: string) => {
+  ipcMain.handle(
+    'semanticode:agent:send-message',
+    async (
+      _event,
+      payload:
+        | string
+        | {
+            message: string
+            metadata?: {
+              kind?: string
+              paths?: string[]
+              scope?: {
+                layoutTitle?: string
+                paths: string[]
+                symbolPaths?: string[]
+                title?: string
+              } | null
+              task?: string
+            }
+          },
+    ) => {
     if (!activeWorkspaceRootDir) {
       return false
     }
 
+    const message = typeof payload === 'string' ? payload : payload.message
+    const metadata = typeof payload === 'string' ? undefined : payload.metadata
+
     console.info(
       `[semanticode][agent] IPC send-message received for ${activeWorkspaceRootDir}.`,
     )
-    void piAgentService.promptWorkspaceSession(activeWorkspaceRootDir, message).catch((error) => {
+    void piAgentService.promptWorkspaceSession(activeWorkspaceRootDir, message, metadata).catch((error) => {
       console.error(
         '[semanticode][agent] Background prompt failed:',
         error instanceof Error ? error.message : error,
@@ -315,6 +346,7 @@ async function openWorkspace(window: BrowserWindow, workspaceRootDir: string) {
   activeWorkspaceRootDir = normalizedWorkspaceRootDir
   serverHandle = await startStandaloneServer({
     agentRuntime: piAgentService,
+    autonomousRunRuntime: autonomousRunService,
     getUiPreferences: async () => ({
       preferences: uiPreferencesState,
     }),
@@ -332,6 +364,7 @@ async function openWorkspace(window: BrowserWindow, workspaceRootDir: string) {
       activeWorkspaceRootDir,
       recentWorkspaces: workspaceHistoryState.recentWorkspaces,
     }),
+    telemetryRuntime: agentTelemetryService,
     rootDir: normalizedWorkspaceRootDir,
     host: '127.0.0.1',
     port: 0,

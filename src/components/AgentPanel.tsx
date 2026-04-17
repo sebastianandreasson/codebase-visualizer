@@ -273,11 +273,13 @@ export function AgentPanel({
       return
     }
 
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setModelValue(availableModels[0]?.id ?? '')
   }, [authModeValue, modelValue, providerValue, settings])
 
   useEffect(() => {
     if (authModeValue === 'brokered_oauth' && providerValue && providerValue !== 'openai') {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setProviderValue('openai')
     }
   }, [authModeValue, providerValue])
@@ -302,13 +304,20 @@ export function AgentPanel({
       setErrorMessage(null)
       await persistSettingsDraftIfNeeded()
       const ok = await agentClient.sendMessage(
-        buildWorkspaceScopedPrompt(
-          nextPrompt,
-          workspaceProfile,
-          preprocessedWorkspaceContext,
-          workingSetContext,
-          inspectorContext,
-        ),
+        {
+          message: buildWorkspaceScopedPrompt(
+            nextPrompt,
+            workspaceProfile,
+            preprocessedWorkspaceContext,
+            workingSetContext,
+            inspectorContext,
+          ),
+          metadata: buildAgentPromptMetadata(
+            nextPrompt,
+            workingSetContext,
+            inspectorContext,
+          ),
+        },
       )
 
       if (!ok) {
@@ -1245,6 +1254,27 @@ function buildWorkspaceScopedPrompt(
   ].join('\n')
 }
 
+function buildAgentPromptMetadata(
+  prompt: string,
+  workingSetContext: AgentScopeContext | null | undefined,
+  inspectorContext: AgentScopeContext | null | undefined,
+) {
+  const workingSetScope = hasScopeContext(workingSetContext)
+    ? buildScopeMetadata(workingSetContext)
+    : null
+  const inspectorPaths = hasScopeContext(inspectorContext)
+    ? getScopePaths(inspectorContext)
+    : []
+  const workingSetPaths = workingSetScope?.paths ?? []
+
+  return {
+    kind: 'workspace_chat',
+    paths: [...new Set([...workingSetPaths, ...inspectorPaths])],
+    scope: workingSetScope,
+    task: prompt.trim().replace(/\s+/g, ' ').slice(0, 160),
+  }
+}
+
 function buildScopeAwarePrompt(
   prompt: string,
   workingSetContext: AgentScopeContext | null | undefined,
@@ -1490,6 +1520,56 @@ function buildScopeContextLines(context: AgentScopeContext) {
   }
 
   return contextLines
+}
+
+function buildScopeMetadata(context: AgentScopeContext) {
+  const paths = getScopePaths(context)
+
+  if (paths.length === 0) {
+    return null
+  }
+
+  return {
+    paths,
+    symbolPaths: getScopeSymbolPaths(context),
+    title: describeScopeContextTitle(context),
+  }
+}
+
+function getScopePaths(context: AgentScopeContext) {
+  const paths = new Set<string>()
+
+  if (context.file) {
+    paths.add(context.file.path)
+  }
+
+  for (const file of context.files) {
+    paths.add(file.path)
+  }
+
+  if (context.symbol) {
+    const ownerFile = context.files.find((file) => file.id === context.symbol?.fileId)
+
+    if (ownerFile) {
+      paths.add(ownerFile.path)
+    }
+  }
+
+  return [...paths]
+}
+
+function getScopeSymbolPaths(context: AgentScopeContext) {
+  const symbolPaths = new Set<string>()
+
+  if (context.symbol) {
+    symbolPaths.add(context.symbol.path)
+  }
+
+  for (const symbol of context.symbols) {
+    symbolPaths.add(symbol.path)
+  }
+
+  return [...symbolPaths]
 }
 
 function describeScopeContextTitle(context: AgentScopeContext) {

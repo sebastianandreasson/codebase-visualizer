@@ -17,6 +17,7 @@ interface WorkspaceToolbarProps {
   onBuildSemanticEmbeddings?: () => void
   onClearCompareOverlay?: () => void
   onOpenAgentSettings: () => void
+  onOpenRunsPanel?: () => void
   onRejectDraft?: () => void | Promise<void>
   onSelectLayoutValue: (value: string) => void
   onStartPreprocessing?: () => void
@@ -39,6 +40,7 @@ interface WorkspaceToolbarProps {
   } | null
   onOpenWorkspaceSync?: () => void
   projectsSidebarOpen: boolean
+  runsActive?: boolean
   selectedLayoutValue: string
   showCompareAction: boolean
   workingSetSummary?: {
@@ -60,6 +62,7 @@ export function WorkspaceToolbar({
   onBuildSemanticEmbeddings,
   onClearCompareOverlay,
   onOpenAgentSettings,
+  onOpenRunsPanel,
   onOpenWorkspaceSync,
   onRejectDraft,
   onSelectLayoutValue,
@@ -67,6 +70,7 @@ export function WorkspaceToolbar({
   onToggleProjectsSidebar,
   preprocessingStatus = null,
   projectsSidebarOpen,
+  runsActive = false,
   selectedLayoutValue,
   showCompareAction,
   workingSetSummary = null,
@@ -244,6 +248,15 @@ export function WorkspaceToolbar({
             type="button"
           >
             {projectsSidebarOpen ? 'Hide Folders' : 'Folders'}
+          </button>
+        ) : null}
+        {onOpenRunsPanel ? (
+          <button
+            className={`cbv-toolbar-button is-secondary${runsActive ? ' is-active' : ''}`}
+            onClick={onOpenRunsPanel}
+            type="button"
+          >
+            Runs
           </button>
         ) : null}
         <button

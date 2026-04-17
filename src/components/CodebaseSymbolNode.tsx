@@ -1,4 +1,4 @@
-import { memo } from 'react'
+import { memo, type CSSProperties } from 'react'
 
 import { Handle, Position, type NodeProps } from '@xyflow/react'
 
@@ -9,6 +9,8 @@ type CodebaseSymbolNodeData = Record<string, unknown> & {
   kindClass?: string
   tags: string[]
   dimmed: boolean
+  heatPulse?: boolean
+  heatWeight?: number
   highlighted?: boolean
   clusterSize?: number
   sharedCallerCount?: number
@@ -35,9 +37,18 @@ export const CodebaseSymbolNode = memo(function CodebaseSymbolNode({
         selected ? 'is-selected' : '',
         nodeData.dimmed ? 'is-dimmed' : '',
         nodeData.highlighted ? 'is-compare-highlighted' : '',
+        (nodeData.heatWeight ?? 0) > 0 ? 'has-agent-heat' : '',
+        nodeData.heatPulse ? 'is-agent-heat-pulse' : '',
       ]
         .filter(Boolean)
         .join(' ')}
+      style={
+        (nodeData.heatWeight ?? 0) > 0
+          ? ({
+              '--cbv-agent-heat-strength': `${Math.max(0.18, Math.min(0.92, nodeData.heatWeight ?? 0))}`,
+            } as CSSProperties)
+          : undefined
+      }
     >
       <Handle
         className="cbv-node-handle"

@@ -20,8 +20,24 @@ contextBridge.exposeInMainWorld('semanticodeDesktop', {
     ipcRenderer.invoke('semanticode:open-workspace-root-dir', rootDir),
   closeWorkspace: () => ipcRenderer.invoke('semanticode:close-workspace'),
   createSession: () => ipcRenderer.invoke('semanticode:agent:create-session'),
-  sendMessage: (message: string) =>
-    ipcRenderer.invoke('semanticode:agent:send-message', message),
+  sendMessage: (
+    payload:
+      | string
+      | {
+          message: string
+          metadata?: {
+            kind?: string
+            paths?: string[]
+            scope?: {
+              layoutTitle?: string
+              paths: string[]
+              symbolPaths?: string[]
+              title?: string
+            } | null
+            task?: string
+          }
+        },
+  ) => ipcRenderer.invoke('semanticode:agent:send-message', payload),
   cancel: () => ipcRenderer.invoke('semanticode:agent:cancel'),
   onEvent: (listener: (event: AgentEvent) => void) => {
     const wrappedListener = (_event: Electron.IpcRendererEvent, payload: AgentEvent) => {

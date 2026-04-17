@@ -1,5 +1,12 @@
 import type {
   AgentStateResponse,
+  AgentPromptRequest,
+  AutonomousRunDetailResponse,
+  AutonomousRunStartPayload,
+  AutonomousRunStartResponse,
+  AutonomousRunStopResponse,
+  AutonomousRunTimelineResponse,
+  AutonomousRunsResponse,
   CodebaseSnapshot,
   DraftMutationResponse,
   GroupPrototypeCacheResponse,
@@ -11,6 +18,10 @@ import type {
   PreprocessingSummaryResponse,
   UiPreferences,
   UiPreferencesResponse,
+  TelemetryActivityResponse,
+  TelemetryHeatmapRequest,
+  TelemetryHeatmapResponse,
+  TelemetryOverviewResponse,
   WorkspaceHistoryResponse,
   WorkspaceArtifactSyncStatus,
   WorkspaceSyncStatusResponse,
@@ -19,13 +30,20 @@ import {
   SEMANTICODE_AGENT_MESSAGE_ROUTE,
   SEMANTICODE_AGENT_SESSION_ROUTE,
   buildSemanticodeDraftActionRoute,
+  buildSemanticodeRunRoute,
+  buildSemanticodeRunStopRoute,
+  buildSemanticodeRunTimelineRoute,
   SEMANTICODE_LAYOUTS_ROUTE,
   SEMANTICODE_GROUP_PROTOTYPES_ROUTE,
   SEMANTICODE_PREPROCESSING_EMBEDDINGS_ROUTE,
   SEMANTICODE_PREPROCESSING_ROUTE,
   SEMANTICODE_PREPROCESSING_SUMMARY_ROUTE,
+  SEMANTICODE_RUNS_ROUTE,
   SEMANTICODE_ROUTE,
   SEMANTICODE_SYNC_ROUTE,
+  SEMANTICODE_TELEMETRY_ACTIVITY_ROUTE,
+  SEMANTICODE_TELEMETRY_HEATMAP_ROUTE,
+  SEMANTICODE_TELEMETRY_OVERVIEW_ROUTE,
   SEMANTICODE_UI_PREFERENCES_ROUTE,
   SEMANTICODE_WORKSPACE_HISTORY_ROUTE,
 } from '../shared/constants'
@@ -76,13 +94,16 @@ export async function fetchLayoutState() {
   return (await response.json()) as LayoutStateResponse
 }
 
-export async function postAgentMessage(message: string) {
+export async function postAgentMessage(
+  message: string,
+  metadata?: AgentPromptRequest['metadata'],
+) {
   const response = await fetch(SEMANTICODE_AGENT_MESSAGE_ROUTE, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({ message }),
+    body: JSON.stringify({ message, metadata } satisfies AgentPromptRequest),
   })
 
   if (!response.ok) {
@@ -256,13 +277,16 @@ export async function persistGroupPrototypeCache(
   return payload.cache
 }
 
-export async function requestLLMSemanticSummary(message: string) {
+export async function requestLLMSemanticSummary(
+  message: string,
+  metadata?: AgentPromptRequest['metadata'],
+) {
   const response = await fetch(SEMANTICODE_PREPROCESSING_SUMMARY_ROUTE, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({ message }),
+    body: JSON.stringify({ message, metadata }),
   })
 
   if (!response.ok) {
@@ -274,6 +298,118 @@ export async function requestLLMSemanticSummary(message: string) {
 
   const payload = (await response.json()) as PreprocessingSummaryResponse
   return payload.text
+}
+
+export async function fetchAutonomousRuns() {
+  const response = await fetch(SEMANTICODE_RUNS_ROUTE)
+
+  if (!response.ok) {
+    throw new Error(await getResponseErrorMessage(
+      response,
+      `Autonomous runs request failed with status ${response.status}.`,
+    ))
+  }
+
+  return (await response.json()) as AutonomousRunsResponse
+}
+
+export async function startAutonomousRun(payload: AutonomousRunStartPayload = {}) {
+  const response = await fetch(`${SEMANTICODE_RUNS_ROUTE}/start`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(payload),
+  })
+
+  if (!response.ok) {
+    throw new Error(await getResponseErrorMessage(
+      response,
+      `Starting autonomous run failed with status ${response.status}.`,
+    ))
+  }
+
+  return (await response.json()) as AutonomousRunStartResponse
+}
+
+export async function fetchAutonomousRunDetail(runId: string) {
+  const response = await fetch(buildSemanticodeRunRoute(runId))
+
+  if (!response.ok) {
+    throw new Error(await getResponseErrorMessage(
+      response,
+      `Autonomous run detail request failed with status ${response.status}.`,
+    ))
+  }
+
+  return (await response.json()) as AutonomousRunDetailResponse
+}
+
+export async function fetchAutonomousRunTimeline(runId: string) {
+  const response = await fetch(buildSemanticodeRunTimelineRoute(runId))
+
+  if (!response.ok) {
+    throw new Error(await getResponseErrorMessage(
+      response,
+      `Autonomous run timeline request failed with status ${response.status}.`,
+    ))
+  }
+
+  return (await response.json()) as AutonomousRunTimelineResponse
+}
+
+export async function stopAutonomousRun(runId: string) {
+  const response = await fetch(buildSemanticodeRunStopRoute(runId), {
+    method: 'POST',
+  })
+
+  if (!response.ok) {
+    throw new Error(await getResponseErrorMessage(
+      response,
+      `Stopping autonomous run failed with status ${response.status}.`,
+    ))
+  }
+
+  return (await response.json()) as AutonomousRunStopResponse
+}
+
+export async function fetchTelemetryOverview(query: TelemetryHeatmapRequest = {}) {
+  const response = await fetch(buildTelemetryUrl(SEMANTICODE_TELEMETRY_OVERVIEW_ROUTE, query))
+
+  if (!response.ok) {
+    throw new Error(await getResponseErrorMessage(
+      response,
+      `Telemetry overview request failed with status ${response.status}.`,
+    ))
+  }
+
+  return (await response.json()) as TelemetryOverviewResponse
+}
+
+export async function fetchTelemetryHeatmap(query: TelemetryHeatmapRequest = {}) {
+  const response = await fetch(buildTelemetryUrl(SEMANTICODE_TELEMETRY_HEATMAP_ROUTE, query))
+
+  if (!response.ok) {
+    throw new Error(await getResponseErrorMessage(
+      response,
+      `Telemetry heatmap request failed with status ${response.status}.`,
+    ))
+  }
+
+  return (await response.json()) as TelemetryHeatmapResponse
+}
+
+export async function fetchTelemetryActivity(query: TelemetryHeatmapRequest = {}) {
+  const response = await fetch(buildTelemetryUrl(SEMANTICODE_TELEMETRY_ACTIVITY_ROUTE, query))
+
+  if (!response.ok) {
+    throw new Error(await getResponseErrorMessage(
+      response,
+      `Telemetry activity request failed with status ${response.status}.`,
+    ))
+  }
+
+  return (await response.json()) as TelemetryActivityResponse
 }
 
 export async function requestSemanticEmbeddings(
@@ -320,4 +456,29 @@ async function getResponseErrorMessage(
   }
 
   return fallbackMessage
+}
+
+function buildTelemetryUrl(
+  baseRoute: string,
+  query: TelemetryHeatmapRequest,
+) {
+  const url = new URL(baseRoute, globalThis.location?.origin ?? 'http://127.0.0.1')
+
+  if (query.mode) {
+    url.searchParams.set('mode', query.mode)
+  }
+
+  if (query.runId) {
+    url.searchParams.set('runId', query.runId)
+  }
+
+  if (query.source) {
+    url.searchParams.set('source', String(query.source))
+  }
+
+  if (query.window) {
+    url.searchParams.set('window', String(query.window))
+  }
+
+  return `${url.pathname}${url.search}`
 }

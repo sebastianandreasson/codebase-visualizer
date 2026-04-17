@@ -29,7 +29,24 @@ interface DesktopAgentBridge {
   isDesktop?: boolean
   onEvent?: (listener: (event: AgentEvent) => void) => () => void
   openWorkspaceDialog?: () => Promise<boolean>
-  sendMessage?: (message: string) => Promise<boolean>
+  sendMessage?: (
+    payload:
+      | string
+      | {
+          message: string
+          metadata?: {
+            kind?: string
+            paths?: string[]
+            scope?: {
+              layoutTitle?: string
+              paths: string[]
+              symbolPaths?: string[]
+              title?: string
+            } | null
+            task?: string
+          }
+        },
+  ) => Promise<boolean>
 }
 
 export interface DesktopAgentBridgeInfo {
@@ -99,7 +116,24 @@ export class DesktopAgentClient {
     return state?.session ?? null
   }
 
-  async sendMessage(message: string) {
+  async sendMessage(
+    message:
+      | string
+      | {
+          message: string
+          metadata?: {
+            kind?: string
+            paths?: string[]
+            scope?: {
+              layoutTitle?: string
+              paths: string[]
+              symbolPaths?: string[]
+              title?: string
+            } | null
+            task?: string
+          }
+        },
+  ) {
     const bridge = this.getBridge()
 
     if (bridge?.sendMessage) {
@@ -111,7 +145,11 @@ export class DesktopAgentClient {
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ message }),
+      body: JSON.stringify(
+        typeof message === 'string'
+          ? { message }
+          : message,
+      ),
     })
     return true
   }

@@ -333,6 +333,10 @@ export function usePreprocessingController(
                 parseSemanticPurposeSummaryResponse(
                   await requestLLMSemanticSummary(
                     buildSemanticPurposeSummaryPrompt(nextSnapshot, symbol),
+                    {
+                      kind: 'preprocessing_summary',
+                      task: symbol.path,
+                    },
                   ),
                 ),
                 generatedAt,

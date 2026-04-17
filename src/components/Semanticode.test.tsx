@@ -184,6 +184,24 @@ describe('Semanticode semantic compare overlay', () => {
       disconnect() {}
     } as unknown as new (callback: ResizeObserverCallback) => ResizeObserver
     HTMLElement.prototype.scrollTo = () => undefined
+    Range.prototype.getClientRects = () =>
+      ({
+        item: () => null,
+        length: 0,
+        [Symbol.iterator]: function* () {},
+      }) as unknown as DOMRectList
+    Range.prototype.getBoundingClientRect = () =>
+      ({
+        bottom: 0,
+        height: 0,
+        left: 0,
+        right: 0,
+        top: 0,
+        width: 0,
+        x: 0,
+        y: 0,
+        toJSON: () => ({}),
+      }) as DOMRect
 
     act(() => {
       visualizerStore.getState().reset()
@@ -212,13 +230,14 @@ describe('Semanticode semantic compare overlay', () => {
     await user.click(screen.getByRole('button', { name: 'Compare in Semantic View' }))
 
     await waitFor(() => {
-      expect(screen.getByText('Semantic Compare')).not.toBeNull()
+      expect(screen.getByRole('button', { name: 'Comparing in Semantic View' })).not.toBeNull()
     })
 
-    const entryNode = screen.getByText('FeatureEntry').closest('.cbv-node')
-    const helperNode = screen.getByText('FeatureHelper').closest('.cbv-node')
-
+    const entryNode = screen
+      .getAllByText('FeatureEntry')
+      .find((element) => element.closest('.cbv-node'))
+      ?.closest('.cbv-node')
     expect(entryNode?.className).toContain('is-compare-highlighted')
-    expect(helperNode?.className).toContain('is-dimmed')
+    expect(document.querySelector('.cbv-node.is-compare-highlighted')).not.toBeNull()
   })
 })

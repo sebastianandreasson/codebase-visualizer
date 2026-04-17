@@ -195,6 +195,7 @@ export async function handlePreprocessingRoute(
       text: await options.agentRuntime.runOneOffPrompt(options.rootDir, {
         message: payload.message,
         systemPrompt: payload.systemPrompt,
+        telemetry: payload.metadata,
       }),
     }
 

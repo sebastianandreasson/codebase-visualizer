@@ -3,9 +3,19 @@ import type {
   AgentBrokerLoginStartResponse,
   AgentBrokerSessionResponse,
   AgentCodexImportResponse,
+  AutonomousRunDetail,
+  AutonomousRunScope,
+  AutonomousRunSummary,
+  AutonomousRunTimelinePoint,
   AgentSettingsResponse,
   AgentSettingsUpdateRequest,
   AgentStateResponse,
+  AgentHeatSample,
+  TelemetryActivityEvent,
+  TelemetryMode,
+  TelemetryOverview,
+  TelemetrySource,
+  TelemetryWindow,
   UiPreferencesResponse,
   WorkspaceHistoryResponse,
 } from '../../types'
@@ -23,19 +33,84 @@ export interface AgentRuntimeRequestBridge {
   getWorkspaceMessages: (workspaceRootDir: string) => AgentStateResponse['messages']
   getWorkspaceSessionSummary: (workspaceRootDir: string) => AgentStateResponse['session']
   logoutBrokeredAuthSession: () => Promise<AgentBrokerSessionResponse['brokerSession']>
-  promptWorkspaceSession: (workspaceRootDir: string, message: string) => Promise<void>
+  promptWorkspaceSession: (
+    workspaceRootDir: string,
+    message: string,
+    metadata?: {
+      kind?: string
+      paths?: string[]
+      scope?: AutonomousRunScope | null
+      task?: string
+    },
+  ) => Promise<void>
   runOneOffPrompt: (
     workspaceRootDir: string,
-    input: { message: string; systemPrompt?: string },
+    input: {
+      message: string
+      systemPrompt?: string
+      telemetry?: {
+        kind?: string
+        paths?: string[]
+        scope?: AutonomousRunScope | null
+        task?: string
+      }
+    },
   ) => Promise<string>
   saveSettings: (settings: AgentSettingsUpdateRequest) => Promise<AgentSettingsResponse['settings']>
+}
+
+export interface AutonomousRunRequestBridge {
+  getDetectedTaskFile: (workspaceRootDir: string) => Promise<string | null>
+  getRunDetail: (workspaceRootDir: string, runId: string) => Promise<AutonomousRunDetail | null>
+  getRunTimeline: (workspaceRootDir: string, runId: string) => Promise<AutonomousRunTimelinePoint[]>
+  listRuns: (workspaceRootDir: string) => Promise<{
+    activeRunId: string | null
+    runs: AutonomousRunSummary[]
+  }>
+  startRun: (
+    workspaceRootDir: string,
+    input: { scope?: AutonomousRunScope | null; taskFile?: string | null },
+  ) => Promise<AutonomousRunDetail>
+  stopRun: (
+    workspaceRootDir: string,
+    runId: string,
+  ) => Promise<{
+    ok: boolean
+    runId: string | null
+  }>
+}
+
+export interface TelemetryRequestBridge {
+  getTelemetryActivity: (input: {
+    mode: TelemetryMode
+    rootDir: string
+    runId?: string
+    source: TelemetrySource
+    window: TelemetryWindow
+  }) => Promise<TelemetryActivityEvent[]>
+  getTelemetryHeatmap: (input: {
+    mode: TelemetryMode
+    rootDir: string
+    runId?: string
+    source: TelemetrySource
+    window: TelemetryWindow
+  }) => Promise<AgentHeatSample[]>
+  getTelemetryOverview: (input: {
+    mode: TelemetryMode
+    rootDir: string
+    runId?: string
+    source: TelemetrySource
+    window: TelemetryWindow
+  }) => Promise<TelemetryOverview>
 }
 
 export interface SemanticodeRequestHandlerOptions
   extends ReadProjectSnapshotOptions {
   agentRuntime?: AgentRuntimeRequestBridge
+  autonomousRunRuntime?: AutonomousRunRequestBridge
   getUiPreferences?: () => Promise<UiPreferencesResponse>
   setUiPreferences?: (preferences: UiPreferences) => Promise<UiPreferencesResponse>
+  telemetryRuntime?: TelemetryRequestBridge
   getWorkspaceHistory?: () => Promise<WorkspaceHistoryResponse>
   rootDir: string
   route?: string

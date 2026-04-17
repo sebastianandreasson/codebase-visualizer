@@ -28,6 +28,10 @@ import {
 } from 'react'
 
 import {
+  type AgentHeatSample,
+  type AutonomousRunDetail,
+  type AutonomousRunSummary,
+  type AutonomousRunTimelinePoint,
   isDirectoryNode,
   isFileNode,
   isSymbolNode,
@@ -42,6 +46,11 @@ import {
   type PreprocessedWorkspaceContext,
   type PreprocessingStatus,
   type SymbolNode,
+  type TelemetryActivityEvent,
+  type TelemetryMode,
+  type TelemetryOverview,
+  type TelemetrySource,
+  type TelemetryWindow,
   type UiPreferences,
   type VisualizerViewMode,
   type WorkspaceUiState,
@@ -58,18 +67,27 @@ import { CodebaseAnnotationNode } from './CodebaseAnnotationNode'
 import { CodebaseCanvasNode } from './CodebaseCanvasNode'
 import { CodebaseSymbolNode } from './CodebaseSymbolNode'
 import { getInspectorHeaderSummary } from './inspector/inspectorUtils'
+import { AutonomousRunsPanel } from './runs/AutonomousRunsPanel'
 import { SemanticodeErrorBoundary } from './SemanticodeErrorBoundary'
 import type { ThemeMode } from './settings/GeneralSettingsPanel'
 import { ProjectsSidebar } from './shell/ProjectsSidebar'
 import { WorkspaceSyncModal } from './shell/WorkspaceSyncModal'
 import { WorkspaceToolbar } from './shell/WorkspaceToolbar'
 import {
+  fetchAutonomousRunDetail,
+  fetchAutonomousRunTimeline,
+  fetchAutonomousRuns,
+  fetchTelemetryActivity,
+  fetchTelemetryHeatmap,
+  fetchTelemetryOverview,
   fetchGroupPrototypeCache,
   fetchUiPreferences,
   fetchWorkspaceHistory,
   persistGroupPrototypeCache,
   persistUiPreferences as persistUiPreferencesRequest,
   requestSemanticEmbeddings,
+  startAutonomousRun,
+  stopAutonomousRun,
 } from '../app/apiClient'
 import {
   applyThemeMode,
@@ -323,6 +341,7 @@ export function Semanticode({
 }: SemanticodeProps) {
   const storedUiPreferences = useMemo(() => readStoredUiPreferences(), [])
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [runsPanelOpen, setRunsPanelOpen] = useState(false)
   const [workspaceSyncOpen, setWorkspaceSyncOpen] = useState(false)
   const [themeMode, setThemeMode] = useState<ThemeMode>(
     () => storedUiPreferences.themeMode ?? readThemeMode(),
@@ -374,6 +393,21 @@ export function Semanticode({
   const [semanticSearchStrictness, setSemanticSearchStrictness] = useState(
     SEMANTIC_SEARCH_DEFAULT_STRICTNESS,
   )
+  const [autonomousRuns, setAutonomousRuns] = useState<AutonomousRunSummary[]>([])
+  const [detectedTaskFile, setDetectedTaskFile] = useState<string | null>(null)
+  const [selectedRunId, setSelectedRunId] = useState<string | null>(null)
+  const [selectedRunDetail, setSelectedRunDetail] = useState<AutonomousRunDetail | null>(null)
+  const [selectedRunTimeline, setSelectedRunTimeline] = useState<AutonomousRunTimelinePoint[]>([])
+  const [runActionPending, setRunActionPending] = useState(false)
+  const [runActionError, setRunActionError] = useState<string | null>(null)
+  const [telemetrySource, setTelemetrySource] = useState<TelemetrySource>('all')
+  const [telemetryWindow, setTelemetryWindow] = useState<TelemetryWindow>(60)
+  const [telemetryMode, setTelemetryMode] = useState<TelemetryMode>('symbols')
+  const [telemetryOverview, setTelemetryOverview] = useState<TelemetryOverview | null>(null)
+  const [telemetryHeatSamples, setTelemetryHeatSamples] = useState<AgentHeatSample[]>([])
+  const [telemetryActivityEvents, setTelemetryActivityEvents] = useState<TelemetryActivityEvent[]>([])
+  const [telemetryError, setTelemetryError] = useState<string | null>(null)
+  const [telemetryObservedAt, setTelemetryObservedAt] = useState(0)
   const currentSnapshot = useVisualizerStore((state) => state.snapshot)
   const draftLayouts = useVisualizerStore((state) => state.draftLayouts)
   const activeDraftId = useVisualizerStore((state) => state.activeDraftId)
@@ -446,6 +480,7 @@ export function Semanticode({
     desktopBridge?.getWorkspaceHistory ||
     isDesktopHost,
   )
+  const effectiveSnapshot = snapshot ?? currentSnapshot
 
   useEffect(() => {
     const updateDesktopHostAvailability = () => {
@@ -625,6 +660,7 @@ export function Semanticode({
     let cancelled = false
 
     if (!effectiveSnapshot?.rootDir) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setGroupPrototypeCache(null)
       setGroupPrototypeCacheLoaded(false)
       return
@@ -658,13 +694,129 @@ export function Semanticode({
     setSnapshot(snapshot)
   }, [setSnapshot, snapshot])
 
-  const effectiveSnapshot = snapshot ?? currentSnapshot
+  useEffect(() => {
+    let cancelled = false
+
+    if (!effectiveSnapshot?.rootDir) {
+      return
+    }
+
+    const refreshTelemetry = async () => {
+      try {
+        const telemetryQuery = {
+          mode: telemetryMode,
+          runId: telemetryWindow === 'run' ? selectedRunId ?? undefined : undefined,
+          source: telemetrySource,
+          window: telemetryWindow,
+        } as const
+        const [runsResponse, overviewResponse, heatmapResponse, activityResponse] = await Promise.all([
+          fetchAutonomousRuns(),
+          fetchTelemetryOverview(telemetryQuery),
+          fetchTelemetryHeatmap(telemetryQuery),
+          fetchTelemetryActivity(telemetryQuery),
+        ])
+
+        if (cancelled) {
+          return
+        }
+
+        setAutonomousRuns(runsResponse.runs)
+        setDetectedTaskFile(runsResponse.detectedTaskFile)
+        setTelemetryOverview(overviewResponse.overview)
+        setTelemetryHeatSamples(heatmapResponse.samples)
+        setTelemetryActivityEvents(activityResponse.events)
+        setTelemetryError(null)
+        setTelemetryObservedAt(Date.now())
+        setSelectedRunId((currentRunId) => {
+          if (currentRunId && runsResponse.runs.some((run) => run.runId === currentRunId)) {
+            return currentRunId
+          }
+
+          return runsResponse.activeRunId ?? runsResponse.runs[0]?.runId ?? null
+        })
+      } catch (error) {
+        if (!cancelled) {
+          setTelemetryError(
+            error instanceof Error ? error.message : 'Failed to load autonomous run telemetry.',
+          )
+        }
+      }
+    }
+
+    void refreshTelemetry()
+    const intervalId = window.setInterval(
+      () => {
+        void refreshTelemetry()
+      },
+      runsPanelOpen || telemetryWindow === 'run' || autonomousRuns.some((run) => run.status === 'running')
+        ? 2500
+        : 5000,
+    )
+
+    return () => {
+      cancelled = true
+      window.clearInterval(intervalId)
+    }
+  }, [
+    autonomousRuns,
+    effectiveSnapshot?.rootDir,
+    runsPanelOpen,
+    selectedRunId,
+    telemetryMode,
+    telemetrySource,
+    telemetryWindow,
+  ])
+
+  useEffect(() => {
+    let cancelled = false
+
+    if (!runsPanelOpen || !effectiveSnapshot?.rootDir || !selectedRunId) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setSelectedRunDetail(null)
+      setSelectedRunTimeline([])
+      return
+    }
+
+    const refreshRunDetail = async () => {
+      try {
+        const [detailResponse, timelineResponse] = await Promise.all([
+          fetchAutonomousRunDetail(selectedRunId),
+          fetchAutonomousRunTimeline(selectedRunId),
+        ])
+
+        if (cancelled) {
+          return
+        }
+
+        setSelectedRunDetail(detailResponse.run)
+        setSelectedRunTimeline(timelineResponse.timeline)
+        setRunActionError(null)
+      } catch (error) {
+        if (!cancelled) {
+          setRunActionError(
+            error instanceof Error ? error.message : 'Failed to load the selected run.',
+          )
+        }
+      }
+    }
+
+    void refreshRunDetail()
+    const intervalId = window.setInterval(() => {
+      void refreshRunDetail()
+    }, 2500)
+
+    return () => {
+      cancelled = true
+      window.clearInterval(intervalId)
+    }
+  }, [effectiveSnapshot?.rootDir, runsPanelOpen, selectedRunId])
 
   useEffect(() => {
     if (!effectiveSnapshot?.rootDir) {
       return
     }
 
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setRecentProjects((currentProjects) => {
       return rememberRecentProject(currentProjects, effectiveSnapshot.rootDir)
     })
@@ -679,6 +831,7 @@ export function Semanticode({
       return
     }
 
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setWorkspaceStateByRootDir((currentState) => {
       const currentEntry = currentState[effectiveSnapshot.rootDir]
       const nextEntry: WorkspaceUiState = {
@@ -706,6 +859,7 @@ export function Semanticode({
     workspaceViewResolvedRootDir,
   ])
 
+  /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
     if (!effectiveSnapshot?.rootDir) {
       setWorkspaceViewResolvedRootDir(null)
@@ -826,6 +980,7 @@ export function Semanticode({
     workspaceStateByRootDir,
     preprocessedWorkspaceContext,
   ])
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   const availableDraftLayouts = draftLayouts.filter(
     (draft) => draft.layout && draft.status === 'draft',
@@ -940,7 +1095,7 @@ export function Semanticode({
     return groupPrototypeCache.records.filter(
       (record) => record.layoutId === semanticSearchGroupSourceLayout.id,
     )
-  }, [groupPrototypeCache?.records, semanticSearchGroupSourceLayout])
+  }, [groupPrototypeCache, semanticSearchGroupSourceLayout])
   const semanticSearchGroupPrototypes = useMemo(
     () =>
       buildGroupPrototypeRecords(
@@ -1068,6 +1223,7 @@ export function Semanticode({
       return
     }
 
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setGroupPrototypeCache(nextCache)
     void persistGroupPrototypeCache(nextCache).catch(() => {
       // Ignore persistence failures; in-memory cache still works for this session.
@@ -1081,10 +1237,12 @@ export function Semanticode({
 
   useEffect(() => {
     if (semanticSearchMode === 'groups' && !semanticGroupSearchAvailable) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setSemanticSearchMode('symbols')
     }
   }, [semanticGroupSearchAvailable, semanticSearchMode])
 
+  /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
     if (!semanticSearchAvailable) {
       setSemanticSearchPending(false)
@@ -1181,6 +1339,7 @@ export function Semanticode({
     semanticSearchMode,
     semanticSearchQuery,
   ])
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   useEffect(() => {
     if (
@@ -1269,6 +1428,35 @@ export function Semanticode({
     toggleCollapsedDirectory,
     viewMode,
   ])
+  const telemetryHeatByNodeId = useMemo(() => {
+    const recentCutoff = telemetryObservedAt - 10_000
+    const nextMap = new Map<string, { pulse: boolean; weight: number }>()
+
+    for (const sample of telemetryHeatSamples) {
+      const pulse = new Date(sample.lastSeenAt).getTime() >= recentCutoff
+
+      for (const nodeId of sample.nodeIds) {
+        const current = nextMap.get(nodeId)
+
+        if (!current || sample.weight > current.weight) {
+          nextMap.set(nodeId, {
+            pulse,
+            weight: sample.weight,
+          })
+          continue
+        }
+
+        if (pulse && !current.pulse) {
+          nextMap.set(nodeId, {
+            ...current,
+            pulse: true,
+          })
+        }
+      }
+    }
+
+    return nextMap
+  }, [telemetryHeatSamples, telemetryObservedAt])
 
   const presentedFlowModel = useMemo<FlowModel | null>(() => {
     if (!baseFlowModel) {
@@ -1285,6 +1473,7 @@ export function Semanticode({
         baseFlowModel.nodes,
         selectedNodeIdSet,
         presentationOverlayState,
+        telemetryHeatByNodeId,
       ),
       edges: applyFlowEdgePresentation(baseFlowModel.edges, presentationOverlayState),
     }
@@ -1294,6 +1483,7 @@ export function Semanticode({
     highlightedNodeIdSet,
     semanticSearchHighlightActive,
     selectedNodeIdSet,
+    telemetryHeatByNodeId,
   ])
 
   useEffect(() => {
@@ -1341,6 +1531,87 @@ export function Semanticode({
   const selectedSymbols = getSelectedSymbols(effectiveSnapshot, selectedNodeIds)
   const selectedFile = getSelectedFile(effectiveSnapshot, selectedNode, files)
   const selectedFiles = getSelectedFiles(effectiveSnapshot, selectedNodeIds)
+  const selectedNodeTelemetry = useMemo<{
+    confidence: 'exact' | 'attributed' | 'fallback'
+    lastSeenAt: string | null
+    requestCount: number
+    source: 'interactive' | 'autonomous' | 'all'
+    toolNames: string[]
+    totalTokens: number
+  } | null>(() => {
+    const candidatePaths = new Set<string>()
+
+    if (selectedFile) {
+      candidatePaths.add(selectedFile.path)
+    }
+
+    if (selectedSymbol) {
+      const ownerFile = effectiveSnapshot?.nodes[selectedSymbol.fileId]
+
+      if (ownerFile && isFileNode(ownerFile)) {
+        candidatePaths.add(ownerFile.path)
+      }
+    }
+
+    if (selectedLayoutGroup && effectiveSnapshot) {
+      for (const nodeId of selectedLayoutGroup.nodeIds) {
+        const groupNode = effectiveSnapshot.nodes[nodeId]
+
+        if (groupNode && isSymbolNode(groupNode)) {
+          const ownerFile = effectiveSnapshot.nodes[groupNode.fileId]
+
+          if (ownerFile && isFileNode(ownerFile)) {
+            candidatePaths.add(ownerFile.path)
+          }
+          continue
+        }
+
+        if (groupNode && isFileNode(groupNode)) {
+          candidatePaths.add(groupNode.path)
+        }
+      }
+    }
+
+    if (candidatePaths.size === 0) {
+      return null
+    }
+
+    const matchedEvents = telemetryActivityEvents.filter((event) => candidatePaths.has(event.path))
+
+    if (matchedEvents.length === 0) {
+      return null
+    }
+
+    const toolNames = [...new Set(matchedEvents.flatMap((event) => event.toolNames))].slice(0, 8)
+
+    const confidence: 'exact' | 'attributed' | 'fallback' = matchedEvents.some(
+      (event) => event.confidence === 'exact',
+    )
+      ? 'exact'
+      : matchedEvents.some((event) => event.confidence === 'attributed')
+        ? 'attributed'
+        : 'fallback'
+    const source: 'interactive' | 'autonomous' | 'all' = matchedEvents.every(
+      (event) => event.source === matchedEvents[0]?.source,
+    )
+      ? ((matchedEvents[0]?.source ?? 'all') as 'interactive' | 'autonomous' | 'all')
+      : 'all'
+
+    return {
+      confidence,
+      lastSeenAt: matchedEvents[0]?.timestamp ?? null,
+      requestCount: matchedEvents.reduce((sum, event) => sum + event.requestCount, 0),
+      source,
+      toolNames,
+      totalTokens: matchedEvents.reduce((sum, event) => sum + event.totalTokens, 0),
+    }
+  }, [
+    effectiveSnapshot,
+    selectedFile,
+    selectedLayoutGroup,
+    selectedSymbol,
+    telemetryActivityEvents,
+  ])
   const selectedGroupPrototype = useMemo(() => {
     if (!selectedLayoutGroup) {
       return null
@@ -1507,6 +1778,33 @@ export function Semanticode({
     semanticSearchPending,
     semanticSearchQuery,
   ])
+  const activeRunId =
+    autonomousRuns.find((run) => run.status === 'running')?.runId ?? null
+  const runsActive = activeRunId !== null
+  const agentHeatHelperText = useMemo(() => {
+    if (telemetryError) {
+      return telemetryError
+    }
+
+    if (!telemetryOverview) {
+      return 'Loading agent activity…'
+    }
+
+    if (telemetryOverview.requestCount === 0) {
+      return telemetryWindow === 'run'
+        ? 'No agent activity recorded for this run yet.'
+        : 'No agent activity recorded in this window.'
+    }
+
+    const tokenText = `${Math.round(telemetryOverview.totalTokens)} tokens`
+    const requestText = `${telemetryOverview.requestCount} request${telemetryOverview.requestCount === 1 ? '' : 's'}`
+    const runText =
+      telemetryOverview.activeRuns.length > 0
+        ? ` · ${telemetryOverview.activeRuns.length} active run${telemetryOverview.activeRuns.length === 1 ? '' : 's'}`
+        : ''
+
+    return `${requestText} · ${tokenText}${runText}`
+  }, [telemetryError, telemetryOverview, telemetryWindow])
   const inspectorWidthRatio = 1 - canvasWidthRatio
   const workspaceViewReady =
     !effectiveSnapshot ||
@@ -1525,6 +1823,7 @@ export function Semanticode({
     }
 
     if (selectedNodeIds.length > 0 || selectedEdgeId) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setInspectorOpen(true)
     }
   }, [selectedEdgeId, selectedNodeIds, workspaceViewReady])
@@ -1713,6 +2012,57 @@ export function Semanticode({
     } finally {
       setWorkspaceActionPending(false)
     }
+  }
+
+  async function handleStartAutonomousRun() {
+    if (!effectiveSnapshot?.rootDir) {
+      return
+    }
+
+    try {
+      setRunActionPending(true)
+      setRunActionError(null)
+      const response = await startAutonomousRun({
+        scope: buildAutonomousRunScopeFromContext(
+          workingSetContext,
+          activeDraft?.layout?.title ?? activeLayout?.title ?? null,
+        ),
+        taskFile: detectedTaskFile,
+      })
+
+      setRunsPanelOpen(true)
+      setSelectedRunId(response.run.runId)
+      setSelectedRunDetail(response.run)
+      setDetectedTaskFile(response.detectedTaskFile)
+      setTelemetryWindow('run')
+      setTelemetrySource('all')
+    } catch (error) {
+      setRunActionError(
+        error instanceof Error ? error.message : 'Failed to start the autonomous run.',
+      )
+    } finally {
+      setRunActionPending(false)
+    }
+  }
+
+  async function handleStopAutonomousRun(runId: string) {
+    try {
+      setRunActionPending(true)
+      setRunActionError(null)
+      await stopAutonomousRun(runId)
+    } catch (error) {
+      setRunActionError(
+        error instanceof Error ? error.message : 'Failed to stop the autonomous run.',
+      )
+    } finally {
+      setRunActionPending(false)
+    }
+  }
+
+  function handleSelectRun(runId: string) {
+    setSelectedRunId(runId)
+    setTelemetryWindow('run')
+    setTelemetrySource('all')
   }
 
   function handleClearCompareOverlay() {
@@ -2005,6 +2355,7 @@ export function Semanticode({
             onBuildSemanticEmbeddings={onBuildSemanticEmbeddings}
             onClearCompareOverlay={compareOverlayActive ? handleClearCompareOverlay : undefined}
             onOpenAgentSettings={() => setSettingsOpen(true)}
+            onOpenRunsPanel={() => setRunsPanelOpen(true)}
             onOpenWorkspaceSync={
               workspaceSyncStatus ? () => setWorkspaceSyncOpen(true) : undefined
             }
@@ -2031,6 +2382,7 @@ export function Semanticode({
             }
             preprocessingStatus={formattedPreprocessingStatus}
             projectsSidebarOpen={projectsSidebarOpen}
+            runsActive={runsActive}
             selectedLayoutValue={selectedLayoutValue}
             showCompareAction={Boolean(currentCompareSource)}
             workingSetSummary={workingSetSummary}
@@ -2046,7 +2398,11 @@ export function Semanticode({
               '--cbv-inspector-width': `${(inspectorWidthRatio * 100).toFixed(2)}%`,
             } as CSSProperties}
           >
-	          <MemoizedCanvasViewport
+          <MemoizedCanvasViewport
+              agentHeatHelperText={agentHeatHelperText}
+              agentHeatMode={telemetryMode}
+              agentHeatSource={telemetrySource}
+              agentHeatWindow={telemetryWindow}
               denseCanvasMode={denseCanvasMode}
               edges={edges}
               graphLayers={graphLayers}
@@ -2057,6 +2413,9 @@ export function Semanticode({
               onEdgeClick={handleCanvasEdgeClick}
               onEdgesChange={onEdgesChange}
               onInit={setFlowInstance}
+              onAgentHeatModeChange={setTelemetryMode}
+              onAgentHeatSourceChange={setTelemetrySource}
+              onAgentHeatWindowChange={setTelemetryWindow}
               onLayoutSuggestionChange={handleLayoutSuggestionChange}
               onLayoutSuggestionSubmit={handleLayoutSuggestionSubmit}
               onMoveEnd={handleCanvasMoveEnd}
@@ -2130,6 +2489,7 @@ export function Semanticode({
                 selectedLayoutGroup={selectedLayoutGroup}
                 selectedLayoutGroupNearbySymbols={selectedGroupNearbySymbols}
                 selectedLayoutGroupPrototype={selectedGroupPrototype}
+                selectedNodeTelemetry={selectedNodeTelemetry}
                 selectedNode={selectedNode}
                 selectedSymbol={selectedSymbol}
                 selectedSymbols={selectedSymbols}
@@ -2188,6 +2548,26 @@ export function Semanticode({
             status={workspaceSyncStatus}
           />
         ) : null}
+        {runsPanelOpen ? (
+          <AutonomousRunsPanel
+            activeRunId={activeRunId}
+            detectedTaskFile={detectedTaskFile}
+            errorMessage={runActionError}
+            onClose={() => setRunsPanelOpen(false)}
+            onSelectRun={handleSelectRun}
+            onStartRun={() => {
+              void handleStartAutonomousRun()
+            }}
+            onStopRun={(runId) => {
+              void handleStopAutonomousRun(runId)
+            }}
+            pending={runActionPending}
+            selectedRunDetail={selectedRunDetail}
+            selectedRunId={selectedRunId}
+            timeline={selectedRunTimeline}
+            runs={autonomousRuns}
+          />
+        ) : null}
         <WorkspaceAgentActivity
           desktopHostAvailable={isDesktopHost}
           preprocessingStatus={preprocessingStatus}
@@ -2201,6 +2581,10 @@ export function Semanticode({
 }
 
 interface CanvasViewportProps {
+  agentHeatHelperText: string
+  agentHeatMode: TelemetryMode
+  agentHeatSource: TelemetrySource
+  agentHeatWindow: TelemetryWindow
   denseCanvasMode: boolean
   edges: Edge[]
   graphLayers: Record<GraphLayerKey, boolean>
@@ -2211,6 +2595,9 @@ interface CanvasViewportProps {
   onEdgeClick: (_event: unknown, edge: Edge) => void
   onEdgesChange: ReturnType<typeof useEdgesState<Edge>>[2]
   onInit: (instance: ReactFlowInstance<Node, Edge>) => void
+  onAgentHeatModeChange: (mode: TelemetryMode) => void
+  onAgentHeatSourceChange: (source: TelemetrySource) => void
+  onAgentHeatWindowChange: (window: TelemetryWindow) => void
   onLayoutSuggestionChange: (value: string) => void
   onLayoutSuggestionSubmit: () => void
   onMoveEnd: (_event: MouseEvent | TouchEvent | null, flowViewport: { x: number; y: number; zoom: number }) => void
@@ -2246,6 +2633,10 @@ interface CanvasViewportProps {
 }
 
 const MemoizedCanvasViewport = memo(function CanvasViewport({
+  agentHeatHelperText,
+  agentHeatMode,
+  agentHeatSource,
+  agentHeatWindow,
   denseCanvasMode,
   edges,
   graphLayers,
@@ -2256,6 +2647,9 @@ const MemoizedCanvasViewport = memo(function CanvasViewport({
   onEdgeClick,
   onEdgesChange,
   onInit,
+  onAgentHeatModeChange,
+  onAgentHeatSourceChange,
+  onAgentHeatWindowChange,
   onLayoutSuggestionChange,
   onLayoutSuggestionSubmit,
   onMoveEnd,
@@ -2319,6 +2713,52 @@ const MemoizedCanvasViewport = memo(function CanvasViewport({
     <section className="cbv-canvas">
       <div className="cbv-canvas-overlays">
         <div className="cbv-canvas-left-tools">
+          <div className="cbv-agent-heat-panel">
+            <p className="cbv-eyebrow">Agent Heat</p>
+            <div className="cbv-agent-heat-controls">
+              <label>
+                <span>Source</span>
+                <select
+                  onChange={(event) => {
+                    onAgentHeatSourceChange(event.target.value as TelemetrySource)
+                  }}
+                  value={agentHeatSource}
+                >
+                  <option value="all">All</option>
+                  <option value="autonomous">Autonomous</option>
+                  <option value="interactive">Interactive</option>
+                </select>
+              </label>
+              <label>
+                <span>Window</span>
+                <select
+                  onChange={(event) => {
+                    onAgentHeatWindowChange(parseTelemetryWindow(event.target.value))
+                  }}
+                  value={String(agentHeatWindow)}
+                >
+                  <option value="30">30s</option>
+                  <option value="60">60s</option>
+                  <option value="120">2m</option>
+                  <option value="run">Run</option>
+                  <option value="workspace">Workspace</option>
+                </select>
+              </label>
+              <label>
+                <span>Mode</span>
+                <select
+                  onChange={(event) => {
+                    onAgentHeatModeChange(event.target.value as TelemetryMode)
+                  }}
+                  value={agentHeatMode}
+                >
+                  <option value="files">Files</option>
+                  <option value="symbols">Symbols</option>
+                </select>
+              </label>
+            </div>
+            <p className="cbv-agent-heat-meta">{agentHeatHelperText}</p>
+          </div>
           {showSemanticSearch ? (
             <form
               className={`cbv-semantic-search${semanticSearchPending ? ' is-pending' : ''}${semanticSearchAvailable ? '' : ' is-disabled'}`}
@@ -2538,6 +2978,26 @@ function GeneralSettingsFallback() {
       <p>Preparing the appearance and agent configuration panel.</p>
     </div>
   )
+}
+
+function parseTelemetryWindow(value: string): TelemetryWindow {
+  if (value === '30') {
+    return 30
+  }
+
+  if (value === '120') {
+    return 120
+  }
+
+  if (value === 'run') {
+    return 'run'
+  }
+
+  if (value === 'workspace') {
+    return 'workspace'
+  }
+
+  return 60
 }
 
 function getWorkspaceName(rootDir: string) {
@@ -3038,23 +3498,32 @@ function applyFlowNodePresentation(
     active: boolean
     nodeIds: Set<string>
   },
+  telemetryHeatByNodeId: Map<string, { pulse: boolean; weight: number }>,
 ) {
   let changed = false
   const nextNodes = nodes.map((node) => {
     const highlighted = compareOverlayState.nodeIds.has(node.id)
     const dimmed = compareOverlayState.active && !highlighted
     const selected = selectedNodeIds.has(node.id)
+    const heat = telemetryHeatByNodeId.get(node.id)
+    const heatWeight = heat?.weight ?? 0
+    const heatPulse = heat?.pulse ?? false
     const data =
       node.data && typeof node.data === 'object'
         ? (node.data as Record<string, unknown>)
         : null
     const currentHighlighted = Boolean(data?.highlighted)
     const currentDimmed = Boolean(data?.dimmed)
+    const currentHeatWeight =
+      typeof data?.heatWeight === 'number' ? data.heatWeight : 0
+    const currentHeatPulse = Boolean(data?.heatPulse)
 
     if (
       node.selected === selected &&
       currentHighlighted === highlighted &&
-      currentDimmed === dimmed
+      currentDimmed === dimmed &&
+      currentHeatWeight === heatWeight &&
+      currentHeatPulse === heatPulse
     ) {
       return node
     }
@@ -3067,6 +3536,8 @@ function applyFlowNodePresentation(
         ? {
             ...data,
             dimmed,
+            heatPulse,
+            heatWeight,
             highlighted,
           }
         : node.data,
@@ -4230,6 +4701,43 @@ function getWorkingSetPaths(context: {
   }
 
   return context.node ? [context.node.path] : []
+}
+
+function buildAutonomousRunScopeFromContext(
+  context: {
+    file: CodebaseFile | null
+    files: CodebaseFile[]
+    node: ProjectNode | null
+    symbol: SymbolNode | null
+    symbols: SymbolNode[]
+  },
+  layoutTitle: string | null,
+) {
+  const paths = [...new Set(
+    context.files.length > 0
+      ? context.files.map((file) => file.path)
+      : context.file
+        ? [context.file.path]
+        : [],
+  )]
+  const symbolPaths = [...new Set(
+    context.symbols.length > 0
+      ? context.symbols.map((symbol) => symbol.path)
+      : context.symbol
+        ? [context.symbol.path]
+        : [],
+  )]
+
+  if (paths.length === 0 && symbolPaths.length === 0) {
+    return null
+  }
+
+  return {
+    layoutTitle: layoutTitle ?? undefined,
+    paths: paths.length > 0 ? paths : symbolPaths,
+    symbolPaths: symbolPaths.length > 0 ? symbolPaths : undefined,
+    title: layoutTitle ?? formatWorkingSetLabel(context),
+  }
 }
 
 function getSelectedFiles(

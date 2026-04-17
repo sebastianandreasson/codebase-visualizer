@@ -21,6 +21,16 @@ export const SEMANTICODE_DRAFTS_ROUTE =
   `${SEMANTICODE_ROUTE_BASE}/drafts`
 export const SEMANTICODE_AGENT_ROUTE_BASE =
   `${SEMANTICODE_ROUTE_BASE}/agent`
+export const SEMANTICODE_RUNS_ROUTE =
+  `${SEMANTICODE_ROUTE_BASE}/runs`
+export const SEMANTICODE_TELEMETRY_ROUTE_BASE =
+  `${SEMANTICODE_ROUTE_BASE}/telemetry`
+export const SEMANTICODE_TELEMETRY_OVERVIEW_ROUTE =
+  `${SEMANTICODE_TELEMETRY_ROUTE_BASE}/overview`
+export const SEMANTICODE_TELEMETRY_HEATMAP_ROUTE =
+  `${SEMANTICODE_TELEMETRY_ROUTE_BASE}/heatmap`
+export const SEMANTICODE_TELEMETRY_ACTIVITY_ROUTE =
+  `${SEMANTICODE_TELEMETRY_ROUTE_BASE}/activity`
 export const SEMANTICODE_AGENT_SESSION_ROUTE =
   `${SEMANTICODE_AGENT_ROUTE_BASE}/session`
 export const SEMANTICODE_AGENT_MESSAGE_ROUTE =
@@ -49,4 +59,16 @@ export function buildSemanticodeDraftActionRoute(
   action: 'accept' | 'reject',
 ) {
   return `${SEMANTICODE_DRAFTS_ROUTE}/${encodeURIComponent(draftId)}/${action}`
+}
+
+export function buildSemanticodeRunRoute(runId: string) {
+  return `${SEMANTICODE_RUNS_ROUTE}/${encodeURIComponent(runId)}`
+}
+
+export function buildSemanticodeRunStopRoute(runId: string) {
+  return `${buildSemanticodeRunRoute(runId)}/stop`
+}
+
+export function buildSemanticodeRunTimelineRoute(runId: string) {
+  return `${buildSemanticodeRunRoute(runId)}/timeline`
 }

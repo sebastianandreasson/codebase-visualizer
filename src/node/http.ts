@@ -1,16 +1,24 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 
+import { handleAutonomousRoute } from './routes/autonomous'
 import { handleAgentRoute } from './routes/agent'
 import { handleLayoutMutationRoute } from './routes/layouts'
 import { handlePreprocessingRoute } from './routes/preprocessing'
 import { handleSnapshotRoute } from './routes/snapshot'
 import type {
   AgentRuntimeRequestBridge,
+  AutonomousRunRequestBridge,
   SemanticodeRequestHandlerOptions,
+  TelemetryRequestBridge,
 } from './routes/types'
 import { sendJson } from './routes/utils'
 
-export type { AgentRuntimeRequestBridge, SemanticodeRequestHandlerOptions }
+export type {
+  AgentRuntimeRequestBridge,
+  AutonomousRunRequestBridge,
+  SemanticodeRequestHandlerOptions,
+  TelemetryRequestBridge,
+}
 
 export async function handleSemanticodeRequest(
   request: IncomingMessage,
@@ -29,6 +37,10 @@ export async function handleSemanticodeRequest(
     }
 
     if (await handlePreprocessingRoute(request, response, options)) {
+      return true
+    }
+
+    if (await handleAutonomousRoute(request, response, options)) {
       return true
     }
 

@@ -1,4 +1,4 @@
-import { memo } from 'react'
+import { memo, type CSSProperties } from 'react'
 
 import { Handle, Position, type NodeProps } from '@xyflow/react'
 
@@ -9,6 +9,8 @@ type CodebaseCanvasNodeData = Record<string, unknown> & {
   tags: string[]
   dimmed: boolean
   highlighted?: boolean
+  heatPulse?: boolean
+  heatWeight?: number
   container?: boolean
   groupContainer?: boolean
   collapsible?: boolean
@@ -32,9 +34,18 @@ export const CodebaseCanvasNode = memo(function CodebaseCanvasNode({
         selected ? 'is-selected' : '',
         nodeData.dimmed ? 'is-dimmed' : '',
         nodeData.highlighted ? 'is-compare-highlighted' : '',
+        (nodeData.heatWeight ?? 0) > 0 ? 'has-agent-heat' : '',
+        nodeData.heatPulse ? 'is-agent-heat-pulse' : '',
       ]
         .filter(Boolean)
         .join(' ')}
+      style={
+        (nodeData.heatWeight ?? 0) > 0
+          ? ({
+              '--cbv-agent-heat-strength': `${Math.max(0.18, Math.min(0.92, nodeData.heatWeight ?? 0))}`,
+            } as CSSProperties)
+          : undefined
+      }
     >
       {nodeData.collapsible ? (
         <button

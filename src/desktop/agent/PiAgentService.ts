@@ -25,6 +25,7 @@ import type {
   AgentBrokerCallbackResult,
   AgentBrokerLoginStartResponse,
 } from '../../schema/api'
+import { AgentTelemetryService } from '../../node/telemetryService'
 import { PiAgentSettingsStore } from './PiAgentSettingsStore'
 import { CodexCliTransport, createCodexCliModel } from '../agent-runtime/CodexCliTransport'
 import { OpenAICodexProvider } from '../providers/openai-codex/provider'
@@ -42,6 +43,7 @@ interface PiAgentSessionRecord {
   messages: AgentMessage[]
   summary: AgentSessionSummary
   toolInvocationById: Map<string, AgentToolInvocation>
+  promptSequence: number
   unsubscribe: () => void
   workspaceRootDir: string
 }
@@ -51,6 +53,7 @@ type AgentSessionRecord = PiAgentSessionRecord
 export interface PiAgentServiceOptions {
   logger?: Pick<Console, 'error' | 'info' | 'warn'>
   openExternal?: (url: string) => Promise<void> | void
+  telemetryService?: AgentTelemetryService
 }
 
 export class PiAgentService {
@@ -60,10 +63,12 @@ export class PiAgentService {
   private readonly sessionsByWorkspaceRootDir = new Map<string, AgentSessionRecord>()
   private readonly openAICodexProvider: OpenAICodexProvider
   private readonly settingsStore: PiAgentSettingsStore
+  private readonly telemetryService?: AgentTelemetryService
 
   constructor(options: PiAgentServiceOptions = {}) {
     this.logger = options.logger ?? console
     this.openExternal = options.openExternal
+    this.telemetryService = options.telemetryService
     this.settingsStore = new PiAgentSettingsStore({
       logger: this.logger,
     })
@@ -85,6 +90,12 @@ export class PiAgentService {
   }
 
   async ensureWorkspaceSession(workspaceRootDir: string) {
+    await this.telemetryService?.ensureWorkspaceTelemetry(workspaceRootDir).catch((error) => {
+      this.logger.warn(
+        `[semanticode][telemetry] Failed to prepare request telemetry for ${workspaceRootDir}: ${error instanceof Error ? error.message : error}`,
+      )
+    })
+
     const existingRecord = this.sessionsByWorkspaceRootDir.get(workspaceRootDir)
 
     if (existingRecord) {
@@ -155,6 +166,7 @@ export class PiAgentService {
       messages: [],
       summary,
       toolInvocationById: new Map(),
+      promptSequence: 0,
       unsubscribe,
       workspaceRootDir,
     }
@@ -260,7 +272,20 @@ export class PiAgentService {
     return this.openAICodexProvider.completeManualRedirect(callbackUrl)
   }
 
-  async promptWorkspaceSession(workspaceRootDir: string, message: string) {
+  async promptWorkspaceSession(
+    workspaceRootDir: string,
+    message: string,
+    metadata?: {
+      kind?: string
+      paths?: string[]
+      scope?: {
+        paths: string[]
+        symbolPaths?: string[]
+        title?: string
+      } | null
+      task?: string
+    },
+  ) {
     this.logger.info(
       `[semanticode][agent] promptWorkspaceSession called for ${workspaceRootDir}.`,
     )
@@ -286,6 +311,9 @@ export class PiAgentService {
     }
 
     const now = new Date().toISOString()
+    const startedAt = now
+    const promptSequence = record.promptSequence + 1
+    const existingToolCallIds = new Set(record.toolInvocationById.keys())
     const normalizedMessage: AgentMessage = {
       id: `agent-message:${randomUUID()}`,
       role: 'user',
@@ -294,6 +322,7 @@ export class PiAgentService {
       isStreaming: false,
     }
 
+    record.promptSequence = promptSequence
     record.messages = upsertNormalizedMessage(record.messages, normalizedMessage)
     this.emit({
       type: 'message',
@@ -310,12 +339,15 @@ export class PiAgentService {
       session: record.summary,
     })
 
+    let caughtError: unknown = null
+
     try {
       this.logger.info(
         `[semanticode][agent] Prompting ${record.summary.transport === 'codex_cli' ? 'Codex CLI' : 'PI'} session ${record.summary.id} with model ${record.summary.modelId}.`,
       )
       await record.agent.prompt(message)
     } catch (error) {
+      caughtError = error
       const message =
         error instanceof Error ? error.message : 'Unknown embedded agent runtime failure.'
 
@@ -327,14 +359,52 @@ export class PiAgentService {
         type: 'session_updated',
         session: record.summary,
       })
-      throw error
+    } finally {
+      await this.telemetryService?.recordInteractivePrompt({
+        finishedAt: new Date().toISOString(),
+        kind: metadata?.kind ?? 'workspace_chat',
+        message,
+        modelId: record.summary.modelId,
+        promptSequence,
+        provider: record.summary.provider,
+        rootDir: workspaceRootDir,
+        scope: metadata,
+        sessionId: record.summary.id,
+        startedAt,
+        toolInvocations: collectNewToolInvocations(
+          record.toolInvocationById,
+          existingToolCallIds,
+        ),
+      }).catch((error) => {
+        this.logger.warn(
+          `[semanticode][telemetry] Failed to write interactive telemetry: ${error instanceof Error ? error.message : error}`,
+        )
+      })
+    }
+
+    if (caughtError) {
+      throw caughtError
     }
   }
 
   async runOneOffPrompt(
     workspaceRootDir: string,
-    input: { message: string; systemPrompt?: string },
+    input: {
+      message: string
+      systemPrompt?: string
+      telemetry?: {
+        kind?: string
+        paths?: string[]
+        scope?: {
+          paths: string[]
+          symbolPaths?: string[]
+          title?: string
+        } | null
+        task?: string
+      }
+    },
   ) {
+    await this.telemetryService?.ensureWorkspaceTelemetry(workspaceRootDir).catch(() => undefined)
     await this.settingsStore.applyConfiguredApiKeys()
     const settings = await this.getSettings()
     const provider = resolveProvider(settings)
@@ -367,7 +437,31 @@ export class PiAgentService {
     })
 
     let assistantText = ''
+    const toolInvocationById = new Map<string, AgentToolInvocation>()
+    const startedAt = new Date().toISOString()
+    const sessionId = `one-off:${randomUUID()}`
     const unsubscribe = agent.subscribe((event) => {
+      if (event.type === 'tool_execution_start') {
+        toolInvocationById.set(event.toolCallId, {
+          args: event.args,
+          startedAt: new Date().toISOString(),
+          toolCallId: event.toolCallId,
+          toolName: event.toolName,
+        })
+      }
+
+      if (event.type === 'tool_execution_end') {
+        const existingInvocation = toolInvocationById.get(event.toolCallId)
+
+        if (existingInvocation) {
+          toolInvocationById.set(event.toolCallId, {
+            ...existingInvocation,
+            endedAt: new Date().toISOString(),
+            isError: event.isError,
+          })
+        }
+      }
+
       if (
         (event.type === 'message_end' || event.type === 'turn_end') &&
         event.message.role === 'assistant'
@@ -390,6 +484,23 @@ export class PiAgentService {
 
       return assistantText.trim()
     } finally {
+      await this.telemetryService?.recordInteractivePrompt({
+        finishedAt: new Date().toISOString(),
+        kind: input.telemetry?.kind ?? 'one_off_prompt',
+        message: input.message,
+        modelId: model.id,
+        promptSequence: 1,
+        provider,
+        rootDir: workspaceRootDir,
+        scope: input.telemetry,
+        sessionId,
+        startedAt,
+        toolInvocations: [...toolInvocationById.values()],
+      }).catch((error) => {
+        this.logger.warn(
+          `[semanticode][telemetry] Failed to write one-off telemetry: ${error instanceof Error ? error.message : error}`,
+        )
+      })
       unsubscribe()
       agent.abort()
       await agent.waitForIdle().catch(() => undefined)
@@ -599,6 +710,15 @@ export class PiAgentService {
       listener(event)
     }
   }
+}
+
+function collectNewToolInvocations(
+  toolInvocationById: Map<string, AgentToolInvocation>,
+  existingToolCallIds: Set<string>,
+) {
+  return [...toolInvocationById.values()].filter(
+    (invocation) => !existingToolCallIds.has(invocation.toolCallId),
+  )
 }
 
 function upsertNormalizedMessage(messages: AgentMessage[], nextMessage: AgentMessage) {

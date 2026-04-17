@@ -1,4 +1,13 @@
 export type {
+  AutonomousRunDetail,
+  AutonomousRunScope,
+  AutonomousRunStartRequest,
+  AutonomousRunStatus,
+  AutonomousRunSummary,
+  AutonomousRunTimelinePoint,
+  AutonomousRunTodoSummary,
+} from './schema/autonomous'
+export type {
   AgentAuthMode,
   AgentBrokerAuthState,
   AgentBrokerSessionSummary,
@@ -77,6 +86,12 @@ export type {
   AgentBrokerCallbackResult,
   AgentBrokerLoginStartResponse,
   AgentBrokerSessionResponse,
+  AutonomousRunDetailResponse,
+  AutonomousRunStartPayload,
+  AutonomousRunStartResponse,
+  AutonomousRunStopResponse,
+  AutonomousRunTimelineResponse,
+  AutonomousRunsResponse,
   AgentPromptRequest,
   PreprocessingEmbeddingRequest,
   PreprocessingEmbeddingResponse,
@@ -99,6 +114,10 @@ export type {
   LayoutStateResponse,
   LayoutSummary,
   SnapshotResponse,
+  TelemetryActivityResponse,
+  TelemetryHeatmapRequest,
+  TelemetryHeatmapResponse,
+  TelemetryOverviewResponse,
   WorkspaceHistoryResponse,
   WorkspaceSyncStatusResponse,
 } from './schema/api'
@@ -124,6 +143,16 @@ export type {
   ValidationIssueSeverity,
   ValidationResult,
 } from './schema/planner'
+export type {
+  AgentHeatSample,
+  TelemetryActivityEvent,
+  TelemetryConfidence,
+  TelemetryMode,
+  TelemetryOverview,
+  TelemetryOverviewBucket,
+  TelemetrySource,
+  TelemetryWindow,
+} from './schema/telemetry'
 export type {
   SemanticCacheManifest,
   SemanticCacheSnapshot,

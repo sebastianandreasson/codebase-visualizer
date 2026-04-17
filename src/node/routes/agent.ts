@@ -94,7 +94,11 @@ export async function handleAgentRoute(
     }
 
     await ensureAgentInstructions(options.rootDir)
-    void options.agentRuntime.promptWorkspaceSession(options.rootDir, payload.message).catch((error) => {
+    void options.agentRuntime.promptWorkspaceSession(
+      options.rootDir,
+      payload.message,
+      payload.metadata,
+    ).catch((error) => {
       console.error(
         '[semanticode][agent] Background prompt failed:',
         error instanceof Error ? error.message : error,
