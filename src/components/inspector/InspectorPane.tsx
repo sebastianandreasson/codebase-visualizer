@@ -3,7 +3,7 @@ import type { Edge } from '@xyflow/react'
 import CodeMirror from '@uiw/react-codemirror'
 import { EditorState, type Extension } from '@uiw/react-codemirror'
 import { RangeSetBuilder, StateField, type RangeSet } from '@codemirror/state'
-import { EditorView, GutterMarker, gutterLineClass } from '@codemirror/view'
+import { Decoration, EditorView, GutterMarker, gutterLineClass } from '@codemirror/view'
 import { css as cssLanguage } from '@codemirror/lang-css'
 import { html as htmlLanguage } from '@codemirror/lang-html'
 import { javascript } from '@codemirror/lang-javascript'
@@ -673,7 +673,6 @@ function CodePreview({
 }) {
   const viewRef = useRef<EditorView | null>(null)
   const diffSummaryRef = useRef<HTMLDivElement | null>(null)
-  const diffCacheRef = useRef(new Map<string, GitFileDiff | null>())
   const [fileDiff, setFileDiff] = useState<GitFileDiff | null>(null)
   const extensions = useMemo(
     () => [
@@ -687,27 +686,14 @@ function CodePreview({
 
   useEffect(() => {
     let cancelled = false
-    const cachedDiff = diffCacheRef.current.get(file.path)
 
-    if (cachedDiff !== undefined) {
-      setFileDiff(cachedDiff)
-      return () => {
-        cancelled = true
-      }
-    }
-
-    setFileDiff(null)
     void fetchGitFileDiff(file.path)
       .then((diff) => {
-        diffCacheRef.current.set(file.path, diff)
-
         if (!cancelled) {
           setFileDiff(diff)
         }
       })
       .catch(() => {
-        diffCacheRef.current.set(file.path, null)
-
         if (!cancelled) {
           setFileDiff(null)
         }
@@ -717,6 +703,57 @@ function CodePreview({
       cancelled = true
     }
   }, [file.path])
+
+  useEffect(() => {
+    if (!scrollToDiffRequestKey) {
+      return
+    }
+
+    let cancelled = false
+    let attemptCount = 0
+    let intervalId: number | null = null
+
+    const refreshDiff = async () => {
+      attemptCount += 1
+
+      try {
+        const diff = await fetchGitFileDiff(file.path)
+
+        if (cancelled) {
+          return
+        }
+
+        setFileDiff(diff)
+
+        if (diff?.hasDiff || attemptCount >= 8) {
+          if (intervalId != null) {
+            window.clearInterval(intervalId)
+          }
+        }
+      } catch {
+        if (cancelled) {
+          return
+        }
+
+        if (attemptCount >= 8 && intervalId != null) {
+          window.clearInterval(intervalId)
+        }
+      }
+    }
+
+    void refreshDiff()
+    intervalId = window.setInterval(() => {
+      void refreshDiff()
+    }, 700)
+
+    return () => {
+      cancelled = true
+
+      if (intervalId != null) {
+        window.clearInterval(intervalId)
+      }
+    }
+  }, [file.path, scrollToDiffRequestKey])
 
   useEffect(() => {
     if (!viewRef.current || !highlightedRange) {
@@ -881,6 +918,14 @@ const codePreviewThemeLight = EditorView.theme({
   '.cm-lineNumbers .cm-gutterElement.cm-semanticode-diff-added-gutter, .cm-lineNumbers .cm-gutterElement.cm-semanticode-diff-modified-gutter': {
     borderRadius: '0.45rem',
   },
+  '.cm-line.cm-semanticode-diff-added-line': {
+    backgroundColor: 'color-mix(in srgb, var(--app-success-soft) 88%, var(--app-code-bg))',
+    boxShadow: 'inset 4px 0 0 0 var(--app-success)',
+  },
+  '.cm-line.cm-semanticode-diff-modified-line': {
+    backgroundColor: 'color-mix(in srgb, var(--app-warning-soft) 84%, var(--app-code-bg))',
+    boxShadow: 'inset 4px 0 0 0 var(--app-warning)',
+  },
   '.cm-selectionBackground': {
     backgroundColor: 'var(--app-code-selection) !important',
   },
@@ -935,6 +980,14 @@ const codePreviewThemeDark = EditorView.theme({
   '.cm-lineNumbers .cm-gutterElement.cm-semanticode-diff-added-gutter, .cm-lineNumbers .cm-gutterElement.cm-semanticode-diff-modified-gutter': {
     borderRadius: '0.45rem',
   },
+  '.cm-line.cm-semanticode-diff-added-line': {
+    backgroundColor: 'color-mix(in srgb, var(--app-success-soft) 92%, var(--app-code-bg))',
+    boxShadow: 'inset 4px 0 0 0 var(--app-success)',
+  },
+  '.cm-line.cm-semanticode-diff-modified-line': {
+    backgroundColor: 'color-mix(in srgb, var(--app-warning-soft) 88%, var(--app-code-bg))',
+    boxShadow: 'inset 4px 0 0 0 var(--app-warning)',
+  },
   '.cm-selectionBackground': {
     backgroundColor: 'var(--app-code-selection) !important',
   },
@@ -953,8 +1006,8 @@ function createHighlightedLineExtension(highlightedRange?: SourceRange): Extensi
     create(state) {
       return buildHighlightedGutterMarkers(state, startLine, endLine)
     },
-    update(value) {
-      return value
+    update(_value, transaction) {
+      return buildHighlightedGutterMarkers(transaction.state, startLine, endLine)
     },
     provide(field) {
       return gutterLineClass.from(field)
@@ -967,17 +1020,30 @@ function createDiffLineExtension(diff?: GitFileDiff | null): Extension | null {
     return null
   }
 
-  return StateField.define<RangeSet<GutterMarker>>({
-    create(state) {
-      return buildDiffGutterMarkers(state, diff.changes)
-    },
-    update(value) {
-      return value
-    },
-    provide(field) {
-      return gutterLineClass.from(field)
-    },
-  })
+  return [
+    StateField.define<RangeSet<GutterMarker>>({
+      create(state) {
+        return buildDiffGutterMarkers(state, diff.changes)
+      },
+      update(_value, transaction) {
+        return buildDiffGutterMarkers(transaction.state, diff.changes)
+      },
+      provide(field) {
+        return gutterLineClass.from(field)
+      },
+    }),
+    StateField.define<RangeSet<Decoration>>({
+      create(state) {
+        return buildDiffLineDecorations(state, diff.changes)
+      },
+      update(_value, transaction) {
+        return buildDiffLineDecorations(transaction.state, diff.changes)
+      },
+      provide(field) {
+        return EditorView.decorations.from(field)
+      },
+    }),
+  ]
 }
 
 class HighlightedGutterMarker extends GutterMarker {
@@ -996,6 +1062,16 @@ class ModifiedDiffGutterMarker extends GutterMarker {
 
 const addedDiffGutterMarker = new AddedDiffGutterMarker()
 const modifiedDiffGutterMarker = new ModifiedDiffGutterMarker()
+const addedDiffLineDecoration = Decoration.line({
+  attributes: {
+    class: 'cm-semanticode-diff-added-line',
+  },
+})
+const modifiedDiffLineDecoration = Decoration.line({
+  attributes: {
+    class: 'cm-semanticode-diff-modified-line',
+  },
+})
 
 function buildHighlightedGutterMarkers(
   state: EditorState,
@@ -1030,6 +1106,29 @@ function buildDiffGutterMarkers(
     for (let lineNumber = startLine; lineNumber <= endLine; lineNumber += 1) {
       const line = state.doc.line(lineNumber)
       builder.add(line.from, line.from, marker)
+    }
+  }
+
+  return builder.finish()
+}
+
+function buildDiffLineDecorations(
+  state: EditorState,
+  changes: GitFileDiff['changes'],
+) {
+  const builder = new RangeSetBuilder<Decoration>()
+
+  for (const change of changes) {
+    const decoration =
+      change.kind === 'added'
+        ? addedDiffLineDecoration
+        : modifiedDiffLineDecoration
+    const startLine = Math.max(1, change.startLine)
+    const endLine = Math.min(state.doc.lines, Math.max(startLine, change.endLine))
+
+    for (let lineNumber = startLine; lineNumber <= endLine; lineNumber += 1) {
+      const line = state.doc.line(lineNumber)
+      builder.add(line.from, line.from, decoration)
     }
   }
 

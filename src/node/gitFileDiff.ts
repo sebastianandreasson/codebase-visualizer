@@ -65,7 +65,7 @@ async function execGit(rootDir: string, args: string[]) {
 async function buildUntrackedFileDiff(rootDir: string, workspacePath: string): Promise<GitFileDiff> {
   const absolutePath = resolve(rootDir, workspacePath)
   const content = await readFile(absolutePath, 'utf8').catch(() => '')
-  const lineCount = content.length > 0 ? content.split(/\r?\n/).length : 0
+  const lineCount = countDocumentLines(content)
   const changes: GitFileDiffLineChange[] =
     lineCount > 0
       ? [
@@ -89,47 +89,85 @@ async function buildUntrackedFileDiff(rootDir: string, workspacePath: string): P
   }
 }
 
-function parseGitFileDiff(path: string, diffText: string): GitFileDiff {
+export function parseGitFileDiff(path: string, diffText: string): GitFileDiff {
   const changes: GitFileDiffLineChange[] = []
   let addedLineCount = 0
   let modifiedLineCount = 0
   let deletedLineCount = 0
+  let currentNewLine = 1
+  let pendingRemovedLineCount = 0
+  let pendingAddedLineCount = 0
+  let pendingAddedStartLine: number | null = null
+
+  const flushPendingChange = () => {
+    if (pendingRemovedLineCount > 0 && pendingAddedLineCount > 0 && pendingAddedStartLine !== null) {
+      modifiedLineCount += pendingAddedLineCount
+      changes.push({
+        endLine: pendingAddedStartLine + pendingAddedLineCount - 1,
+        kind: 'modified',
+        startLine: pendingAddedStartLine,
+      })
+    } else if (pendingAddedLineCount > 0 && pendingAddedStartLine !== null) {
+      addedLineCount += pendingAddedLineCount
+      changes.push({
+        endLine: pendingAddedStartLine + pendingAddedLineCount - 1,
+        kind: 'added',
+        startLine: pendingAddedStartLine,
+      })
+    } else if (pendingRemovedLineCount > 0) {
+      deletedLineCount += pendingRemovedLineCount
+    }
+
+    pendingRemovedLineCount = 0
+    pendingAddedLineCount = 0
+    pendingAddedStartLine = null
+  }
 
   for (const line of diffText.split(/\r?\n/)) {
     const match = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/.exec(line)
 
-    if (!match) {
+    if (match) {
+      flushPendingChange()
+      currentNewLine = Number.parseInt(match[3] ?? '1', 10)
       continue
     }
 
-    const oldCount = Number.parseInt(match[2] ?? '1', 10)
-    const newStart = Number.parseInt(match[3] ?? '0', 10)
-    const newCount = Number.parseInt(match[4] ?? '1', 10)
-
-    if (oldCount === 0 && newCount > 0) {
-      addedLineCount += newCount
-      changes.push({
-        endLine: newStart + newCount - 1,
-        kind: 'added',
-        startLine: newStart,
-      })
+    if (line.startsWith('diff --git') || line.startsWith('index ') || line.startsWith('--- ') || line.startsWith('+++ ')) {
+      flushPendingChange()
       continue
     }
 
-    if (oldCount > 0 && newCount === 0) {
-      deletedLineCount += oldCount
+    if (line.startsWith('-')) {
+      if (pendingAddedLineCount > 0) {
+        flushPendingChange()
+      }
+
+      pendingRemovedLineCount += 1
       continue
     }
 
-    if (oldCount > 0 && newCount > 0) {
-      modifiedLineCount += newCount
-      changes.push({
-        endLine: newStart + newCount - 1,
-        kind: 'modified',
-        startLine: newStart,
-      })
+    if (line.startsWith('+')) {
+      if (pendingAddedStartLine === null) {
+        pendingAddedStartLine = currentNewLine
+      }
+
+      pendingAddedLineCount += 1
+      currentNewLine += 1
+      continue
+    }
+
+    if (line.startsWith('\\')) {
+      continue
+    }
+
+    flushPendingChange()
+
+    if (line.startsWith(' ')) {
+      currentNewLine += 1
     }
   }
+
+  flushPendingChange()
 
   return {
     addedLineCount,
@@ -155,4 +193,18 @@ function normalizeWorkspaceRelativePath(rootDir: string, targetPath: string) {
   }
 
   return relative(normalizedRootDir, absoluteTargetPath).replace(/\\/g, '/')
+}
+
+function countDocumentLines(content: string) {
+  if (content.length === 0) {
+    return 0
+  }
+
+  const normalizedContent = content.endsWith('\n') ? content.slice(0, -1) : content
+
+  if (normalizedContent.length === 0) {
+    return 1
+  }
+
+  return normalizedContent.split(/\r?\n/).length
 }

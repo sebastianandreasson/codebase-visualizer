@@ -132,6 +132,21 @@ export default function App() {
     }
   }
 
+  async function refreshWorkspaceSnapshotPreservingScene() {
+    const [{ layoutState, snapshot }, workspaceSyncStatus] = await Promise.all([
+      fetchWorkspaceState(),
+      fetchWorkspaceSyncStatus(),
+    ])
+
+    startTransition(() => {
+      setSnapshot(snapshot)
+      setLayouts(layoutState.layouts)
+      setDraftLayouts(layoutState.draftLayouts)
+      setWorkspaceSyncStatus(workspaceSyncStatus)
+      setErrorMessage(null)
+    })
+  }
+
   async function refreshLayoutState() {
     const [layoutState, workspaceSyncStatus] = await Promise.all([
       fetchLayoutState(),
@@ -157,6 +172,7 @@ export default function App() {
         <Semanticode
           layoutActionsPending={layoutActionPending}
           onAgentRunSettled={refreshWorkspaceState}
+          onLiveWorkspaceRefresh={refreshWorkspaceSnapshotPreservingScene}
           onBuildSemanticEmbeddings={handleBuildSemanticEmbeddings}
           layoutSuggestionError={layoutSuggestionError}
           layoutSuggestionPending={layoutSuggestionPending}
