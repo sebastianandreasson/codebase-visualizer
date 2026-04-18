@@ -98,6 +98,8 @@ function formatSymbolKindTag(kind: string) {
       return 'const'
     case 'variable':
       return 'var'
+    case 'unknown':
+      return 'misc'
     case 'module':
       return 'mod'
     case 'function':
@@ -121,6 +123,8 @@ function matchesKindTag(tag: string, kind: string) {
       return normalizedTag === 'constant'
     case 'variable':
       return normalizedTag === 'variable'
+    case 'unknown':
+      return normalizedTag === 'other' || normalizedTag === 'unknown'
     case 'module':
       return normalizedTag === 'module'
     case 'function':

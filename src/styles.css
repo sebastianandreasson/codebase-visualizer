@@ -4476,7 +4476,7 @@ body.is-desktop-host .demo-page {
 
 .cbv-file-inspector {
   display: grid;
-  gap: 0.5rem;
+  gap: 0.4rem;
 }
 
 .cbv-file-identity {
@@ -4553,16 +4553,16 @@ body.is-desktop-host .demo-page {
 .cbv-agent-context-card,
 .cbv-inspector-support-section {
   margin: 0;
-  padding: 0.625rem 0.75rem;
+  padding: 0.5rem 0.625rem;
   border: 1px solid var(--app-border-soft);
   border-radius: var(--cbv-radius-lg);
-  background: var(--app-surface-soft);
+  background: color-mix(in oklch, var(--app-surface) 86%, var(--app-surface-soft));
 }
 
 .cbv-purpose-summary,
 .cbv-telemetry-summary,
 .cbv-inspector-support-section {
-  gap: 0.375rem;
+  gap: 0.25rem;
 }
 
 .cbv-purpose-summary strong,
@@ -4606,23 +4606,25 @@ body.is-desktop-host .demo-page {
 }
 
 .cbv-code-editor .cm-editor {
-  max-height: min(58vh, 36rem);
+  max-height: min(62vh, 42rem);
   border-radius: 0;
 }
 
 .cbv-code-editor .cm-scroller {
-  min-height: 18rem;
+  min-height: 20rem;
 }
 
 .cbv-inspector-actions {
-  display: grid;
-  gap: 0.3rem;
-  padding-top: 0.125rem;
-  border-top: 1px solid var(--app-border-soft);
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+  padding-top: 0.1rem;
 }
 
 .cbv-inspector-actions button {
-  width: 100%;
+  width: auto;
+  flex: 0 0 auto;
   min-height: 1.75rem;
   border: 1px solid var(--app-accent);
   border-radius: var(--cbv-radius-md);
@@ -4637,6 +4639,7 @@ body.is-desktop-host .demo-page {
 
 .cbv-inspector-actions span {
   overflow: hidden;
+  flex: 1 1 auto;
   color: var(--app-text-faint);
   font-size: 0.59375rem;
   text-overflow: ellipsis;
@@ -5626,6 +5629,16 @@ body.is-desktop-host .demo-page {
   gap: 0.35rem;
 }
 
+.cbv-canvas-utility-trigger .cbv-eyebrow {
+  color: var(--app-text-faint);
+}
+
+.cbv-canvas-utility-trigger.is-open .cbv-eyebrow,
+.cbv-canvas-utility-trigger:hover .cbv-eyebrow,
+.cbv-canvas-utility-trigger:focus-visible .cbv-eyebrow {
+  color: var(--app-text-dim);
+}
+
 .cbv-agent-heat-panel,
 .cbv-semantic-search,
 .cbv-canvas-layer-toggles,
@@ -5683,4 +5696,37 @@ body.is-desktop-host .demo-page {
   .cbv-canvas-utility-anchor {
     width: min(21rem, calc(100% - 1rem));
   }
+}
+
+@media (max-width: 1480px) {
+  .cbv-toolbar-status {
+    display: inline-flex;
+  }
+
+  .cbv-toolbar-path {
+    display: none;
+  }
+}
+
+@media (max-width: 1320px) {
+  .cbv-toolbar-shortcut {
+    display: none;
+  }
+}
+
+@media (max-width: 1160px) {
+  .cbv-working-set-chip span:last-child {
+    display: none;
+  }
+
+  .cbv-working-set-chip {
+    min-width: 1.25rem;
+    justify-content: center;
+    padding-inline: 0.35rem;
+  }
+}
+
+.cbv-node.is-kind-module,
+.cbv-node.is-kind-unknown {
+  --cbv-node-kind-color: var(--cbv-kind-module);
 }

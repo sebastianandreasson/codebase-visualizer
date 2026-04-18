@@ -1109,6 +1109,12 @@ const codePreviewThemeLight = EditorView.theme({
     backgroundColor: 'color-mix(in srgb, var(--app-warning-soft) 84%, var(--app-code-bg))',
     boxShadow: 'inset 4px 0 0 0 var(--app-warning)',
   },
+  '.cm-line.cm-semanticode-highlight-line': {
+    backgroundColor: 'color-mix(in srgb, var(--app-accent-soft) 30%, transparent)',
+  },
+  '.cm-line.cm-semanticode-dim-line': {
+    opacity: '0.44',
+  },
   '.cm-selectionBackground': {
     backgroundColor: 'var(--app-code-selection) !important',
   },
@@ -1171,6 +1177,12 @@ const codePreviewThemeDark = EditorView.theme({
     backgroundColor: 'color-mix(in srgb, var(--app-warning-soft) 88%, var(--app-code-bg))',
     boxShadow: 'inset 4px 0 0 0 var(--app-warning)',
   },
+  '.cm-line.cm-semanticode-highlight-line': {
+    backgroundColor: 'color-mix(in srgb, var(--app-accent-soft) 20%, transparent)',
+  },
+  '.cm-line.cm-semanticode-dim-line': {
+    opacity: '0.44',
+  },
   '.cm-selectionBackground': {
     backgroundColor: 'var(--app-code-selection) !important',
   },
@@ -1185,17 +1197,30 @@ function createHighlightedLineExtension(highlightedRange?: SourceRange): Extensi
   const startLine = Math.max(1, Math.min(start.line, end.line))
   const endLine = Math.max(startLine, Math.max(start.line, end.line))
 
-  return StateField.define<RangeSet<GutterMarker>>({
-    create(state) {
-      return buildHighlightedGutterMarkers(state, startLine, endLine)
-    },
-    update(_value, transaction) {
-      return buildHighlightedGutterMarkers(transaction.state, startLine, endLine)
-    },
-    provide(field) {
-      return gutterLineClass.from(field)
-    },
-  })
+  return [
+    StateField.define<RangeSet<GutterMarker>>({
+      create(state) {
+        return buildHighlightedGutterMarkers(state, startLine, endLine)
+      },
+      update(_value, transaction) {
+        return buildHighlightedGutterMarkers(transaction.state, startLine, endLine)
+      },
+      provide(field) {
+        return gutterLineClass.from(field)
+      },
+    }),
+    StateField.define<RangeSet<Decoration>>({
+      create(state) {
+        return buildHighlightedLineDecorations(state, startLine, endLine)
+      },
+      update(_value, transaction) {
+        return buildHighlightedLineDecorations(transaction.state, startLine, endLine)
+      },
+      provide(field) {
+        return EditorView.decorations.from(field)
+      },
+    }),
+  ]
 }
 
 function createDiffLineExtension(diff?: GitFileDiff | null): Extension | null {
@@ -1245,6 +1270,16 @@ class ModifiedDiffGutterMarker extends GutterMarker {
 
 const addedDiffGutterMarker = new AddedDiffGutterMarker()
 const modifiedDiffGutterMarker = new ModifiedDiffGutterMarker()
+const highlightedLineDecoration = Decoration.line({
+  attributes: {
+    class: 'cm-semanticode-highlight-line',
+  },
+})
+const dimmedLineDecoration = Decoration.line({
+  attributes: {
+    class: 'cm-semanticode-dim-line',
+  },
+})
 const addedDiffLineDecoration = Decoration.line({
   attributes: {
     class: 'cm-semanticode-diff-added-line',
@@ -1267,6 +1302,25 @@ function buildHighlightedGutterMarkers(
   for (let lineNumber = startLine; lineNumber <= maxLine; lineNumber += 1) {
     const line = state.doc.line(lineNumber)
     builder.add(line.from, line.from, highlightedGutterMarker)
+  }
+
+  return builder.finish()
+}
+
+function buildHighlightedLineDecorations(
+  state: EditorState,
+  startLine: number,
+  endLine: number,
+) {
+  const builder = new RangeSetBuilder<Decoration>()
+
+  for (let lineNumber = 1; lineNumber <= state.doc.lines; lineNumber += 1) {
+    const line = state.doc.line(lineNumber)
+    const decoration =
+      lineNumber >= startLine && lineNumber <= endLine
+        ? highlightedLineDecoration
+        : dimmedLineDecoration
+    builder.add(line.from, line.from, decoration)
   }
 
   return builder.finish()

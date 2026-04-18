@@ -2096,6 +2096,32 @@ export function Semanticode({
 
     return `${requestText} · ${tokenText}${runText}`
   }, [telemetryEnabled, telemetryError, telemetryOverview, telemetryWindow])
+  const agentHeatSummaryText = useMemo(() => {
+    if (!telemetryEnabled) {
+      return 'heat off'
+    }
+
+    if (telemetryError) {
+      return 'telemetry error'
+    }
+
+    if (!telemetryOverview) {
+      return 'loading activity'
+    }
+
+    if (telemetryOverview.requestCount === 0) {
+      return telemetryWindow === 'run' ? '0 req · run' : '0 req'
+    }
+
+    const requestText = `${telemetryOverview.requestCount} req`
+    const tokenText = `${Math.round(telemetryOverview.totalTokens)} tok`
+    const runText =
+      telemetryOverview.activeRuns.length > 0
+        ? ` · ${telemetryOverview.activeRuns.length} run${telemetryOverview.activeRuns.length === 1 ? '' : 's'}`
+        : ''
+
+    return `${requestText} · ${tokenText}${runText}`
+  }, [telemetryEnabled, telemetryError, telemetryOverview, telemetryWindow])
   const agentHeatFollowText = useMemo(() => {
     if (!followActiveAgent) {
       return 'Follow active agent off.'
@@ -2983,7 +3009,7 @@ export function Semanticode({
                   showLayoutSuggestion={Boolean(onSuggestLayout)}
                   showSemanticSearch={viewMode === 'symbols' && semanticSearchAvailable}
                   themeMode={themeMode}
-                  utilitySummaryText={agentHeatHelperText}
+                  utilitySummaryText={agentHeatSummaryText}
                   viewMode={viewMode}
                   viewport={viewport}
                   visibleLayerToggles={visibleLayerToggles}
@@ -5261,11 +5287,12 @@ function getSymbolVisualKindClass(symbol: SymbolNode) {
     case 'function':
     case 'constant':
     case 'variable':
+    case 'module':
       return symbol.symbolKind
     case 'method':
       return 'function'
     default:
-      return 'variable'
+      return 'module'
   }
 }
 
@@ -5289,8 +5316,10 @@ function getSymbolKindRank(symbol: SymbolNode) {
       return 5
     case 'variable':
       return 6
+    case 'module':
+      return 7
     default:
-      return 99
+      return 8
   }
 }
 
@@ -5427,6 +5456,12 @@ function getSymbolSidebarSemanticGroup(symbol: SymbolNode) {
         label: 'Classes',
         tone: '--cbv-kind-class',
       }
+    case 'module':
+      return {
+        id: 'symbol:module',
+        label: 'Modules',
+        tone: '--cbv-kind-module',
+      }
     case 'constant':
       return {
         id: 'symbol:constant',
@@ -5441,11 +5476,16 @@ function getSymbolSidebarSemanticGroup(symbol: SymbolNode) {
       }
     case 'method':
     case 'function':
-    default:
       return {
         id: 'symbol:function',
         label: 'Functions',
         tone: '--cbv-kind-function',
+      }
+    default:
+      return {
+        id: 'symbol:unknown',
+        label: 'Other',
+        tone: '--cbv-kind-module',
       }
   }
 }
@@ -5464,6 +5504,10 @@ function getSidebarGroupRank(groupId: string) {
       return 4
     case 'symbol:variable':
       return 5
+    case 'symbol:module':
+      return 6
+    case 'symbol:unknown':
+      return 7
     default:
       return 99
   }
@@ -5482,7 +5526,19 @@ function getSymbolSidebarBadge(symbol: SymbolNode) {
     return 'hook'
   }
 
-  return symbol.symbolKind === 'method' ? 'method' : null
+  if (symbol.symbolKind === 'method') {
+    return 'method'
+  }
+
+  if (symbol.symbolKind === 'module') {
+    return 'module'
+  }
+
+  if (symbol.symbolKind === 'unknown') {
+    return 'other'
+  }
+
+  return null
 }
 
 function getSymbolSidebarMetric(symbol: SymbolNode) {
