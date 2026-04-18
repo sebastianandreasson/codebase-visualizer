@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import { relative, resolve, sep } from 'node:path'
 import { promisify } from 'node:util'
@@ -82,6 +83,7 @@ async function buildUntrackedFileDiff(rootDir: string, workspacePath: string): P
     baseline: 'HEAD',
     changes,
     deletedLineCount: 0,
+    fingerprint: hashGitDiffContent(content),
     hasDiff: lineCount > 0,
     isUntracked: true,
     modifiedLineCount: 0,
@@ -174,6 +176,7 @@ export function parseGitFileDiff(path: string, diffText: string): GitFileDiff {
     baseline: 'HEAD',
     changes,
     deletedLineCount,
+    fingerprint: hashGitDiffContent(diffText),
     hasDiff: addedLineCount > 0 || modifiedLineCount > 0 || deletedLineCount > 0,
     isUntracked: false,
     modifiedLineCount,
@@ -207,4 +210,8 @@ function countDocumentLines(content: string) {
   }
 
   return normalizedContent.split(/\r?\n/).length
+}
+
+function hashGitDiffContent(content: string) {
+  return createHash('sha1').update(content).digest('hex')
 }

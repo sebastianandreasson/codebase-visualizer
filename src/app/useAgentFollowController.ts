@@ -1,208 +1,165 @@
 import type { Node } from '@xyflow/react'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useReducer } from 'react'
 
+import type {
+  DirtyFileEditSignal,
+  FollowCameraCommand,
+  FollowDebugState,
+  FollowInspectorCommand,
+  FollowRefreshCommand,
+} from './agentFollowModel'
+import {
+  createInitialFollowControllerState,
+  followControllerReducer,
+  type FollowIntent,
+} from './agentFollowModel'
 import type {
   ProjectSnapshot,
   TelemetryActivityEvent,
   TelemetryMode,
+  VisualizerViewMode,
 } from '../types'
-import {
-  buildPendingEditedTargetFromPath,
-  computePendingEditedPaths,
-  getLatestAgentActivityTarget,
-  getLatestEditedActivityTarget,
-  type FollowTarget,
-} from './agentFollowModel'
-
-export interface FollowActivityCommand {
-  key: string
-  target: FollowTarget
-}
-
-export interface FollowEditCommand {
-  diffRequestKey: string
-  key: string
-  pendingPath: string | null
-  target: FollowTarget
-}
 
 interface UseAgentFollowControllerInput {
+  dirtyFileEditSignals: DirtyFileEditSignal[]
   enabled: boolean
   liveChangedFiles: string[]
   snapshot: ProjectSnapshot | null
   telemetryActivityEvents: TelemetryActivityEvent[]
   telemetryEnabled: boolean
   telemetryMode: TelemetryMode
+  viewMode: VisualizerViewMode
   visibleNodes: Node[]
 }
 
 export function useAgentFollowController(
   input: UseAgentFollowControllerInput,
 ) {
-  const knownChangedPathsRef = useRef<Set<string>>(new Set())
-  const [pendingEditedPaths, setPendingEditedPaths] = useState<string[]>([])
-  const [lastHandledActivityKey, setLastHandledActivityKey] = useState<string | null>(
-    null,
+  const [state, dispatch] = useReducer(
+    followControllerReducer,
+    undefined,
+    createInitialFollowControllerState,
   )
-  const [lastHandledEditKey, setLastHandledEditKey] = useState<string | null>(null)
 
   useEffect(() => {
-    if (!input.enabled) {
-      knownChangedPathsRef.current = new Set()
+    dispatch({
+      type: 'FOLLOW_TOGGLED',
+      enabled: input.enabled,
+      nowMs: Date.now(),
+    })
+  }, [input.enabled])
+
+  useEffect(() => {
+    dispatch({
+      type: 'TELEMETRY_BATCH_UPDATED',
+      nowMs: Date.now(),
+      telemetryActivityEvents: input.telemetryActivityEvents,
+      telemetryEnabled: input.telemetryEnabled,
+    })
+  }, [input.telemetryActivityEvents, input.telemetryEnabled])
+
+  useEffect(() => {
+    dispatch({
+      type: 'DIRTY_FILES_UPDATED',
+      liveChangedFiles: input.liveChangedFiles,
+      nowMs: Date.now(),
+    })
+  }, [input.liveChangedFiles])
+
+  useEffect(() => {
+    dispatch({
+      type: 'DIRTY_FILE_SIGNALS_UPDATED',
+      nowMs: Date.now(),
+      signals: input.dirtyFileEditSignals,
+    })
+  }, [input.dirtyFileEditSignals])
+
+  useEffect(() => {
+    dispatch({
+      type: 'SNAPSHOT_CONTEXT_UPDATED',
+      nowMs: Date.now(),
+      snapshot: input.snapshot,
+      visibleNodeIds: input.visibleNodes.map((node) => node.id),
+    })
+  }, [input.snapshot, input.visibleNodes])
+
+  useEffect(() => {
+    dispatch({
+      type: 'VIEW_MODE_CHANGED',
+      mode: input.telemetryMode,
+      nowMs: Date.now(),
+      viewMode: input.viewMode,
+    })
+  }, [input.telemetryMode, input.viewMode])
+
+  useEffect(() => {
+    if (!state.enabled || state.cameraLockUntilMs <= state.nowMs) {
       return
     }
 
-    setPendingEditedPaths((currentPendingPaths) =>
-      computePendingEditedPaths({
-        currentPendingPaths,
-        liveChangedFiles: input.liveChangedFiles,
-        previousChangedPaths: knownChangedPathsRef.current,
-        telemetryActivityEvents: input.telemetryActivityEvents,
-      }),
-    )
-    knownChangedPathsRef.current = new Set(input.liveChangedFiles)
-  }, [input.enabled, input.liveChangedFiles, input.telemetryActivityEvents])
-
-  const latestAgentActivityTarget = useMemo(
-    () =>
-      getLatestAgentActivityTarget({
-        snapshot: input.snapshot,
-        telemetryActivityEvents: input.telemetryActivityEvents,
-        telemetryEnabled: input.telemetryEnabled,
-        telemetryMode: input.telemetryMode,
-        visibleNodes: input.visibleNodes,
-      }),
-    [
-      input.snapshot,
-      input.telemetryActivityEvents,
-      input.telemetryEnabled,
-      input.telemetryMode,
-      input.visibleNodes,
-    ],
-  )
-
-  const latestAgentEditedTarget = useMemo(
-    () =>
-      getLatestEditedActivityTarget({
-        changedPaths: input.liveChangedFiles,
-        snapshot: input.snapshot,
-        telemetryActivityEvents: input.telemetryActivityEvents,
-        telemetryEnabled: input.telemetryEnabled,
-        telemetryMode: input.telemetryMode,
-        visibleNodes: input.visibleNodes,
-      }),
-    [
-      input.liveChangedFiles,
-      input.snapshot,
-      input.telemetryActivityEvents,
-      input.telemetryEnabled,
-      input.telemetryMode,
-      input.visibleNodes,
-    ],
-  )
-
-  const pendingEditedPath = input.enabled ? pendingEditedPaths[0] ?? null : null
-  const pendingEditedTarget = useMemo(() => {
-    if (!pendingEditedPath || !input.snapshot) {
-      return null
-    }
-
-    return (
-      getLatestAgentActivityTarget({
-        changedPaths: [pendingEditedPath],
-        snapshot: input.snapshot,
-        telemetryActivityEvents: input.telemetryActivityEvents,
-        telemetryEnabled: true,
-        telemetryMode: input.telemetryMode,
-        visibleNodes: input.visibleNodes,
-      }) ??
-      buildPendingEditedTargetFromPath({
-        path: pendingEditedPath,
-        snapshot: input.snapshot,
-        telemetryMode: input.telemetryMode,
-        visibleNodes: input.visibleNodes,
+    const timeoutId = window.setTimeout(() => {
+      dispatch({
+        type: 'CLOCK_TICKED',
+        nowMs: Date.now(),
       })
-    )
-  }, [
-    input.snapshot,
-    input.telemetryActivityEvents,
-    input.telemetryMode,
-    input.visibleNodes,
-    pendingEditedPath,
-  ])
+    }, Math.max(0, state.cameraLockUntilMs - state.nowMs))
 
-  const nextEditTarget = pendingEditedTarget ?? latestAgentEditedTarget
-
-  const activityCommand = useMemo<FollowActivityCommand | null>(() => {
-    if (!input.enabled || !latestAgentActivityTarget) {
-      return null
+    return () => {
+      window.clearTimeout(timeoutId)
     }
+  }, [state.cameraLockUntilMs, state.enabled, state.nowMs])
 
-    const key = `${input.telemetryMode}:${latestAgentActivityTarget.eventKey}`
-
-    if (lastHandledActivityKey === key) {
-      return null
-    }
-
-    return {
-      key,
-      target: latestAgentActivityTarget,
-    }
-  }, [input.enabled, input.telemetryMode, lastHandledActivityKey, latestAgentActivityTarget])
-
-  const editCommand = useMemo<FollowEditCommand | null>(() => {
-    if (!input.enabled || !nextEditTarget) {
-      return null
-    }
-
-    const key = `edit:${nextEditTarget.eventKey}`
-
-    if (lastHandledEditKey === key) {
-      return null
-    }
-
-    return {
-      diffRequestKey: key,
-      key,
-      pendingPath: pendingEditedTarget ? pendingEditedPath : null,
-      target: nextEditTarget,
-    }
-  }, [input.enabled, lastHandledEditKey, nextEditTarget, pendingEditedPath, pendingEditedTarget])
-
-  const acknowledgeActivityCommand = useCallback((key: string) => {
-    setLastHandledActivityKey(key)
-  }, [])
-
-  const acknowledgeEditCommand = useCallback((input: {
-    key: string
-    pendingPath: string | null
+  const acknowledgeCameraCommand = useCallback((input: {
+    commandId: string
+    intent: FollowIntent
   }) => {
-    setLastHandledEditKey(input.key)
-
-    if (!input.pendingPath) {
-      return
-    }
-
-    setPendingEditedPaths((currentPendingPaths) =>
-      currentPendingPaths.filter((path) => path !== input.pendingPath),
-    )
+    dispatch({
+      type: 'COMMAND_ACKNOWLEDGED',
+      commandId: input.commandId,
+      commandType: 'camera',
+      intent: input.intent,
+      nowMs: Date.now(),
+    })
   }, [])
 
-  const resetFollowState = useCallback(() => {
-    knownChangedPathsRef.current = new Set()
-    setPendingEditedPaths([])
-    setLastHandledActivityKey(null)
-    setLastHandledEditKey(null)
+  const acknowledgeInspectorCommand = useCallback((input: {
+    commandId: string
+    pendingPath?: string | null
+  }) => {
+    dispatch({
+      type: 'COMMAND_ACKNOWLEDGED',
+      commandId: input.commandId,
+      commandType: 'inspector',
+      nowMs: Date.now(),
+      pendingPath: input.pendingPath ?? null,
+    })
+  }, [])
+
+  const acknowledgeRefreshCommand = useCallback((commandId: string) => {
+    dispatch({
+      type: 'COMMAND_ACKNOWLEDGED',
+      commandId,
+      commandType: 'refresh',
+      nowMs: Date.now(),
+    })
+  }, [])
+
+  const setRefreshStatus = useCallback((status: 'idle' | 'in_flight') => {
+    dispatch({
+      type: 'REFRESH_STATUS_CHANGED',
+      nowMs: Date.now(),
+      status,
+    })
   }, [])
 
   return {
-    activityCommand,
-    editCommand,
-    latestAgentActivityTarget,
-    latestAgentEditedTarget,
-    pendingEditedPathCount: pendingEditedPaths.length,
-    resetFollowState,
-    acknowledgeActivityCommand,
-    acknowledgeEditCommand,
+    cameraCommand: state.currentCameraCommand as FollowCameraCommand | null,
+    debugState: state.debug as FollowDebugState,
+    inspectorCommand: state.currentInspectorCommand as FollowInspectorCommand | null,
+    refreshCommand: state.currentRefreshCommand as FollowRefreshCommand | null,
+    acknowledgeCameraCommand,
+    acknowledgeInspectorCommand,
+    acknowledgeRefreshCommand,
+    setRefreshStatus,
   }
 }

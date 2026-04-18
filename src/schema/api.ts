@@ -80,6 +80,7 @@ export interface GitFileDiffLineChange {
 export interface GitFileDiff {
   path: string
   baseline: 'HEAD'
+  fingerprint: string
   addedLineCount: number
   modifiedLineCount: number
   deletedLineCount: number

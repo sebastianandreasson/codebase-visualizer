@@ -37,6 +37,8 @@ import {
   isSymbolNode,
   type CodebaseFile,
   type CodebaseSnapshot,
+  type DirtyFileEditSignal,
+  type FollowDebugState,
   type GraphEdgeKind,
   type GraphLayerKey,
   type LayoutDraft,
@@ -77,6 +79,7 @@ import {
   fetchAutonomousRunDetail,
   fetchAutonomousRunTimeline,
   fetchAutonomousRuns,
+  fetchGitFileDiff,
   fetchTelemetryActivity,
   fetchTelemetryHeatmap,
   fetchTelemetryOverview,
@@ -252,7 +255,7 @@ const SEMANTIC_SEARCH_MAX_LIMIT = 60
 const SEMANTIC_SEARCH_DEFAULT_STRICTNESS = 35
 const LIVE_SNAPSHOT_REFRESH_DEBOUNCE_MS = 500
 const LIVE_SNAPSHOT_REFRESH_MIN_INTERVAL_MS = 1800
-const FOLLOW_AGENT_EDIT_CAMERA_LOCK_MS = 1400
+const FOLLOW_DIRTY_SIGNAL_MAX_FILES = 16
 const FOLLOW_AGENT_EDIT_SYMBOL_ZOOM = 2.15
 const FOLLOW_AGENT_EDIT_FILE_ZOOM = 1.55
 const FOLLOW_AGENT_ACTIVITY_SYMBOL_ZOOM = 1.75
@@ -424,8 +427,10 @@ export function Semanticode({
   const [telemetryError, setTelemetryError] = useState<string | null>(null)
   const [telemetryObservedAt, setTelemetryObservedAt] = useState(0)
   const [followActiveAgent, setFollowActiveAgent] = useState(false)
+  const [followDebugOpen, setFollowDebugOpen] = useState(false)
   const [followedEditDiffRequestKey, setFollowedEditDiffRequestKey] = useState<string | null>(null)
   const [liveChangedFiles, setLiveChangedFiles] = useState<string[]>([])
+  const [followDirtyFileSignals, setFollowDirtyFileSignals] = useState<DirtyFileEditSignal[]>([])
   const hasRunningAutonomousRun = autonomousRuns.some((run) => run.status === 'running')
   const currentSnapshot = useVisualizerStore((state) => state.snapshot)
   const draftLayouts = useVisualizerStore((state) => state.draftLayouts)
@@ -486,11 +491,8 @@ export function Semanticode({
   const workspaceRef = useRef<HTMLDivElement | null>(null)
   const inspectorBodyRef = useRef<HTMLDivElement | null>(null)
   const lastFittedCompareKeyRef = useRef<string | null>(null)
-  const followCameraLockUntilRef = useRef(0)
-  const liveSnapshotRefreshTimeoutRef = useRef<number | null>(null)
-  const liveSnapshotRefreshInFlightRef = useRef(false)
-  const liveSnapshotRefreshPendingRef = useRef(false)
-  const lastLiveSnapshotRefreshAtRef = useRef(0)
+  const refreshExecutorTimeoutRef = useRef<number | null>(null)
+  const lastRefreshExecutorAtRef = useRef(0)
   const selectionAutoOpenInitializedRef = useRef(false)
   const semanticSearchCacheRef = useRef(new Map<string, SemanticSearchResult[]>())
   const containerDragPreviewPositionsRef = useRef(new Map<string, XYPosition>())
@@ -828,6 +830,95 @@ export function Semanticode({
     followActiveAgent,
     hasRunningAutonomousRun,
     workspaceSyncStatus,
+  ])
+
+  useEffect(() => {
+    let cancelled = false
+
+    if (!effectiveSnapshot?.rootDir || !followActiveAgent || liveChangedFiles.length === 0) {
+      window.setTimeout(() => {
+        if (!cancelled) {
+          setFollowDirtyFileSignals([])
+        }
+      }, 0)
+
+      return () => {
+        cancelled = true
+      }
+    }
+
+    const trackedPaths = liveChangedFiles.slice(0, FOLLOW_DIRTY_SIGNAL_MAX_FILES)
+
+    const refreshDirtyFileSignals = async () => {
+      try {
+        const diffEntries = await Promise.all(
+          trackedPaths.map(async (path) => {
+            const diff = await fetchGitFileDiff(path).catch(() => null)
+            return {
+              fingerprint: buildFollowDirtySignalFingerprint(diff),
+              path,
+            }
+          }),
+        )
+
+        if (cancelled) {
+          return
+        }
+
+        const nowMs = Date.now()
+        const nextChangedPathSet = new Set(trackedPaths)
+
+        setFollowDirtyFileSignals((currentSignals) => {
+          const currentByPath = new Map(
+            currentSignals.map((signal) => [signal.path, signal]),
+          )
+          const nextSignals: DirtyFileEditSignal[] = []
+
+          for (const entry of diffEntries) {
+            if (!entry.fingerprint || !nextChangedPathSet.has(entry.path)) {
+              continue
+            }
+
+            const currentSignal = currentByPath.get(entry.path)
+
+            if (currentSignal && currentSignal.fingerprint === entry.fingerprint) {
+              nextSignals.push(currentSignal)
+              continue
+            }
+
+            nextSignals.push({
+              changedAt: new Date(nowMs).toISOString(),
+              changedAtMs: nowMs,
+              fingerprint: entry.fingerprint,
+              path: entry.path,
+            })
+          }
+
+          return nextSignals.sort((left, right) => right.changedAtMs - left.changedAtMs)
+        })
+      } catch {
+        if (!cancelled) {
+          setFollowDirtyFileSignals((currentSignals) =>
+            currentSignals.filter((signal) => trackedPaths.includes(signal.path)),
+          )
+        }
+      }
+    }
+
+    void refreshDirtyFileSignals()
+    const intervalId = window.setInterval(() => {
+      void refreshDirtyFileSignals()
+    }, hasRunningAutonomousRun ? 1200 : 2500)
+
+    return () => {
+      cancelled = true
+      window.clearInterval(intervalId)
+    }
+  }, [
+    effectiveSnapshot?.rootDir,
+    followActiveAgent,
+    hasRunningAutonomousRun,
+    liveChangedFiles,
   ])
 
   useEffect(() => {
@@ -1616,20 +1707,23 @@ export function Semanticode({
     telemetryWindow,
   ])
   const {
-    activityCommand: followActivityCommand,
-    editCommand: followEditCommand,
-    latestAgentActivityTarget,
-    latestAgentEditedTarget,
-    resetFollowState,
-    acknowledgeActivityCommand,
-    acknowledgeEditCommand,
+    cameraCommand: followCameraCommand,
+    debugState: followDebugState,
+    inspectorCommand: followInspectorCommand,
+    refreshCommand: followRefreshCommand,
+    acknowledgeCameraCommand,
+    acknowledgeInspectorCommand,
+    acknowledgeRefreshCommand,
+    setRefreshStatus,
   } = useAgentFollowController({
+    dirtyFileEditSignals: followDirtyFileSignals,
     enabled: followActiveAgent,
     liveChangedFiles,
     snapshot: effectiveSnapshot,
     telemetryActivityEvents,
     telemetryEnabled,
     telemetryMode,
+    viewMode,
     visibleNodes: nodes,
   })
 
@@ -1993,12 +2087,15 @@ export function Semanticode({
       return 'Enable agent heat to follow activity.'
     }
 
-    if (!latestAgentActivityTarget) {
+    if (followDebugState.currentMode === 'idle' || !followDebugState.currentTarget) {
       return 'Waiting for visible agent activity.'
     }
 
-    return `Following ${latestAgentActivityTarget.path}`
-  }, [followActiveAgent, latestAgentActivityTarget, telemetryEnabled])
+    const modeLabel =
+      followDebugState.currentMode === 'edit' ? 'Following edit' : 'Following activity'
+
+    return `${modeLabel}: ${followDebugState.currentTarget.path}`
+  }, [followActiveAgent, followDebugState, telemetryEnabled])
 
   const handleOpenRunsPanel = useCallback(() => {
     setRunsPanelOpen(true)
@@ -2018,13 +2115,14 @@ export function Semanticode({
     setTelemetryEnabled(true)
     setTelemetryMode(mode)
   }, [])
+  const handleToggleFollowDebug = useCallback(() => {
+    setFollowDebugOpen((current) => !current)
+  }, [])
   const handleToggleFollowActiveAgent = useCallback(() => {
     setTelemetryEnabled(true)
-    resetFollowState()
-    followCameraLockUntilRef.current = 0
     setFollowedEditDiffRequestKey(null)
     setFollowActiveAgent((current) => !current)
-  }, [resetFollowState])
+  }, [])
   const focusCanvasOnFollowTarget = useCallback((input: {
     fileNodeId: string
     isEdit: boolean
@@ -2074,82 +2172,12 @@ export function Semanticode({
       }
     }
 
-    if (input.isEdit) {
-      followCameraLockUntilRef.current = Date.now() + FOLLOW_AGENT_EDIT_CAMERA_LOCK_MS
-    }
   }, [effectiveSnapshot, flowInstance, nodes])
-  const scheduleLiveWorkspaceRefresh = useCallback(() => {
-    if (!followActiveAgent || viewMode !== 'symbols' || !onLiveWorkspaceRefresh) {
-      return
-    }
-
-    const armRefreshTimer = (delay: number) => {
-      liveSnapshotRefreshTimeoutRef.current = window.setTimeout(() => {
-        liveSnapshotRefreshTimeoutRef.current = null
-
-        if (!liveSnapshotRefreshPendingRef.current) {
-          return
-        }
-
-        if (liveSnapshotRefreshInFlightRef.current) {
-          armRefreshTimer(LIVE_SNAPSHOT_REFRESH_MIN_INTERVAL_MS)
-          return
-        }
-
-        liveSnapshotRefreshPendingRef.current = false
-        liveSnapshotRefreshInFlightRef.current = true
-        lastLiveSnapshotRefreshAtRef.current = Date.now()
-
-        void onLiveWorkspaceRefresh()
-          .catch(() => undefined)
-          .finally(() => {
-            liveSnapshotRefreshInFlightRef.current = false
-
-            if (liveSnapshotRefreshPendingRef.current) {
-              const nextDelay = Math.max(
-                LIVE_SNAPSHOT_REFRESH_DEBOUNCE_MS,
-                LIVE_SNAPSHOT_REFRESH_MIN_INTERVAL_MS,
-              )
-              armRefreshTimer(nextDelay)
-            }
-          })
-      }, delay)
-    }
-
-    liveSnapshotRefreshPendingRef.current = true
-
-    if (liveSnapshotRefreshTimeoutRef.current !== null) {
-      window.clearTimeout(liveSnapshotRefreshTimeoutRef.current)
-    }
-
-    const now = Date.now()
-    const earliestAllowedAt =
-      lastLiveSnapshotRefreshAtRef.current + LIVE_SNAPSHOT_REFRESH_MIN_INTERVAL_MS
-    const delay = Math.max(
-      LIVE_SNAPSHOT_REFRESH_DEBOUNCE_MS,
-      Math.max(0, earliestAllowedAt - now),
-    )
-
-    armRefreshTimer(delay)
-  }, [followActiveAgent, onLiveWorkspaceRefresh, viewMode])
   const inspectorWidthRatio = 1 - canvasWidthRatio
   const workspaceViewReady =
     !effectiveSnapshot ||
     (uiPreferencesHydrated &&
       workspaceViewResolvedRootDir === effectiveSnapshot.rootDir)
-
-  useEffect(() => {
-    if (followActiveAgent && viewMode === 'symbols' && onLiveWorkspaceRefresh) {
-      return
-    }
-
-    liveSnapshotRefreshPendingRef.current = false
-
-    if (liveSnapshotRefreshTimeoutRef.current !== null) {
-      window.clearTimeout(liveSnapshotRefreshTimeoutRef.current)
-      liveSnapshotRefreshTimeoutRef.current = null
-    }
-  }, [followActiveAgent, onLiveWorkspaceRefresh, viewMode])
 
   useEffect(() => {
     if (!workspaceViewReady) {
@@ -2207,100 +2235,119 @@ export function Semanticode({
   ])
 
   useEffect(() => {
-    if (!followActiveAgent || !flowInstance || !latestAgentActivityTarget) {
+    if (!followActiveAgent || !flowInstance || !followCameraCommand) {
       return
     }
-
-    if (
-      Date.now() < followCameraLockUntilRef.current ||
-      liveChangedFiles.length > 0 ||
-      latestAgentEditedTarget
-    ) {
-      return
-    }
-
-    if (!followActivityCommand) {
-      return
-    }
-
-    acknowledgeActivityCommand(followActivityCommand.key)
 
     window.setTimeout(() => {
       focusCanvasOnFollowTarget({
-        fileNodeId: followActivityCommand.target.fileNodeId,
-        isEdit: false,
+        fileNodeId: followCameraCommand.target.fileNodeId,
+        isEdit: followCameraCommand.target.intent === 'edit',
         mode: telemetryMode,
-        nodeIds: followActivityCommand.target.nodeIds,
+        nodeIds:
+          followCameraCommand.target.kind === 'symbol'
+            ? [followCameraCommand.target.primaryNodeId]
+            : [followCameraCommand.target.fileNodeId],
+      })
+      acknowledgeCameraCommand({
+        commandId: followCameraCommand.id,
+        intent: followCameraCommand.target.intent,
       })
     }, 0)
   }, [
-    acknowledgeActivityCommand,
-    followActivityCommand,
+    acknowledgeCameraCommand,
     flowInstance,
     focusCanvasOnFollowTarget,
+    followCameraCommand,
     followActiveAgent,
-    latestAgentActivityTarget,
-    latestAgentEditedTarget,
-    liveChangedFiles.length,
     telemetryMode,
   ])
 
   useEffect(() => {
-    if (!followActiveAgent || !effectiveSnapshot) {
+    if (!followActiveAgent || !followInspectorCommand) {
       return
     }
 
-    if (!followEditCommand) {
-      return
-    }
-
-    const target = followEditCommand.target
-    acknowledgeEditCommand({
-      key: followEditCommand.key,
-      pendingPath: followEditCommand.pendingPath,
-    })
+    const target = followInspectorCommand.target
 
     window.setTimeout(() => {
       const focusedNodeIds =
         telemetryMode === 'symbols'
-          ? target.nodeIds.slice(0, 1)
+          ? target.kind === 'symbol'
+            ? [target.primaryNodeId]
+            : [target.fileNodeId]
           : [target.fileNodeId]
 
       selectNode(target.fileNodeId)
       setInspectorTab('file')
       setInspectorOpen(true)
-      setFollowedEditDiffRequestKey(followEditCommand.diffRequestKey)
+      setFollowedEditDiffRequestKey(followInspectorCommand.scrollToDiffRequestKey)
       focusCanvasOnFollowTarget({
         fileNodeId: target.fileNodeId,
         isEdit: true,
         mode: telemetryMode,
         nodeIds: focusedNodeIds,
       })
+      acknowledgeInspectorCommand({
+        commandId: followInspectorCommand.id,
+        pendingPath: followInspectorCommand.pendingPath,
+      })
     }, 0)
   }, [
-    acknowledgeEditCommand,
-    effectiveSnapshot,
-    followEditCommand,
+    acknowledgeInspectorCommand,
     focusCanvasOnFollowTarget,
     followActiveAgent,
-    latestAgentEditedTarget,
-    nodes,
+    followInspectorCommand,
     selectNode,
     setInspectorTab,
     telemetryMode,
   ])
 
   useEffect(() => {
-    if (!followActiveAgent || viewMode !== 'symbols' || !followedEditDiffRequestKey) {
+    if (!followActiveAgent || !followRefreshCommand || !onLiveWorkspaceRefresh) {
       return
     }
 
-    scheduleLiveWorkspaceRefresh()
+    acknowledgeRefreshCommand(followRefreshCommand.id)
+
+    if (refreshExecutorTimeoutRef.current !== null) {
+      window.clearTimeout(refreshExecutorTimeoutRef.current)
+      refreshExecutorTimeoutRef.current = null
+    }
+
+    const now = Date.now()
+    const earliestAllowedAt =
+      lastRefreshExecutorAtRef.current + LIVE_SNAPSHOT_REFRESH_MIN_INTERVAL_MS
+    const delay = Math.max(
+      LIVE_SNAPSHOT_REFRESH_DEBOUNCE_MS,
+      Math.max(0, earliestAllowedAt - now),
+    )
+
+    refreshExecutorTimeoutRef.current = window.setTimeout(() => {
+      refreshExecutorTimeoutRef.current = null
+      lastRefreshExecutorAtRef.current = Date.now()
+      setRefreshStatus('in_flight')
+
+      void onLiveWorkspaceRefresh()
+        .catch(() => undefined)
+        .finally(() => {
+          setRefreshStatus('idle')
+        })
+    }, delay)
+
+    return () => {
+      if (refreshExecutorTimeoutRef.current !== null) {
+        window.clearTimeout(refreshExecutorTimeoutRef.current)
+        refreshExecutorTimeoutRef.current = null
+        setRefreshStatus('idle')
+      }
+    }
   }, [
+    acknowledgeRefreshCommand,
     followActiveAgent,
-    followedEditDiffRequestKey,
-    scheduleLiveWorkspaceRefresh,
-    viewMode,
+    followRefreshCommand,
+    onLiveWorkspaceRefresh,
+    setRefreshStatus,
   ])
 
   useEffect(() => {
@@ -2839,6 +2886,8 @@ export function Semanticode({
               agentHeatHelperText={agentHeatHelperText}
               agentHeatFollowEnabled={followActiveAgent}
               agentHeatFollowText={agentHeatFollowText}
+              agentHeatDebugOpen={followDebugOpen}
+              agentHeatDebugState={followDebugState}
               agentHeatMode={telemetryMode}
               agentHeatSource={telemetrySource}
               agentHeatWindow={telemetryWindow}
@@ -2854,6 +2903,7 @@ export function Semanticode({
               onInit={setFlowInstance}
               onAgentHeatModeChange={handleTelemetryModeChange}
               onAgentHeatSourceChange={handleTelemetrySourceChange}
+              onToggleAgentHeatDebug={handleToggleFollowDebug}
               onToggleAgentHeatFollow={handleToggleFollowActiveAgent}
               onAgentHeatWindowChange={handleTelemetryWindowChange}
               onLayoutSuggestionChange={handleLayoutSuggestionChange}
@@ -3022,6 +3072,8 @@ export function Semanticode({
 }
 
 interface CanvasViewportProps {
+  agentHeatDebugOpen: boolean
+  agentHeatDebugState: FollowDebugState
   agentHeatHelperText: string
   agentHeatFollowEnabled: boolean
   agentHeatFollowText: string
@@ -3040,6 +3092,7 @@ interface CanvasViewportProps {
   onInit: (instance: ReactFlowInstance<Node, Edge>) => void
   onAgentHeatModeChange: (mode: TelemetryMode) => void
   onAgentHeatSourceChange: (source: TelemetrySource) => void
+  onToggleAgentHeatDebug: () => void
   onToggleAgentHeatFollow: () => void
   onAgentHeatWindowChange: (window: TelemetryWindow) => void
   onLayoutSuggestionChange: (value: string) => void
@@ -3077,6 +3130,8 @@ interface CanvasViewportProps {
 }
 
 const MemoizedCanvasViewport = memo(function CanvasViewport({
+  agentHeatDebugOpen,
+  agentHeatDebugState,
   agentHeatHelperText,
   agentHeatFollowEnabled,
   agentHeatFollowText,
@@ -3095,6 +3150,7 @@ const MemoizedCanvasViewport = memo(function CanvasViewport({
   onInit,
   onAgentHeatModeChange,
   onAgentHeatSourceChange,
+  onToggleAgentHeatDebug,
   onToggleAgentHeatFollow,
   onAgentHeatWindowChange,
   onLayoutSuggestionChange,
@@ -3214,6 +3270,50 @@ const MemoizedCanvasViewport = memo(function CanvasViewport({
             </button>
             <p className="cbv-agent-heat-meta">{agentHeatHelperText}</p>
             <p className="cbv-agent-heat-follow-meta">{agentHeatFollowText}</p>
+            <button
+              aria-expanded={agentHeatDebugOpen}
+              className="cbv-agent-heat-debug-toggle"
+              onClick={onToggleAgentHeatDebug}
+              type="button"
+            >
+              {agentHeatDebugOpen ? 'Hide follow debug' : 'Show follow debug'}
+            </button>
+            {agentHeatDebugOpen ? (
+              <div className="cbv-agent-heat-debug">
+                <p>
+                  <strong>Mode:</strong> {agentHeatDebugState.currentMode}
+                </p>
+                <p>
+                  <strong>Event:</strong>{' '}
+                  {agentHeatDebugState.latestEvent
+                    ? formatFollowDebugEvent(agentHeatDebugState.latestEvent)
+                    : 'None'}
+                </p>
+                <p>
+                  <strong>Target:</strong>{' '}
+                  {agentHeatDebugState.currentTarget
+                    ? formatFollowDebugTarget(agentHeatDebugState.currentTarget)
+                    : 'None'}
+                </p>
+                <p>
+                  <strong>Queue:</strong> {agentHeatDebugState.queueLength}
+                </p>
+                <p>
+                  <strong>Camera lock:</strong>{' '}
+                  {agentHeatDebugState.cameraLockActive
+                    ? formatFollowCameraLock(agentHeatDebugState.cameraLockUntilMs)
+                    : 'Inactive'}
+                </p>
+                <p>
+                  <strong>Refresh:</strong>{' '}
+                  {agentHeatDebugState.refreshInFlight
+                    ? 'In flight'
+                    : agentHeatDebugState.refreshPending
+                      ? 'Pending'
+                      : 'Idle'}
+                </p>
+              </div>
+            ) : null}
           </div>
           {showSemanticSearch ? (
             <form
@@ -3454,6 +3554,48 @@ function parseTelemetryWindow(value: string): TelemetryWindow {
   }
 
   return 60
+}
+
+function formatFollowDebugEvent(event: FollowDebugState['latestEvent']) {
+  if (!event) {
+    return 'None'
+  }
+
+  if ('path' in event) {
+    return `${event.type} · ${event.path}`
+  }
+
+  if (event.type === 'view_changed') {
+    return `${event.type} · ${event.mode}`
+  }
+
+  return event.type
+}
+
+function formatFollowDebugTarget(target: FollowDebugState['currentTarget']) {
+  if (!target) {
+    return 'None'
+  }
+
+  return `${target.kind} · ${target.path} · ${target.confidence}`
+}
+
+function formatFollowCameraLock(cameraLockUntilMs: number) {
+  const remainingMs = Math.max(0, cameraLockUntilMs - Date.now())
+  return remainingMs > 0 ? `${(remainingMs / 1000).toFixed(1)}s` : 'Inactive'
+}
+
+function buildFollowDirtySignalFingerprint(
+  diff: {
+    fingerprint: string
+    hasDiff: boolean
+  } | null,
+) {
+  if (!diff?.hasDiff) {
+    return null
+  }
+
+  return diff.fingerprint
 }
 
 function getWorkspaceName(rootDir: string) {

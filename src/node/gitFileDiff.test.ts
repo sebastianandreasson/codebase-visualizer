@@ -16,16 +16,21 @@ describe('parseGitFileDiff', () => {
       ].join('\n'),
     )
 
-    expect(diff.addedLineCount).toBe(2)
-    expect(diff.modifiedLineCount).toBe(0)
-    expect(diff.deletedLineCount).toBe(0)
-    expect(diff.changes).toEqual([
-      {
-        endLine: 5,
-        kind: 'added',
-        startLine: 4,
-      },
-    ])
+    expect(diff).toEqual(
+      expect.objectContaining({
+        addedLineCount: 2,
+        modifiedLineCount: 0,
+        deletedLineCount: 0,
+        fingerprint: expect.any(String),
+        changes: [
+          {
+            endLine: 5,
+            kind: 'added',
+            startLine: 4,
+          },
+        ],
+      }),
+    )
   })
 
   it('maps replacements to modified ranges instead of whole hunk guesses', () => {
@@ -44,16 +49,21 @@ describe('parseGitFileDiff', () => {
       ].join('\n'),
     )
 
-    expect(diff.addedLineCount).toBe(0)
-    expect(diff.modifiedLineCount).toBe(3)
-    expect(diff.deletedLineCount).toBe(0)
-    expect(diff.changes).toEqual([
-      {
-        endLine: 12,
-        kind: 'modified',
-        startLine: 10,
-      },
-    ])
+    expect(diff).toEqual(
+      expect.objectContaining({
+        addedLineCount: 0,
+        modifiedLineCount: 3,
+        deletedLineCount: 0,
+        fingerprint: expect.any(String),
+        changes: [
+          {
+            endLine: 12,
+            kind: 'modified',
+            startLine: 10,
+          },
+        ],
+      }),
+    )
   })
 
   it('tracks pure deletions without painting non-existent new lines', () => {
@@ -70,9 +80,14 @@ describe('parseGitFileDiff', () => {
       ].join('\n'),
     )
 
-    expect(diff.addedLineCount).toBe(0)
-    expect(diff.modifiedLineCount).toBe(0)
-    expect(diff.deletedLineCount).toBe(3)
-    expect(diff.changes).toEqual([])
+    expect(diff).toEqual(
+      expect.objectContaining({
+        addedLineCount: 0,
+        modifiedLineCount: 0,
+        deletedLineCount: 3,
+        fingerprint: expect.any(String),
+        changes: [],
+      }),
+    )
   })
 })

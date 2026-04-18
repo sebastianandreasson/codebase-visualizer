@@ -157,6 +157,19 @@ export type {
   TelemetryWindow,
 } from './schema/telemetry'
 export type {
+  DirtyFileEditSignal,
+  FollowCameraCommand,
+  FollowControllerState,
+  FollowDebugState,
+  FollowDomainEvent,
+  FollowInspectorCommand,
+  FollowIntent,
+  FollowRefreshCommand,
+  FollowTarget,
+  FollowTargetConfidence,
+  FollowTargetKind,
+} from './app/agentFollowModel'
+export type {
   SemanticCacheManifest,
   SemanticCacheSnapshot,
   SemanticEmbeddingProvider,
