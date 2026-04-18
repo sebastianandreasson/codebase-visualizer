@@ -51,7 +51,7 @@
   --app-inverse-text: oklch(0.18 0.008 260);
   --app-backdrop: rgb(0 0 0 / 0.58);
   --app-shadow: 0 16px 40px -12px rgb(0 0 0 / 0.55);
-  --app-accent: oklch(0.74 0.14 215);
+  --app-accent: oklch(0.72 0.14 64);
   --app-accent-soft: color-mix(in oklch, var(--app-accent) 18%, transparent);
   --app-success: oklch(0.76 0.11 150);
   --app-success-soft: color-mix(in oklch, var(--app-success) 18%, transparent);
@@ -109,7 +109,7 @@
   --app-warning-soft: color-mix(in oklch, var(--app-warning) 16%, white);
   --app-danger-soft: color-mix(in oklch, var(--app-danger) 14%, white);
   --app-canvas-bg:
-    radial-gradient(circle at top, rgb(107 139 186 / 0.15), transparent 32%),
+    radial-gradient(circle at top, color-mix(in oklch, var(--app-accent) 18%, transparent), transparent 32%),
     linear-gradient(180deg, oklch(0.965 0.004 260), oklch(0.93 0.008 260));
   --app-overlay-surface: oklch(0.985 0.004 260 / 0.94);
   --app-overlay-surface-strong: oklch(0.99 0.004 260 / 0.98);
@@ -121,7 +121,7 @@
   --app-code-border: rgb(60 74 104 / 0.12);
   --app-code-gutter-bg: oklch(0.93 0.006 260);
   --app-code-gutter-text: oklch(0.6 0.01 260);
-  --app-code-selection: rgb(82 124 185 / 0.16);
+  --app-code-selection: color-mix(in oklch, var(--app-accent) 16%, transparent);
   --app-code-gutter-highlight-bg: rgb(78 142 131 / 0.12);
   --app-code-gutter-highlight-text: oklch(0.42 0.09 190);
   --app-bg: oklch(0.97 0.004 260);

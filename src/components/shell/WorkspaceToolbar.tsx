@@ -4,11 +4,8 @@ interface LayoutOption {
 }
 
 interface WorkspaceToolbarProps {
-  agentDrawerOpen?: boolean
   layoutOptions: LayoutOption[]
-  onOpenAgentDrawer?: () => void
   onOpenAgentSettings: () => void
-  onOpenRunsPanel?: () => void
   onSelectLayoutValue: (value: string) => void
   onToggleProjectsSidebar?: () => void
   preprocessingStatus?: {
@@ -17,13 +14,11 @@ interface WorkspaceToolbarProps {
     title: string
     workspaceSync?: {
       isOutdated: boolean
-      label: string
       title: string
     } | null
   } | null
   onOpenWorkspaceSync?: () => void
   projectsSidebarOpen: boolean
-  runsActive?: boolean
   selectedLayoutValue: string
   workingSetSummary?: {
     label: string
@@ -34,17 +29,13 @@ interface WorkspaceToolbarProps {
 }
 
 export function WorkspaceToolbar({
-  agentDrawerOpen = false,
   layoutOptions,
-  onOpenAgentDrawer,
   onOpenAgentSettings,
-  onOpenRunsPanel,
   onOpenWorkspaceSync,
   onSelectLayoutValue,
   onToggleProjectsSidebar,
   preprocessingStatus = null,
   projectsSidebarOpen,
-  runsActive = false,
   selectedLayoutValue,
   workingSetSummary = null,
   workspaceName,
@@ -55,25 +46,31 @@ export function WorkspaceToolbar({
       ? 'error'
       : preprocessingStatus?.runState === 'building'
         ? 'running'
-        : preprocessingStatus?.runState === 'ready'
+        : preprocessingStatus?.workspaceSync?.isOutdated ||
+            preprocessingStatus?.runState === 'stale'
+          ? 'stale'
+          : preprocessingStatus?.runState === 'ready'
           ? 'ready'
-          : preprocessingStatus?.runState === 'stale'
-            ? 'stale'
-            : 'idle'
+          : 'idle'
+
+  const preprocessingTitle =
+    preprocessingStatus?.workspaceSync?.isOutdated
+      ? `${preprocessingStatus.title}\n\n${preprocessingStatus.workspaceSync.title}`
+      : preprocessingStatus?.title ?? ''
 
   return (
     <header className="cbv-toolbar">
       <div className="cbv-toolbar-brand">
-        {onToggleProjectsSidebar ? (
+        {onToggleProjectsSidebar && !projectsSidebarOpen ? (
           <button
-            aria-label={projectsSidebarOpen ? 'Hide outline' : 'Show outline'}
-            className={`cbv-toolbar-rail-toggle${projectsSidebarOpen ? ' is-active' : ''}`}
+            aria-label={`Show ${workspaceName} outline`}
+            className="cbv-toolbar-rail-toggle"
             onClick={onToggleProjectsSidebar}
-            title={projectsSidebarOpen ? 'Hide outline' : 'Show outline'}
+            title={`Show outline for ${workspaceRootDir}`}
             type="button"
           >
-            <span aria-hidden="true">{projectsSidebarOpen ? '▾' : '▸'}</span>
-            <span>outline</span>
+            <span aria-hidden="true">▸</span>
+            <span>{workspaceName}</span>
           </button>
         ) : null}
         <span aria-hidden="true" className="cbv-brand-mark">
@@ -89,23 +86,14 @@ export function WorkspaceToolbar({
               </div>
             ) : null}
           </div>
-          <div className="cbv-workspace-summary">
-            <strong>{workspaceName}</strong>
-            <p className="cbv-toolbar-path" title={workspaceRootDir}>
-              {workspaceRootDir}
-            </p>
-          </div>
         </div>
       </div>
 
       <div className="cbv-toolbar-center">
         <div className="cbv-layout-controls">
-          <label className="cbv-layout-picker">
-            <span className="cbv-eyebrow">
-              <span className="cbv-layout-picker-dot" />
-              Scene
-            </span>
+          <div className="cbv-layout-picker">
             <select
+              aria-label="Layout"
               onChange={(event) => {
                 onSelectLayoutValue(event.target.value)
               }}
@@ -117,49 +105,30 @@ export function WorkspaceToolbar({
                 </option>
               ))}
             </select>
-          </label>
+          </div>
         </div>
       </div>
 
       <div className="cbv-toolbar-right">
         {preprocessingStatus ? (
           <div className="cbv-toolbar-status-cluster">
-            <div
-              className={`cbv-toolbar-status is-${preprocessingTone}`}
-              title={preprocessingStatus.title}
-            >
-              <span className="cbv-toolbar-status-dot" />
-              <span>{preprocessingStatus.label}</span>
-            </div>
-            {preprocessingStatus.workspaceSync ? (
+            {onOpenWorkspaceSync ? (
               <button
-                className={`cbv-toolbar-meta-button${preprocessingStatus.workspaceSync.isOutdated ? ' is-outdated' : ''}`}
+                className={`cbv-toolbar-status is-${preprocessingTone} is-interactive`}
                 onClick={onOpenWorkspaceSync}
-                title={preprocessingStatus.workspaceSync.title}
+                title={preprocessingTitle}
                 type="button"
               >
-                {preprocessingStatus.workspaceSync.label}
+                <span className="cbv-toolbar-status-dot" />
+                <span>{preprocessingStatus.label}</span>
               </button>
-            ) : null}
+            ) : (
+              <div className={`cbv-toolbar-status is-${preprocessingTone}`} title={preprocessingTitle}>
+                <span className="cbv-toolbar-status-dot" />
+                <span>{preprocessingStatus.label}</span>
+              </div>
+            )}
           </div>
-        ) : null}
-        {onOpenAgentDrawer ? (
-          <button
-            className={`cbv-toolbar-button is-secondary${agentDrawerOpen ? ' is-active' : ''}`}
-            onClick={onOpenAgentDrawer}
-            type="button"
-          >
-            Agent
-          </button>
-        ) : null}
-        {onOpenRunsPanel ? (
-          <button
-            className={`cbv-toolbar-button is-secondary${runsActive ? ' is-active' : ''}`}
-            onClick={onOpenRunsPanel}
-            type="button"
-          >
-            Runs
-          </button>
         ) : null}
         <button
           className="cbv-toolbar-meta-button"

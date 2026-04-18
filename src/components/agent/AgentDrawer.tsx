@@ -1,32 +1,58 @@
-import { useMemo, useState } from 'react'
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type PointerEvent as ReactPointerEvent,
+} from 'react'
 
 import type {
+  AutonomousRunDetail,
   AutonomousRunSummary,
+  AutonomousRunTimelinePoint,
   PreprocessedWorkspaceContext,
-  PreprocessingStatus,
   WorkspaceProfile,
   WorkingSetState,
 } from '../../types'
 import { AgentPanel, type AgentScopeContext } from '../AgentPanel'
+import { AutonomousRunsSurface } from '../runs/AutonomousRunsSurface'
 
-type AgentDrawerTab = 'agent' | 'activity' | 'runs'
+type AgentDrawerTab = 'chat' | 'agents' | 'layout'
+
+const DEFAULT_DRAWER_HEIGHT = 288
+const MIN_DRAWER_HEIGHT = 220
+const MAX_DRAWER_HEIGHT = 640
 
 interface AgentDrawerProps {
   activeRunId: string | null
   activeTab: AgentDrawerTab
   autonomousRuns: AutonomousRunSummary[]
+  composerFocusRequestKey?: number
   desktopHostAvailable?: boolean
+  detectedTaskFile?: string | null
+  errorMessage?: string | null
   inspectorContext?: AgentScopeContext
+  layoutSuggestionError?: string | null
+  layoutSuggestionPending?: boolean
+  layoutSuggestionText?: string
   onAdoptInspectorContextAsWorkingSet?: () => void
   onChangeTab: (tab: AgentDrawerTab) => void
   onClearWorkingSet?: () => void
-  onOpenRunsPanel?: () => void
+  onLayoutSuggestionChange?: (value: string) => void
+  onLayoutSuggestionSubmit?: () => void
   onOpenSettings?: () => void
   onRunSettled?: () => Promise<void>
+  onSelectRun?: (runId: string) => void
+  onStartRun?: () => void
+  onStopRun?: (runId: string) => void
   onToggleOpen: () => void
   open: boolean
-  preprocessingStatus?: PreprocessingStatus | null
+  pendingRunAction?: boolean
   preprocessedWorkspaceContext?: PreprocessedWorkspaceContext | null
+  selectedRunDetail?: AutonomousRunDetail | null
+  selectedRunId?: string | null
+  timeline?: AutonomousRunTimelinePoint[]
   trailLabel?: string | null
   workingSet?: WorkingSetState | null
   workingSetContext?: AgentScopeContext | null
@@ -37,18 +63,31 @@ export function AgentDrawer({
   activeRunId,
   activeTab,
   autonomousRuns,
+  composerFocusRequestKey = 0,
   desktopHostAvailable = false,
+  detectedTaskFile = null,
+  errorMessage = null,
   inspectorContext,
+  layoutSuggestionError = null,
+  layoutSuggestionPending = false,
+  layoutSuggestionText = '',
   onAdoptInspectorContextAsWorkingSet,
   onChangeTab,
   onClearWorkingSet,
-  onOpenRunsPanel,
+  onLayoutSuggestionChange,
+  onLayoutSuggestionSubmit,
   onOpenSettings,
   onRunSettled,
+  onSelectRun,
+  onStartRun,
+  onStopRun,
   onToggleOpen,
   open,
-  preprocessingStatus = null,
+  pendingRunAction = false,
   preprocessedWorkspaceContext = null,
+  selectedRunDetail = null,
+  selectedRunId = null,
+  timeline = [],
   trailLabel = null,
   workingSet = null,
   workingSetContext = null,
@@ -60,6 +99,69 @@ export function AgentDrawer({
   )
   const [stripValue, setStripValue] = useState('')
   const [promptSeed, setPromptSeed] = useState<{ id: string; value: string } | null>(null)
+  const [drawerHeight, setDrawerHeight] = useState(DEFAULT_DRAWER_HEIGHT)
+  const [activeResizePointerId, setActiveResizePointerId] = useState<number | null>(null)
+  const resizeStateRef = useRef<{
+    startHeight: number
+    startY: number
+  } | null>(null)
+
+  useEffect(() => {
+    if (activeResizePointerId === null) {
+      return
+    }
+
+    const previousUserSelect = document.body.style.userSelect
+
+    function handlePointerMove(event: PointerEvent) {
+      const resizeState = resizeStateRef.current
+
+      if (!resizeState) {
+        return
+      }
+
+      const viewportMaxHeight = Math.max(
+        MIN_DRAWER_HEIGHT,
+        Math.min(MAX_DRAWER_HEIGHT, window.innerHeight - 180),
+      )
+      const nextHeight = resizeState.startHeight + (resizeState.startY - event.clientY)
+
+      setDrawerHeight(
+        Math.min(viewportMaxHeight, Math.max(MIN_DRAWER_HEIGHT, nextHeight)),
+      )
+    }
+
+    function handlePointerUp() {
+      resizeStateRef.current = null
+      setActiveResizePointerId(null)
+    }
+
+    document.body.style.userSelect = 'none'
+    window.addEventListener('pointermove', handlePointerMove)
+    window.addEventListener('pointerup', handlePointerUp)
+    window.addEventListener('pointercancel', handlePointerUp)
+
+    return () => {
+      document.body.style.userSelect = previousUserSelect
+      window.removeEventListener('pointermove', handlePointerMove)
+      window.removeEventListener('pointerup', handlePointerUp)
+      window.removeEventListener('pointercancel', handlePointerUp)
+    }
+  }, [activeResizePointerId])
+
+  function handleResizePointerDown(event: ReactPointerEvent<HTMLButtonElement>) {
+    if (!open) {
+      return
+    }
+
+    resizeStateRef.current = {
+      startHeight: drawerHeight,
+      startY: event.clientY,
+    }
+    setActiveResizePointerId(event.pointerId)
+    event.currentTarget.setPointerCapture(event.pointerId)
+    event.preventDefault()
+  }
 
   function ensureOpen() {
     if (!open) {
@@ -69,7 +171,7 @@ export function AgentDrawer({
 
   function handlePromoteComposer() {
     const nextPrompt = stripValue.trim()
-    onChangeTab('agent')
+    onChangeTab('chat')
     ensureOpen()
 
     if (nextPrompt) {
@@ -85,63 +187,90 @@ export function AgentDrawer({
   const stripTrail = trailLabel?.trim() || 'idle'
 
   return (
-    <section className={`cbv-agent-drawer${open ? ' is-open' : ' is-collapsed'}`}>
-      <div className="cbv-agent-strip">
-        <span className={`cbv-agent-strip-dot is-${stripStatus}`} />
-        <span className="cbv-agent-strip-label">agent</span>
-        <span className="cbv-agent-strip-trail" title={stripTrail}>
-          following · {stripTrail}
-        </span>
-        <input
-          className="cbv-agent-strip-input"
-          onChange={(event) => setStripValue(event.target.value)}
-          onFocus={() => {
-            onChangeTab('agent')
-            ensureOpen()
-          }}
-          onKeyDown={(event) => {
-            if (event.key === 'Enter') {
-              event.preventDefault()
-              handlePromoteComposer()
-            }
-          }}
-          placeholder="ask agent"
-          type="text"
-          value={stripValue}
-        />
+    <section
+      className={`cbv-agent-drawer${open ? ' is-open' : ' is-collapsed'}`}
+      style={{
+        '--cbv-agent-drawer-height': `${drawerHeight}px`,
+      } as CSSProperties}
+    >
+      {open ? (
         <button
-          className="cbv-agent-strip-submit"
-          onClick={handlePromoteComposer}
-          title="Open agent composer"
+          aria-label="Resize agent drawer"
+          className="cbv-agent-drawer-resize-handle"
+          onPointerDown={handleResizePointerDown}
+          title="Drag to resize agent drawer"
           type="button"
         >
-          ↵
+          <span />
         </button>
-        <button
-          aria-expanded={open}
-          className="cbv-agent-strip-toggle"
-          onClick={() => {
-            onChangeTab('agent')
-            onToggleOpen()
-          }}
-          type="button"
-        >
-          {open ? '⑂' : '⌘K'}
-        </button>
-      </div>
+      ) : null}
+      {!open ? (
+        <div className="cbv-agent-strip">
+          <span className={`cbv-agent-strip-dot is-${stripStatus}`} />
+          <span className="cbv-agent-strip-label">agent</span>
+          <span className="cbv-agent-strip-trail" title={stripTrail}>
+            following · {stripTrail}
+          </span>
+          <input
+            className="cbv-agent-strip-input"
+            onChange={(event) => setStripValue(event.target.value)}
+            onFocus={() => {
+              onChangeTab('chat')
+              ensureOpen()
+            }}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') {
+                event.preventDefault()
+                handlePromoteComposer()
+              }
+            }}
+            placeholder="ask agent"
+            type="text"
+            value={stripValue}
+          />
+          <button
+            className="cbv-agent-strip-submit"
+            onClick={handlePromoteComposer}
+            title="Open agent composer"
+            type="button"
+          >
+            ↵
+          </button>
+          <button
+            aria-expanded={open}
+            className="cbv-agent-strip-toggle"
+            onClick={() => {
+              onChangeTab('chat')
+              onToggleOpen()
+            }}
+            type="button"
+          >
+            ⌘K
+          </button>
+        </div>
+      ) : null}
 
       {open ? (
         <div className="cbv-agent-drawer-body">
           <div className="cbv-agent-drawer-header">
+            <button
+              aria-expanded={open}
+              aria-label="Close agent drawer"
+              className="cbv-inspector-close cbv-agent-drawer-close"
+              onClick={onToggleOpen}
+              type="button"
+            >
+              ×
+            </button>
             <div className="cbv-agent-drawer-tabs" role="tablist" aria-label="Agent drawer">
               {([
-                { id: 'agent', label: 'Agent' },
-                { id: 'activity', label: 'Activity' },
-                { id: 'runs', label: 'Runs' },
+                { id: 'chat', label: 'chat' },
+                { id: 'agents', label: 'agents' },
+                { id: 'layout', label: 'layout' },
               ] as const).map((tab) => (
                 <button
                   aria-selected={activeTab === tab.id}
-                  className={activeTab === tab.id ? 'is-active' : ''}
+                  className={`is-${tab.id}${activeTab === tab.id ? ' is-active' : ''}`}
                   key={tab.id}
                   onClick={() => onChangeTab(tab.id)}
                   type="button"
@@ -150,25 +279,11 @@ export function AgentDrawer({
                 </button>
               ))}
             </div>
-            <div className="cbv-agent-drawer-actions">
-              {onOpenSettings ? (
-                <button className="cbv-toolbar-button is-secondary" onClick={onOpenSettings} type="button">
-                  Settings
-                </button>
-              ) : null}
-              <button
-                aria-expanded={open}
-                className="cbv-toolbar-button is-secondary"
-                onClick={onToggleOpen}
-                type="button"
-              >
-                Close
-              </button>
-            </div>
           </div>
-          {activeTab === 'agent' ? (
+          {activeTab === 'chat' ? (
             <AgentPanel
               autoFocusComposer
+              composerFocusRequestKey={composerFocusRequestKey}
               desktopHostAvailable={desktopHostAvailable}
               inspectorContext={inspectorContext}
               onAdoptInspectorContextAsWorkingSet={onAdoptInspectorContextAsWorkingSet}
@@ -181,141 +296,71 @@ export function AgentDrawer({
               workingSetContext={workingSetContext}
               workspaceProfile={workspaceProfile}
             />
-          ) : activeTab === 'activity' ? (
+          ) : activeTab === 'agents' ? (
             <div className="cbv-agent-drawer-panel">
-              <div className="cbv-agent-drawer-grid">
-                <section className="cbv-agent-context-card">
-                  <p className="cbv-eyebrow">Workspace</p>
-                  <strong>{workspaceProfile?.rootDir ?? 'Unknown workspace'}</strong>
-                  <p className="cbv-agent-context-copy">
-                    {workspaceProfile?.summary ??
-                      'Agent activity, follow-agent flows, and preprocessing status are centered in this drawer.'}
-                  </p>
-                </section>
-                <section className="cbv-agent-context-card">
-                  <p className="cbv-eyebrow">Preprocessing</p>
-                  <strong>{formatPreprocessingHeadline(preprocessingStatus)}</strong>
-                  <p className="cbv-agent-context-copy">
-                    {formatPreprocessingBody(preprocessingStatus)}
-                  </p>
-                  {preprocessingStatus?.currentItemPath ? (
-                    <p className="cbv-agent-context-more" title={preprocessingStatus.currentItemPath}>
-                      Current: {preprocessingStatus.currentItemPath}
-                    </p>
-                  ) : null}
-                </section>
-              </div>
+              <AutonomousRunsSurface
+                activeRunId={activeRunId}
+                detectedTaskFile={detectedTaskFile}
+                errorMessage={errorMessage}
+                onSelectRun={onSelectRun ?? (() => {})}
+                onStartRun={onStartRun ?? (() => {})}
+                onStopRun={onStopRun ?? (() => {})}
+                pending={pendingRunAction}
+                selectedRunDetail={selectedRunDetail}
+                selectedRunId={selectedRunId}
+                timeline={timeline}
+                runs={autonomousRuns}
+              />
             </div>
           ) : (
-            <div className="cbv-agent-drawer-panel">
-              <div className="cbv-agent-drawer-runs">
-                <div className="cbv-agent-context-card">
-                  <p className="cbv-eyebrow">Runs</p>
-                  <strong>
-                    {autonomousRuns.length} run{autonomousRuns.length === 1 ? '' : 's'}
-                  </strong>
-                  <p className="cbv-agent-context-copy">
-                    {activeRun
-                      ? `Active run: ${activeRun.task || activeRun.runId}`
-                      : 'No active autonomous run at the moment.'}
+            <div className="cbv-agent-drawer-panel cbv-agent-layout-panel">
+              <section className="cbv-agent-layout-card">
+                <div className="cbv-agent-layout-copy">
+                  <p className="cbv-eyebrow">Layout</p>
+                  <strong>Create a new scene</strong>
+                  <p>
+                    Describe how the current codebase should be arranged. This uses the layout
+                    planner and creates a draft layout rather than sending a normal chat message.
                   </p>
-                  {onOpenRunsPanel ? (
-                    <div className="cbv-agent-context-actions">
-                      <button onClick={onOpenRunsPanel} type="button">
-                        Open Runs Panel
-                      </button>
-                    </div>
-                  ) : null}
                 </div>
-                <div className="cbv-agent-drawer-run-list">
-                  {autonomousRuns.length ? (
-                    autonomousRuns.slice(0, 8).map((run) => (
-                      <article className="cbv-agent-drawer-run" key={run.runId}>
-                        <header>
-                          <strong>{run.task || run.runId}</strong>
-                          <span className={`cbv-agent-status is-${mapRunStatusToAgentStatus(run.status)}`}>
-                            {run.status}
-                          </span>
-                        </header>
-                        <p>{run.taskFile ?? 'No task file detected.'}</p>
-                      </article>
-                    ))
-                  ) : (
-                    <p className="cbv-projects-empty">No autonomous runs recorded yet.</p>
-                  )}
-                </div>
-              </div>
+                <form
+                  className={`cbv-agent-layout-form${layoutSuggestionPending ? ' is-pending' : ''}`}
+                  onSubmit={(event) => {
+                    event.preventDefault()
+                    onLayoutSuggestionSubmit?.()
+                  }}
+                >
+                  <textarea
+                    aria-label="Describe a new layout"
+                    disabled={layoutSuggestionPending || !onLayoutSuggestionChange}
+                    onChange={(event) => onLayoutSuggestionChange?.(event.target.value)}
+                    placeholder="Arrange React components around routes and keep backend APIs grouped by feature"
+                    value={layoutSuggestionText}
+                  />
+                  <div className="cbv-agent-layout-actions">
+                    <p>
+                      {layoutSuggestionPending
+                        ? 'Generating a new layout draft...'
+                        : layoutSuggestionError ?? 'The generated draft can be accepted or rejected from the scene strip.'}
+                    </p>
+                    <button
+                      className="cbv-toolbar-button"
+                      disabled={
+                        layoutSuggestionPending ||
+                        !layoutSuggestionText.trim() ||
+                        !onLayoutSuggestionSubmit
+                      }
+                      type="submit"
+                    >
+                      {layoutSuggestionPending ? 'working...' : 'create layout'}
+                    </button>
+                  </div>
+                </form>
+              </section>
             </div>
           )}
         </div>
-      ) : (
-        <div className="cbv-agent-drawer-collapsed">
-          <span>Persistent composer strip. Press ⌘K or focus input to expand.</span>
-        </div>
-      )}
+      ) : null}
     </section>
   )
-}
-
-function formatPreprocessingHeadline(preprocessingStatus: PreprocessingStatus | null) {
-  if (!preprocessingStatus) {
-    return 'No preprocessing activity'
-  }
-
-  if (preprocessingStatus.runState === 'building') {
-    return preprocessingStatus.activity === 'embeddings'
-      ? 'Building embeddings'
-      : 'Building summaries'
-  }
-
-  if (preprocessingStatus.runState === 'ready') {
-    return `${preprocessingStatus.purposeSummaryCount} summaries ready`
-  }
-
-  if (preprocessingStatus.runState === 'stale') {
-    return 'Workspace changed'
-  }
-
-  if (preprocessingStatus.runState === 'error') {
-    return 'Preprocessing failed'
-  }
-
-  return 'Idle'
-}
-
-function formatPreprocessingBody(preprocessingStatus: PreprocessingStatus | null) {
-  if (!preprocessingStatus) {
-    return 'No semantic preprocessing has been loaded yet.'
-  }
-
-  if (preprocessingStatus.runState === 'building') {
-    return `Processed ${preprocessingStatus.processedSymbols}/${preprocessingStatus.totalSymbols} symbols so far.`
-  }
-
-  if (preprocessingStatus.runState === 'ready') {
-    return `${preprocessingStatus.semanticEmbeddingCount} embeddings built from cached summaries.`
-  }
-
-  if (preprocessingStatus.runState === 'stale') {
-    return 'The repo changed since the last preprocessing run; summaries or embeddings may be out of date.'
-  }
-
-  if (preprocessingStatus.runState === 'error') {
-    return preprocessingStatus.lastError ?? 'Preprocessing reported an unknown error.'
-  }
-
-  return 'Run summaries or embeddings from the toolbar when you need refreshed semantic context.'
-}
-
-function mapRunStatusToAgentStatus(status: AutonomousRunSummary['status']) {
-  switch (status) {
-    case 'running':
-      return 'running'
-    case 'completed':
-      return 'ready'
-    case 'failed':
-      return 'error'
-    default:
-      return 'idle'
-  }
 }

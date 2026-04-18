@@ -297,6 +297,14 @@ interface DesktopBridge {
   isDesktop?: boolean
   openWorkspaceDialog?: () => Promise<boolean>
   openWorkspaceRootDir?: (rootDir: string) => Promise<boolean>
+  removeWorkspaceHistoryEntry?: (rootDir: string) => Promise<{
+    activeWorkspaceRootDir: string | null
+    recentWorkspaces: {
+      name: string
+      rootDir: string
+      lastOpenedAt: string
+    }[]
+  }>
   setUiPreferences?: (preferences: UiPreferences) => Promise<UiPreferences>
 }
 
@@ -367,9 +375,10 @@ export function Semanticode({
   const [runsPanelOpen, setRunsPanelOpen] = useState(false)
   const [workspaceSyncOpen, setWorkspaceSyncOpen] = useState(false)
   const [agentDrawerOpen, setAgentDrawerOpen] = useState(false)
-  const [agentDrawerTab, setAgentDrawerTab] = useState<'agent' | 'activity' | 'runs'>(
-    'agent',
+  const [agentDrawerTab, setAgentDrawerTab] = useState<'chat' | 'agents' | 'layout'>(
+    'chat',
   )
+  const [agentComposerFocusRequestKey, setAgentComposerFocusRequestKey] = useState(0)
   const [themeMode, setThemeMode] = useState<ThemeMode>(
     () => storedUiPreferences.themeMode ?? readThemeMode(),
   )
@@ -442,6 +451,7 @@ export function Semanticode({
   const [liveChangedFiles, setLiveChangedFiles] = useState<string[]>([])
   const [followDirtyFileSignals, setFollowDirtyFileSignals] = useState<DirtyFileEditSignal[]>([])
   const hasRunningAutonomousRun = autonomousRuns.some((run) => run.status === 'running')
+  const runsSurfaceOpen = runsPanelOpen || (agentDrawerOpen && agentDrawerTab === 'agents')
   const currentSnapshot = useVisualizerStore((state) => state.snapshot)
   const draftLayouts = useVisualizerStore((state) => state.draftLayouts)
   const activeDraftId = useVisualizerStore((state) => state.activeDraftId)
@@ -772,7 +782,7 @@ export function Semanticode({
     void refreshTelemetry()
     const intervalId = window.setInterval(() => {
       void refreshTelemetry()
-    }, runsPanelOpen || telemetryWindow === 'run' || hasRunningAutonomousRun ? 2500 : 5000)
+    }, runsSurfaceOpen || telemetryWindow === 'run' || hasRunningAutonomousRun ? 2500 : 5000)
 
     return () => {
       cancelled = true
@@ -781,7 +791,7 @@ export function Semanticode({
   }, [
     effectiveSnapshot?.rootDir,
     hasRunningAutonomousRun,
-    runsPanelOpen,
+    runsSurfaceOpen,
     selectedRunId,
     telemetryEnabled,
     telemetryMode,
@@ -934,7 +944,7 @@ export function Semanticode({
   useEffect(() => {
     let cancelled = false
 
-    if (!runsPanelOpen || !effectiveSnapshot?.rootDir) {
+    if (!runsSurfaceOpen || !effectiveSnapshot?.rootDir) {
       return
     }
 
@@ -949,11 +959,17 @@ export function Semanticode({
         setAutonomousRuns(runsResponse.runs)
         setDetectedTaskFile(runsResponse.detectedTaskFile)
         setRunActionError(null)
-        setSelectedRunId((currentRunId) =>
-          currentRunId && runsResponse.runs.some((run) => run.runId === currentRunId)
-            ? currentRunId
-            : null,
-        )
+        setSelectedRunId((currentRunId) => {
+          if (currentRunId && runsResponse.runs.some((run) => run.runId === currentRunId)) {
+            return currentRunId
+          }
+
+          return (
+            runsResponse.runs.find((run) => run.status === 'running')?.runId ??
+            runsResponse.runs[0]?.runId ??
+            null
+          )
+        })
       } catch (error) {
         if (!cancelled) {
           setRunActionError(
@@ -972,12 +988,12 @@ export function Semanticode({
       cancelled = true
       window.clearInterval(intervalId)
     }
-  }, [effectiveSnapshot?.rootDir, hasRunningAutonomousRun, runsPanelOpen])
+  }, [effectiveSnapshot?.rootDir, hasRunningAutonomousRun, runsSurfaceOpen])
 
   useEffect(() => {
     let cancelled = false
 
-    if (!runsPanelOpen || !effectiveSnapshot?.rootDir || !selectedRunId) {
+    if (!runsSurfaceOpen || !effectiveSnapshot?.rootDir || !selectedRunId) {
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setSelectedRunDetail(null)
       setSelectedRunTimeline([])
@@ -1016,7 +1032,7 @@ export function Semanticode({
       cancelled = true
       window.clearInterval(intervalId)
     }
-  }, [effectiveSnapshot?.rootDir, runsPanelOpen, selectedRunId])
+  }, [effectiveSnapshot?.rootDir, runsSurfaceOpen, selectedRunId])
 
   useEffect(() => {
     if (!effectiveSnapshot?.rootDir) {
@@ -1986,7 +2002,6 @@ export function Semanticode({
         workspaceSync: workspaceSyncStatus
           ? {
               isOutdated: hasWorkspaceSyncUpdates(workspaceSyncStatus),
-              label: formatWorkspaceSyncLabel(workspaceSyncStatus),
               title: formatWorkspaceSyncTitle(workspaceSyncStatus),
             }
           : null,
@@ -2067,7 +2082,6 @@ export function Semanticode({
   ])
   const activeRunId =
     autonomousRuns.find((run) => run.status === 'running')?.runId ?? null
-  const runsActive = activeRunId !== null
   const agentHeatHelperText = useMemo(() => {
     if (!telemetryEnabled) {
       return 'Agent heat is off. Adjust these controls to load telemetry.'
@@ -2147,16 +2161,10 @@ export function Semanticode({
     workingSetSummary?.label ??
     workspaceName
 
-  const handleOpenRunsPanel = useCallback(() => {
-    setRunsPanelOpen(true)
-  }, [])
-  const handleOpenAgentDrawer = useCallback(() => {
-    setAgentDrawerTab('agent')
+  const handleFocusAgentDrawerComposer = useCallback(() => {
+    setAgentDrawerTab('chat')
     setAgentDrawerOpen(true)
-  }, [])
-  const handleOpenRunsDrawer = useCallback(() => {
-    setAgentDrawerTab('runs')
-    setAgentDrawerOpen(true)
+    setAgentComposerFocusRequestKey((current) => current + 1)
   }, [])
 
   const handleTelemetrySourceChange = useCallback((source: TelemetrySource) => {
@@ -2514,27 +2522,6 @@ export function Semanticode({
     }
   }
 
-  async function handleCloseWorkspace() {
-    if (!desktopBridge?.closeWorkspace) {
-      if (isDesktopHost) {
-        navigateSemanticodeAction('close-workspace')
-      }
-      return
-    }
-
-    try {
-      setWorkspaceActionPending(true)
-      setWorkspaceActionError(null)
-      await desktopBridge.closeWorkspace()
-    } catch (error) {
-      setWorkspaceActionError(
-        error instanceof Error ? error.message : 'Failed to close the current folder.',
-      )
-    } finally {
-      setWorkspaceActionPending(false)
-    }
-  }
-
   async function handleOpenRecentProject(rootDir: string) {
     if (!desktopBridge?.openWorkspaceRootDir) {
       if (isDesktopHost) {
@@ -2550,6 +2537,32 @@ export function Semanticode({
     } catch (error) {
       setWorkspaceActionError(
         error instanceof Error ? error.message : 'Failed to open the selected folder.',
+      )
+    } finally {
+      setWorkspaceActionPending(false)
+    }
+  }
+
+  async function handleRemoveRecentProject(rootDir: string) {
+    if (!rootDir) {
+      return
+    }
+
+    try {
+      setWorkspaceActionPending(true)
+      setWorkspaceActionError(null)
+
+      if (desktopBridge?.removeWorkspaceHistoryEntry) {
+        const history = await desktopBridge.removeWorkspaceHistoryEntry(rootDir)
+        setRecentProjects(history.recentWorkspaces)
+      } else {
+        setRecentProjects((currentProjects) =>
+          currentProjects.filter((project) => project.rootDir !== rootDir),
+        )
+      }
+    } catch (error) {
+      setWorkspaceActionError(
+        error instanceof Error ? error.message : 'Failed to remove the selected workspace.',
       )
     } finally {
       setWorkspaceActionPending(false)
@@ -2572,7 +2585,8 @@ export function Semanticode({
         taskFile: detectedTaskFile,
       })
 
-      setRunsPanelOpen(true)
+      setAgentDrawerTab('agents')
+      setAgentDrawerOpen(true)
       setSelectedRunId(response.run.runId)
       setSelectedRunDetail(response.run)
       setDetectedTaskFile(response.detectedTaskFile)
@@ -2852,11 +2866,8 @@ export function Semanticode({
       >
         <section className="cbv-shell">
           <WorkspaceToolbar
-            agentDrawerOpen={agentDrawerOpen}
             layoutOptions={layoutOptions}
-            onOpenAgentDrawer={handleOpenAgentDrawer}
             onOpenAgentSettings={() => setSettingsOpen(true)}
-            onOpenRunsPanel={handleOpenRunsDrawer}
             onOpenWorkspaceSync={
               workspaceSyncStatus ? () => setWorkspaceSyncOpen(true) : undefined
             }
@@ -2866,7 +2877,6 @@ export function Semanticode({
             }
             preprocessingStatus={formattedPreprocessingStatus}
             projectsSidebarOpen={projectsSidebarOpen}
-            runsActive={runsActive}
             selectedLayoutValue={selectedLayoutValue}
             workingSetSummary={workingSetSummary}
             workspaceName={workspaceName}
@@ -2918,11 +2928,11 @@ export function Semanticode({
               currentRootDir={effectiveSnapshot.rootDir}
               groups={workspaceSidebarGroups}
               onClose={() => setProjectsSidebarOpen(false)}
-              onCloseWorkspace={() => {
-                void handleCloseWorkspace()
-              }}
               onOpenRecentProject={(rootDir) => {
                 void handleOpenRecentProject(rootDir)
+              }}
+              onRemoveRecentProject={(rootDir) => {
+                void handleRemoveRecentProject(rootDir)
               }}
               onOpenWorkspace={() => {
                 void handleOpenAnotherWorkspace()
@@ -2961,9 +2971,6 @@ export function Semanticode({
                   denseCanvasMode={denseCanvasMode}
                   edges={edges}
                   graphLayers={graphLayers}
-                  layoutSuggestionError={layoutSuggestionError}
-                  layoutSuggestionPending={layoutSuggestionPending}
-                  layoutSuggestionText={layoutSuggestionText}
                   nodes={nodes}
                   onEdgeClick={handleCanvasEdgeClick}
                   onEdgesChange={onEdgesChange}
@@ -2977,8 +2984,6 @@ export function Semanticode({
                     currentCompareSource ? handleActivateCompareOverlay : undefined
                   }
                   onClearCompareOverlay={compareOverlayActive ? handleClearCompareOverlay : undefined}
-                  onLayoutSuggestionChange={handleLayoutSuggestionChange}
-                  onLayoutSuggestionSubmit={handleLayoutSuggestionSubmit}
                   onMoveEnd={handleCanvasMoveEnd}
                   onNodeClick={handleCanvasNodeClick}
                   onNodeDoubleClick={handleCanvasNodeDoubleClick}
@@ -3006,7 +3011,6 @@ export function Semanticode({
                   semanticSearchStrictness={semanticSearchStrictness}
                   semanticSearchResultCount={semanticSearchStatus.resultCount}
                   showCompareAction={Boolean(currentCompareSource)}
-                  showLayoutSuggestion={Boolean(onSuggestLayout)}
                   showSemanticSearch={viewMode === 'symbols' && semanticSearchAvailable}
                   themeMode={themeMode}
                   utilitySummaryText={agentHeatSummaryText}
@@ -3042,7 +3046,7 @@ export function Semanticode({
                     onClearCompareOverlay={handleClearCompareOverlay}
                     onClearWorkingSet={clearWorkingSet}
                     onClose={() => setInspectorOpen(false)}
-                    onOpenAgentDrawer={handleOpenAgentDrawer}
+                    onOpenAgentDrawer={handleFocusAgentDrawerComposer}
                     onOpenAgentSettings={() => setSettingsOpen(true)}
                     onSetInspectorTab={setInspectorTab}
                     preprocessedWorkspaceContext={preprocessedWorkspaceContext}
@@ -3071,7 +3075,10 @@ export function Semanticode({
             activeRunId={activeRunId}
             activeTab={agentDrawerTab}
             autonomousRuns={autonomousRuns}
+            composerFocusRequestKey={agentComposerFocusRequestKey}
             desktopHostAvailable={isDesktopHost}
+            detectedTaskFile={detectedTaskFile}
+            errorMessage={runActionError}
             inspectorContext={{
               file: selectedFile,
               files: selectedFiles,
@@ -3079,16 +3086,30 @@ export function Semanticode({
               symbol: selectedSymbol,
               symbols: selectedSymbols,
             }}
+            layoutSuggestionError={layoutSuggestionError}
+            layoutSuggestionPending={layoutSuggestionPending}
+            layoutSuggestionText={layoutSuggestionText}
             onAdoptInspectorContextAsWorkingSet={adoptSelectionAsWorkingSet}
             onChangeTab={setAgentDrawerTab}
             onClearWorkingSet={clearWorkingSet}
-            onOpenRunsPanel={handleOpenRunsPanel}
+            onLayoutSuggestionChange={handleLayoutSuggestionChange}
+            onLayoutSuggestionSubmit={handleLayoutSuggestionSubmit}
             onOpenSettings={() => setSettingsOpen(true)}
             onRunSettled={onAgentRunSettled}
+            onSelectRun={handleSelectRun}
+            onStartRun={() => {
+              void handleStartAutonomousRun()
+            }}
+            onStopRun={(runId) => {
+              void handleStopAutonomousRun(runId)
+            }}
             onToggleOpen={() => setAgentDrawerOpen((current) => !current)}
             open={agentDrawerOpen}
-            preprocessingStatus={preprocessingStatus}
+            pendingRunAction={runActionPending}
             preprocessedWorkspaceContext={preprocessedWorkspaceContext}
+            selectedRunDetail={selectedRunDetail}
+            selectedRunId={selectedRunId}
+            timeline={selectedRunTimeline}
             trailLabel={agentStripTrailLabel}
             workingSet={workingSet.nodeIds.length > 0 ? workingSet : null}
             workingSetContext={workingSetContext}
@@ -3102,7 +3123,7 @@ export function Semanticode({
           >
             <section
               aria-label="General settings"
-              className="cbv-modal"
+              className="cbv-modal cbv-settings-modal"
               onClick={(event) => event.stopPropagation()}
             >
               <div className="cbv-modal-header">
@@ -3182,9 +3203,6 @@ interface CanvasViewportProps {
   denseCanvasMode: boolean
   edges: Edge[]
   graphLayers: Record<GraphLayerKey, boolean>
-  layoutSuggestionError: string | null
-  layoutSuggestionPending: boolean
-  layoutSuggestionText: string
   nodes: Node[]
   onEdgeClick: (_event: unknown, edge: Edge) => void
   onEdgesChange: ReturnType<typeof useEdgesState<Edge>>[2]
@@ -3196,8 +3214,6 @@ interface CanvasViewportProps {
   onAgentHeatWindowChange: (window: TelemetryWindow) => void
   onActivateCompareOverlay?: () => void
   onClearCompareOverlay?: () => void
-  onLayoutSuggestionChange: (value: string) => void
-  onLayoutSuggestionSubmit: () => void
   onMoveEnd: (_event: MouseEvent | TouchEvent | null, flowViewport: { x: number; y: number; zoom: number }) => void
   onNodeClick: (
     event: { metaKey?: boolean; ctrlKey?: boolean; shiftKey?: boolean },
@@ -3223,7 +3239,6 @@ interface CanvasViewportProps {
   semanticSearchResultCount: number
   semanticSearchStrictness: number
   showCompareAction: boolean
-  showLayoutSuggestion: boolean
   showSemanticSearch: boolean
   themeMode: ThemeMode
   utilitySummaryText: string
@@ -3246,9 +3261,6 @@ const MemoizedCanvasViewport = memo(function CanvasViewport({
   denseCanvasMode,
   edges,
   graphLayers,
-  layoutSuggestionError,
-  layoutSuggestionPending,
-  layoutSuggestionText,
   nodes,
   onEdgeClick,
   onEdgesChange,
@@ -3260,8 +3272,6 @@ const MemoizedCanvasViewport = memo(function CanvasViewport({
   onAgentHeatWindowChange,
   onActivateCompareOverlay,
   onClearCompareOverlay,
-  onLayoutSuggestionChange,
-  onLayoutSuggestionSubmit,
   onMoveEnd,
   onNodeClick,
   onNodeDoubleClick,
@@ -3284,7 +3294,6 @@ const MemoizedCanvasViewport = memo(function CanvasViewport({
   semanticSearchResultCount,
   semanticSearchStrictness,
   showCompareAction,
-  showLayoutSuggestion,
   showSemanticSearch,
   themeMode,
   utilitySummaryText,
@@ -3325,7 +3334,11 @@ const MemoizedCanvasViewport = memo(function CanvasViewport({
   return (
     <section className="cbv-canvas">
       <div className="cbv-canvas-overlays">
-        <div className="cbv-canvas-utility-anchor">
+        <div className="cbv-canvas-utility-stack">
+          <div className="cbv-canvas-legend-anchor">
+            <SymbolKindLegend />
+          </div>
+          <div className="cbv-canvas-utility-anchor">
           <button
             aria-expanded={utilityPaletteOpen}
             className={`cbv-canvas-utility-trigger${utilityPaletteOpen ? ' is-open' : ''}`}
@@ -3581,59 +3594,9 @@ const MemoizedCanvasViewport = memo(function CanvasViewport({
                   ))}
                 </div>
               </section>
-              {viewMode === 'symbols' ? (
-                <section className="cbv-canvas-utility-section">
-                  <div className="cbv-canvas-utility-section-header">
-                    <p className="cbv-eyebrow">Legend</p>
-                    <span>Semantic kinds</span>
-                  </div>
-                  <div className="cbv-canvas-legend">
-                    <SymbolKindLegend />
-                  </div>
-                </section>
-              ) : null}
-              {showLayoutSuggestion ? (
-                <section className="cbv-canvas-utility-section">
-                  <div className="cbv-canvas-utility-section-header">
-                    <p className="cbv-eyebrow">Layout</p>
-                    <span>Suggest scene</span>
-                  </div>
-                  <form
-                    className={`cbv-layout-suggestion${layoutSuggestionPending ? ' is-pending' : ''}`}
-                    onSubmit={(event) => {
-                      event.preventDefault()
-                      onLayoutSuggestionSubmit()
-                    }}
-                  >
-                    <div className="cbv-layout-suggestion-shell">
-                      <input
-                        aria-label="Suggest layout"
-                        className="cbv-layout-suggestion-input"
-                        disabled={layoutSuggestionPending}
-                        onChange={(event) => {
-                          onLayoutSuggestionChange(event.target.value)
-                        }}
-                        placeholder="Suggest layout"
-                        value={layoutSuggestionText}
-                      />
-                      <button
-                        className="cbv-layout-suggestion-submit"
-                        disabled={layoutSuggestionPending || !layoutSuggestionText.trim()}
-                        type="submit"
-                      >
-                        {layoutSuggestionPending ? 'Working…' : 'Go'}
-                      </button>
-                    </div>
-                    {layoutSuggestionPending ? (
-                      <p className="cbv-layout-suggestion-status">Generating a new layout draft…</p>
-                    ) : layoutSuggestionError ? (
-                      <p className="cbv-layout-suggestion-error">{layoutSuggestionError}</p>
-                    ) : null}
-                  </form>
-                </section>
-              ) : null}
             </div>
           ) : null}
+          </div>
         </div>
       </div>
       <ReactFlow
@@ -3874,39 +3837,6 @@ function hasWorkspaceSyncUpdates(status: WorkspaceArtifactSyncStatus) {
     status.layouts.some((entry) => entry.state === 'outdated') ||
     status.drafts.some((entry) => entry.state === 'outdated')
   )
-}
-
-function formatWorkspaceSyncLabel(status: WorkspaceArtifactSyncStatus) {
-  if (!status.git.isGitRepo) {
-    return 'Repo sync unavailable'
-  }
-
-  const parts: string[] = []
-
-  if (status.summaries.staleCount > 0 || status.summaries.obsoleteCount > 0) {
-    parts.push(`${status.summaries.staleCount + status.summaries.obsoleteCount} summaries`)
-  }
-
-  if (status.embeddings.staleCount > 0 || status.embeddings.obsoleteCount > 0) {
-    parts.push(`${status.embeddings.staleCount + status.embeddings.obsoleteCount} embeddings`)
-  }
-
-  const affectedLayoutCount = [
-    ...status.layouts,
-    ...status.drafts,
-  ].filter((entry) => entry.state === 'outdated').length
-
-  if (affectedLayoutCount > 0) {
-    parts.push(`${affectedLayoutCount} layouts`)
-  }
-
-  if (parts.length === 0) {
-    return status.git.changedFiles.length > 0
-      ? `Repo changed · ${status.git.changedFiles.length} files`
-      : 'Repo sync clean'
-  }
-
-  return `Needs update · ${parts.join(' · ')}`
 }
 
 function formatWorkspaceSyncTitle(status: WorkspaceArtifactSyncStatus) {
