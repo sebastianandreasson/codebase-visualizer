@@ -162,21 +162,21 @@ export function InspectorPane({
           onClick={() => onSetInspectorTab('file')}
           type="button"
         >
-          File
+          file
         </button>
         <button
           className={inspectorTab === 'agent' ? 'is-active' : ''}
           onClick={() => onSetInspectorTab('agent')}
           type="button"
         >
-          Agent
+          agent
         </button>
         <button
           className={inspectorTab === 'graph' ? 'is-active' : ''}
           onClick={() => onSetInspectorTab('graph')}
           type="button"
         >
-          Graph
+          graph
         </button>
       </div>
 
@@ -233,15 +233,28 @@ export function InspectorPane({
               scrollToDiffRequestKey={scrollToDiffRequestKey}
               themeMode={themeMode}
             />
-            <InspectorRelatedSection neighbors={graphSummary.neighbors} />
+            <InspectorRelatedSection
+              label={selectedSymbol ? 'Callers' : 'Related'}
+              neighbors={graphSummary.neighbors}
+            />
+            <InspectorFileActions
+              onOpenAgentDrawer={onOpenAgentDrawer}
+              selectedFile={selectedFile}
+              selectedSymbol={selectedSymbol}
+            />
+            {selectedNodeTelemetry ? (
+              <TelemetrySummaryCard telemetry={selectedNodeTelemetry} />
+            ) : null}
             {selectedSymbol ? (
               <SemanticPurposeSummaryCard
                 summary={findPurposeSummary(preprocessedWorkspaceContext, selectedSymbol.id)}
               />
             ) : null}
-            <InspectorFileActions
-              onOpenAgentDrawer={onOpenAgentDrawer}
+            <PluginSemanticsCard
+              detectedPlugins={detectedPlugins}
+              facetDefinitions={facetDefinitions}
               selectedFile={selectedFile}
+              selectedNode={selectedNode}
               selectedSymbol={selectedSymbol}
             />
           </div>
@@ -259,16 +272,18 @@ export function InspectorPane({
             <p>Select a node on the canvas to inspect its contents.</p>
           </div>
         )}
-        {selectedNodeTelemetry ? (
+        {!selectedFile && selectedNodeTelemetry ? (
           <TelemetrySummaryCard telemetry={selectedNodeTelemetry} />
         ) : null}
-        <PluginSemanticsCard
+        {!selectedFile ? (
+          <PluginSemanticsCard
           detectedPlugins={detectedPlugins}
           facetDefinitions={facetDefinitions}
           selectedFile={selectedFile}
           selectedNode={selectedNode}
           selectedSymbol={selectedSymbol}
         />
+        ) : null}
       </div>
     </aside>
   )
@@ -421,8 +436,10 @@ function FileIdentityHeader({
 }
 
 function InspectorRelatedSection({
+  label = 'Related',
   neighbors,
 }: {
+  label?: string
   neighbors: ProjectNode[]
 }) {
   if (neighbors.length === 0) {
@@ -432,7 +449,7 @@ function InspectorRelatedSection({
   return (
     <section className="cbv-inspector-support-section">
       <div className="cbv-inspector-support-header">
-        <p className="cbv-eyebrow">Related · {neighbors.length}</p>
+        <p className="cbv-eyebrow">{label} · {neighbors.length}</p>
       </div>
       <div className="cbv-purpose-summary-tags">
         {neighbors.slice(0, 10).map((neighbor) => (

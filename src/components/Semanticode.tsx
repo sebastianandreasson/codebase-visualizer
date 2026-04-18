@@ -77,6 +77,7 @@ import {
   type WorkspaceSidebarGroup,
   type WorkspaceSidebarGroupItem,
 } from './shell/WorkspaceSidebar'
+import { DraftActionStrip } from './shell/DraftActionStrip'
 import { WorkspaceSyncModal } from './shell/WorkspaceSyncModal'
 import { WorkspaceToolbar } from './shell/WorkspaceToolbar'
 import {
@@ -2826,56 +2827,14 @@ export function Semanticode({
         <section className="cbv-shell">
           <WorkspaceToolbar
             agentDrawerOpen={agentDrawerOpen}
-            activeDraft={Boolean(activeDraft)}
-            activeLayoutSyncNote={activeLayoutSyncNote}
-            compareOverlayActive={compareOverlayActive}
-            layoutActionsPending={layoutActionsPending}
             layoutOptions={layoutOptions}
-            onAcceptDraft={
-              activeDraft && onAcceptDraft
-                ? async () => {
-                    try {
-                      setDraftActionError(null)
-                      await onAcceptDraft(activeDraft.id)
-                    } catch (error) {
-                      setDraftActionError(
-                        error instanceof Error
-                          ? error.message
-                          : 'Failed to accept draft.',
-                      )
-                    }
-                  }
-                : undefined
-            }
-            onActivateCompareOverlay={
-              currentCompareSource ? handleActivateCompareOverlay : undefined
-            }
-            onBuildSemanticEmbeddings={onBuildSemanticEmbeddings}
-            onClearCompareOverlay={compareOverlayActive ? handleClearCompareOverlay : undefined}
             onOpenAgentDrawer={handleOpenAgentDrawer}
             onOpenAgentSettings={() => setSettingsOpen(true)}
             onOpenRunsPanel={handleOpenRunsDrawer}
             onOpenWorkspaceSync={
               workspaceSyncStatus ? () => setWorkspaceSyncOpen(true) : undefined
             }
-            onRejectDraft={
-              activeDraft && onRejectDraft
-                ? async () => {
-                    try {
-                      setDraftActionError(null)
-                      await onRejectDraft(activeDraft.id)
-                    } catch (error) {
-                      setDraftActionError(
-                        error instanceof Error
-                          ? error.message
-                          : 'Failed to reject draft.',
-                      )
-                    }
-                  }
-                : undefined
-            }
             onSelectLayoutValue={handleLayoutSelectionChange}
-            onStartPreprocessing={onStartPreprocessing}
             onToggleProjectsSidebar={
               () => setProjectsSidebarOpen((current) => !current)
             }
@@ -2883,11 +2842,50 @@ export function Semanticode({
             projectsSidebarOpen={projectsSidebarOpen}
             runsActive={runsActive}
             selectedLayoutValue={selectedLayoutValue}
-            showCompareAction={Boolean(currentCompareSource)}
             workingSetSummary={workingSetSummary}
             workspaceName={workspaceName}
             workspaceRootDir={effectiveSnapshot.rootDir}
           />
+          {activeDraft ? (
+            <DraftActionStrip
+              draftLabel={activeDraft.layout?.title ?? activeDraft.id}
+              errorMessage={draftActionError}
+              layoutSyncNote={activeLayoutSyncNote}
+              onAccept={
+                onAcceptDraft
+                  ? async () => {
+                      try {
+                        setDraftActionError(null)
+                        await onAcceptDraft(activeDraft.id)
+                      } catch (error) {
+                        setDraftActionError(
+                          error instanceof Error
+                            ? error.message
+                            : 'Failed to accept draft.',
+                        )
+                      }
+                    }
+                  : undefined
+              }
+              onReject={
+                onRejectDraft
+                  ? async () => {
+                      try {
+                        setDraftActionError(null)
+                        await onRejectDraft(activeDraft.id)
+                      } catch (error) {
+                        setDraftActionError(
+                          error instanceof Error
+                            ? error.message
+                            : 'Failed to reject draft.',
+                        )
+                      }
+                    }
+                  : undefined
+              }
+              pending={layoutActionsPending}
+            />
+          ) : null}
           <div className="cbv-main-layout">
             <WorkspaceSidebar
               canManageProjects={canManageProjects}
@@ -2932,6 +2930,8 @@ export function Semanticode({
                   agentHeatMode={telemetryMode}
                   agentHeatSource={telemetrySource}
                   agentHeatWindow={telemetryWindow}
+                  compareOverlayActive={compareOverlayActive}
+                  compareSourceTitle={currentCompareSource?.title ?? null}
                   denseCanvasMode={denseCanvasMode}
                   edges={edges}
                   graphLayers={graphLayers}
@@ -2947,6 +2947,10 @@ export function Semanticode({
                   onToggleAgentHeatDebug={handleToggleFollowDebug}
                   onToggleAgentHeatFollow={handleToggleFollowActiveAgent}
                   onAgentHeatWindowChange={handleTelemetryWindowChange}
+                  onActivateCompareOverlay={
+                    currentCompareSource ? handleActivateCompareOverlay : undefined
+                  }
+                  onClearCompareOverlay={compareOverlayActive ? handleClearCompareOverlay : undefined}
                   onLayoutSuggestionChange={handleLayoutSuggestionChange}
                   onLayoutSuggestionSubmit={handleLayoutSuggestionSubmit}
                   onMoveEnd={handleCanvasMoveEnd}
@@ -2975,9 +2979,11 @@ export function Semanticode({
                   semanticSearchQuery={semanticSearchQuery}
                   semanticSearchStrictness={semanticSearchStrictness}
                   semanticSearchResultCount={semanticSearchStatus.resultCount}
+                  showCompareAction={Boolean(currentCompareSource)}
                   showLayoutSuggestion={Boolean(onSuggestLayout)}
                   showSemanticSearch={viewMode === 'symbols' && semanticSearchAvailable}
                   themeMode={themeMode}
+                  utilitySummaryText={agentHeatHelperText}
                   viewMode={viewMode}
                   viewport={viewport}
                   visibleLayerToggles={visibleLayerToggles}
@@ -3145,6 +3151,8 @@ interface CanvasViewportProps {
   agentHeatMode: TelemetryMode
   agentHeatSource: TelemetrySource
   agentHeatWindow: TelemetryWindow
+  compareOverlayActive: boolean
+  compareSourceTitle: string | null
   denseCanvasMode: boolean
   edges: Edge[]
   graphLayers: Record<GraphLayerKey, boolean>
@@ -3160,6 +3168,8 @@ interface CanvasViewportProps {
   onToggleAgentHeatDebug: () => void
   onToggleAgentHeatFollow: () => void
   onAgentHeatWindowChange: (window: TelemetryWindow) => void
+  onActivateCompareOverlay?: () => void
+  onClearCompareOverlay?: () => void
   onLayoutSuggestionChange: (value: string) => void
   onLayoutSuggestionSubmit: () => void
   onMoveEnd: (_event: MouseEvent | TouchEvent | null, flowViewport: { x: number; y: number; zoom: number }) => void
@@ -3186,9 +3196,11 @@ interface CanvasViewportProps {
   semanticSearchQuery: string
   semanticSearchResultCount: number
   semanticSearchStrictness: number
+  showCompareAction: boolean
   showLayoutSuggestion: boolean
   showSemanticSearch: boolean
   themeMode: ThemeMode
+  utilitySummaryText: string
   viewMode: VisualizerViewMode
   viewport: { x: number; y: number; zoom: number }
   visibleLayerToggles: GraphLayerKey[]
@@ -3203,6 +3215,8 @@ const MemoizedCanvasViewport = memo(function CanvasViewport({
   agentHeatMode,
   agentHeatSource,
   agentHeatWindow,
+  compareOverlayActive,
+  compareSourceTitle,
   denseCanvasMode,
   edges,
   graphLayers,
@@ -3218,6 +3232,8 @@ const MemoizedCanvasViewport = memo(function CanvasViewport({
   onToggleAgentHeatDebug,
   onToggleAgentHeatFollow,
   onAgentHeatWindowChange,
+  onActivateCompareOverlay,
+  onClearCompareOverlay,
   onLayoutSuggestionChange,
   onLayoutSuggestionSubmit,
   onMoveEnd,
@@ -3241,13 +3257,16 @@ const MemoizedCanvasViewport = memo(function CanvasViewport({
   semanticSearchQuery,
   semanticSearchResultCount,
   semanticSearchStrictness,
+  showCompareAction,
   showLayoutSuggestion,
   showSemanticSearch,
   themeMode,
+  utilitySummaryText,
   viewMode,
   viewport,
   visibleLayerToggles,
 }: CanvasViewportProps) {
+  const [utilityPaletteOpen, setUtilityPaletteOpen] = useState(false)
   const canvasDotColor = themeMode === 'dark' ? '#4f5f74' : '#d8d1c3'
   const minimapMaskColor =
     themeMode === 'dark' ? 'rgba(7, 9, 12, 0.42)' : 'rgba(44, 35, 27, 0.16)'
@@ -3280,211 +3299,316 @@ const MemoizedCanvasViewport = memo(function CanvasViewport({
   return (
     <section className="cbv-canvas">
       <div className="cbv-canvas-overlays">
-        <div className="cbv-canvas-left-tools">
-          <div className="cbv-agent-heat-panel">
-            <p className="cbv-eyebrow">Agent Heat</p>
-            <div className="cbv-agent-heat-controls">
-              <label>
-                <span>Source</span>
-                <select
-                  onChange={(event) => {
-                    onAgentHeatSourceChange(event.target.value as TelemetrySource)
-                  }}
-                  value={agentHeatSource}
-                >
-                  <option value="all">All</option>
-                  <option value="autonomous">Autonomous</option>
-                  <option value="interactive">Interactive</option>
-                </select>
-              </label>
-              <label>
-                <span>Window</span>
-                <select
-                  onChange={(event) => {
-                    onAgentHeatWindowChange(parseTelemetryWindow(event.target.value))
-                  }}
-                  value={String(agentHeatWindow)}
-                >
-                  <option value="30">30s</option>
-                  <option value="60">60s</option>
-                  <option value="120">2m</option>
-                  <option value="run">Run</option>
-                  <option value="workspace">Workspace</option>
-                </select>
-              </label>
-              <label>
-                <span>Mode</span>
-                <select
-                  onChange={(event) => {
-                    onAgentHeatModeChange(event.target.value as TelemetryMode)
-                  }}
-                  value={agentHeatMode}
-                >
-                  <option value="files">Files</option>
-                  <option value="symbols">Symbols</option>
-                </select>
-              </label>
-            </div>
-            <button
-              aria-pressed={agentHeatFollowEnabled}
-              className={`cbv-agent-heat-follow-toggle${agentHeatFollowEnabled ? ' is-active' : ''}`}
-              onClick={onToggleAgentHeatFollow}
-              type="button"
-            >
-              {agentHeatFollowEnabled ? 'Following active agent' : 'Follow active agent'}
-            </button>
-            <p className="cbv-agent-heat-meta">{agentHeatHelperText}</p>
-            <p className="cbv-agent-heat-follow-meta">{agentHeatFollowText}</p>
-            <button
-              aria-expanded={agentHeatDebugOpen}
-              className="cbv-agent-heat-debug-toggle"
-              onClick={onToggleAgentHeatDebug}
-              type="button"
-            >
-              {agentHeatDebugOpen ? 'Hide follow debug' : 'Show follow debug'}
-            </button>
-            {agentHeatDebugOpen ? (
-              <div className="cbv-agent-heat-debug">
-                <p>
-                  <strong>Mode:</strong> {agentHeatDebugState.currentMode}
-                </p>
-                <p>
-                  <strong>Event:</strong>{' '}
-                  {agentHeatDebugState.latestEvent
-                    ? formatFollowDebugEvent(agentHeatDebugState.latestEvent)
-                    : 'None'}
-                </p>
-                <p>
-                  <strong>Target:</strong>{' '}
-                  {agentHeatDebugState.currentTarget
-                    ? formatFollowDebugTarget(agentHeatDebugState.currentTarget)
-                    : 'None'}
-                </p>
-                <p>
-                  <strong>Queue:</strong> {agentHeatDebugState.queueLength}
-                </p>
-                <p>
-                  <strong>Camera lock:</strong>{' '}
-                  {agentHeatDebugState.cameraLockActive
-                    ? formatFollowCameraLock(agentHeatDebugState.cameraLockUntilMs)
-                    : 'Inactive'}
-                </p>
-                <p>
-                  <strong>Refresh:</strong>{' '}
-                  {agentHeatDebugState.refreshInFlight
-                    ? 'In flight'
-                    : agentHeatDebugState.refreshPending
-                      ? 'Pending'
-                      : 'Idle'}
-                </p>
-              </div>
-            ) : null}
-          </div>
-          {showSemanticSearch ? (
-            <form
-              className={`cbv-semantic-search${semanticSearchPending ? ' is-pending' : ''}${semanticSearchAvailable ? '' : ' is-disabled'}`}
-              onSubmit={(event) => event.preventDefault()}
-            >
-              <div className="cbv-semantic-search-mode-toggle" role="tablist" aria-label="Semantic search mode">
-                <button
-                  aria-pressed={semanticSearchMode === 'symbols'}
-                  className={`cbv-semantic-search-mode${semanticSearchMode === 'symbols' ? ' is-active' : ''}`}
-                  onClick={() => onSemanticSearchModeChange('symbols')}
-                  type="button"
-                >
-                  Symbols
-                </button>
-                <button
-                  aria-pressed={semanticSearchMode === 'groups'}
-                  className={`cbv-semantic-search-mode${semanticSearchMode === 'groups' ? ' is-active' : ''}`}
-                  disabled={!semanticSearchGroupSearchAvailable}
-                  onClick={() => onSemanticSearchModeChange('groups')}
-                  type="button"
-                >
-                  Folders
-                </button>
-              </div>
-              <div className="cbv-semantic-search-shell">
-                <input
-                  aria-label="Search semantic projection"
-                  className="cbv-semantic-search-input"
-                  disabled={!semanticSearchAvailable}
-                  onChange={(event) => {
-                    onSemanticSearchChange(event.target.value)
-                  }}
-                  placeholder={
-                    semanticSearchAvailable
-                      ? semanticSearchMode === 'groups'
-                        ? 'Search semantic folders'
-                        : 'Search semantic symbols'
-                      : 'Build embeddings to search'
-                  }
-                  value={semanticSearchQuery}
-                />
-                {semanticSearchQuery ? (
+        <div className="cbv-canvas-utility-anchor">
+          <button
+            aria-expanded={utilityPaletteOpen}
+            className={`cbv-canvas-utility-trigger${utilityPaletteOpen ? ' is-open' : ''}`}
+            onClick={() => setUtilityPaletteOpen((current) => !current)}
+            title={utilitySummaryText}
+            type="button"
+          >
+            <span className="cbv-eyebrow">canvas</span>
+            <strong>{utilitySummaryText}</strong>
+            <span className="cbv-canvas-utility-trigger-meta">
+              {utilityPaletteOpen ? 'hide tools' : 'tools'}
+            </span>
+          </button>
+          {utilityPaletteOpen ? (
+            <div className="cbv-canvas-utility-popover">
+              {showCompareAction ? (
+                <section className="cbv-canvas-utility-section">
+                  <div className="cbv-canvas-utility-section-header">
+                    <p className="cbv-eyebrow">Compare</p>
+                    {compareSourceTitle ? <span>{compareSourceTitle}</span> : null}
+                  </div>
+                  <div className="cbv-canvas-utility-compare">
+                    <button
+                      className={`cbv-toolbar-button${compareOverlayActive ? ' is-active' : ''}`}
+                      onClick={onActivateCompareOverlay}
+                      type="button"
+                    >
+                      {compareOverlayActive ? 'Comparing semantic view' : 'Compare semantic view'}
+                    </button>
+                    {compareOverlayActive && onClearCompareOverlay ? (
+                      <button
+                        className="cbv-toolbar-button is-secondary"
+                        onClick={onClearCompareOverlay}
+                        type="button"
+                      >
+                        Clear
+                      </button>
+                    ) : null}
+                  </div>
+                </section>
+              ) : null}
+              <section className="cbv-canvas-utility-section">
+                <div className="cbv-canvas-utility-section-header">
+                  <p className="cbv-eyebrow">Agent Heat</p>
+                  <span>{agentHeatHelperText}</span>
+                </div>
+                <div className="cbv-agent-heat-panel">
+                  <div className="cbv-agent-heat-controls">
+                    <label>
+                      <span>Source</span>
+                      <select
+                        onChange={(event) => {
+                          onAgentHeatSourceChange(event.target.value as TelemetrySource)
+                        }}
+                        value={agentHeatSource}
+                      >
+                        <option value="all">All</option>
+                        <option value="autonomous">Autonomous</option>
+                        <option value="interactive">Interactive</option>
+                      </select>
+                    </label>
+                    <label>
+                      <span>Window</span>
+                      <select
+                        onChange={(event) => {
+                          onAgentHeatWindowChange(parseTelemetryWindow(event.target.value))
+                        }}
+                        value={String(agentHeatWindow)}
+                      >
+                        <option value="30">30s</option>
+                        <option value="60">60s</option>
+                        <option value="120">2m</option>
+                        <option value="run">Run</option>
+                        <option value="workspace">Workspace</option>
+                      </select>
+                    </label>
+                    <label>
+                      <span>Mode</span>
+                      <select
+                        onChange={(event) => {
+                          onAgentHeatModeChange(event.target.value as TelemetryMode)
+                        }}
+                        value={agentHeatMode}
+                      >
+                        <option value="files">Files</option>
+                        <option value="symbols">Symbols</option>
+                      </select>
+                    </label>
+                  </div>
                   <button
-                    aria-label="Clear semantic search"
-                    className="cbv-semantic-search-clear"
-                    onClick={onSemanticSearchClear}
+                    aria-pressed={agentHeatFollowEnabled}
+                    className={`cbv-agent-heat-follow-toggle${agentHeatFollowEnabled ? ' is-active' : ''}`}
+                    onClick={onToggleAgentHeatFollow}
                     type="button"
                   >
-                    ×
+                    {agentHeatFollowEnabled ? 'Following active agent' : 'Follow active agent'}
                   </button>
-                ) : null}
-              </div>
-              <div className="cbv-semantic-search-controls">
-                <label className="cbv-semantic-search-slider">
-                  <span>Matches</span>
-                  <strong>{semanticSearchLimit}</strong>
-                  <input
-                    disabled={!semanticSearchAvailable}
-                    max={SEMANTIC_SEARCH_MAX_LIMIT}
-                    min={SEMANTIC_SEARCH_MIN_LIMIT}
-                    onChange={(event) => {
-                      onSemanticSearchLimitChange(Number(event.target.value))
+                  <p className="cbv-agent-heat-follow-meta">{agentHeatFollowText}</p>
+                  <button
+                    aria-expanded={agentHeatDebugOpen}
+                    className="cbv-agent-heat-debug-toggle"
+                    onClick={onToggleAgentHeatDebug}
+                    type="button"
+                  >
+                    {agentHeatDebugOpen ? 'Hide follow debug' : 'Show follow debug'}
+                  </button>
+                  {agentHeatDebugOpen ? (
+                    <div className="cbv-agent-heat-debug">
+                      <p>
+                        <strong>Mode:</strong> {agentHeatDebugState.currentMode}
+                      </p>
+                      <p>
+                        <strong>Event:</strong>{' '}
+                        {agentHeatDebugState.latestEvent
+                          ? formatFollowDebugEvent(agentHeatDebugState.latestEvent)
+                          : 'None'}
+                      </p>
+                      <p>
+                        <strong>Target:</strong>{' '}
+                        {agentHeatDebugState.currentTarget
+                          ? formatFollowDebugTarget(agentHeatDebugState.currentTarget)
+                          : 'None'}
+                      </p>
+                      <p>
+                        <strong>Queue:</strong> {agentHeatDebugState.queueLength}
+                      </p>
+                      <p>
+                        <strong>Camera lock:</strong>{' '}
+                        {agentHeatDebugState.cameraLockActive
+                          ? formatFollowCameraLock(agentHeatDebugState.cameraLockUntilMs)
+                          : 'Inactive'}
+                      </p>
+                      <p>
+                        <strong>Refresh:</strong>{' '}
+                        {agentHeatDebugState.refreshInFlight
+                          ? 'In flight'
+                          : agentHeatDebugState.refreshPending
+                            ? 'Pending'
+                            : 'Idle'}
+                      </p>
+                    </div>
+                  ) : null}
+                </div>
+              </section>
+              {showSemanticSearch ? (
+                <section className="cbv-canvas-utility-section">
+                  <div className="cbv-canvas-utility-section-header">
+                    <p className="cbv-eyebrow">Semantic Search</p>
+                    <span>{semanticSearchHelperText}</span>
+                  </div>
+                  <form
+                    className={`cbv-semantic-search${semanticSearchPending ? ' is-pending' : ''}${semanticSearchAvailable ? '' : ' is-disabled'}`}
+                    onSubmit={(event) => event.preventDefault()}
+                  >
+                    <div className="cbv-semantic-search-mode-toggle" role="tablist" aria-label="Semantic search mode">
+                      <button
+                        aria-pressed={semanticSearchMode === 'symbols'}
+                        className={`cbv-semantic-search-mode${semanticSearchMode === 'symbols' ? ' is-active' : ''}`}
+                        onClick={() => onSemanticSearchModeChange('symbols')}
+                        type="button"
+                      >
+                        Symbols
+                      </button>
+                      <button
+                        aria-pressed={semanticSearchMode === 'groups'}
+                        className={`cbv-semantic-search-mode${semanticSearchMode === 'groups' ? ' is-active' : ''}`}
+                        disabled={!semanticSearchGroupSearchAvailable}
+                        onClick={() => onSemanticSearchModeChange('groups')}
+                        type="button"
+                      >
+                        Folders
+                      </button>
+                    </div>
+                    <div className="cbv-semantic-search-shell">
+                      <input
+                        aria-label="Search semantic projection"
+                        className="cbv-semantic-search-input"
+                        disabled={!semanticSearchAvailable}
+                        onChange={(event) => {
+                          onSemanticSearchChange(event.target.value)
+                        }}
+                        placeholder={
+                          semanticSearchAvailable
+                            ? semanticSearchMode === 'groups'
+                              ? 'Search semantic folders'
+                              : 'Search semantic symbols'
+                            : 'Build embeddings to search'
+                        }
+                        value={semanticSearchQuery}
+                      />
+                      {semanticSearchQuery ? (
+                        <button
+                          aria-label="Clear semantic search"
+                          className="cbv-semantic-search-clear"
+                          onClick={onSemanticSearchClear}
+                          type="button"
+                        >
+                          ×
+                        </button>
+                      ) : null}
+                    </div>
+                    <div className="cbv-semantic-search-controls">
+                      <label className="cbv-semantic-search-slider">
+                        <span>Matches</span>
+                        <strong>{semanticSearchLimit}</strong>
+                        <input
+                          disabled={!semanticSearchAvailable}
+                          max={SEMANTIC_SEARCH_MAX_LIMIT}
+                          min={SEMANTIC_SEARCH_MIN_LIMIT}
+                          onChange={(event) => {
+                            onSemanticSearchLimitChange(Number(event.target.value))
+                          }}
+                          type="range"
+                          value={semanticSearchLimit}
+                        />
+                      </label>
+                      <label className="cbv-semantic-search-slider">
+                        <span>Proximity</span>
+                        <strong>{semanticSearchStrictness}</strong>
+                        <input
+                          disabled={!semanticSearchAvailable}
+                          max={100}
+                          min={0}
+                          onChange={(event) => {
+                            onSemanticSearchStrictnessChange(Number(event.target.value))
+                          }}
+                          type="range"
+                          value={semanticSearchStrictness}
+                        />
+                      </label>
+                    </div>
+                    <p
+                      className={`cbv-semantic-search-meta${semanticSearchResultCount > 0 ? ' has-results' : ''}${!semanticSearchAvailable ? ' is-disabled' : ''}`}
+                    >
+                      {semanticSearchHelperText}
+                    </p>
+                  </form>
+                </section>
+              ) : null}
+              <section className="cbv-canvas-utility-section">
+                <div className="cbv-canvas-utility-section-header">
+                  <p className="cbv-eyebrow">Layers</p>
+                  <span>{viewMode}</span>
+                </div>
+                <div className="cbv-canvas-layer-toggles">
+                  {visibleLayerToggles.map((layer) => (
+                    <LayerToggle
+                      active={graphLayers[layer]}
+                      key={layer}
+                      label={getLayerLabel(layer, viewMode)}
+                      onClick={() => onToggleLayer(layer)}
+                    />
+                  ))}
+                </div>
+              </section>
+              {viewMode === 'symbols' ? (
+                <section className="cbv-canvas-utility-section">
+                  <div className="cbv-canvas-utility-section-header">
+                    <p className="cbv-eyebrow">Legend</p>
+                    <span>Semantic kinds</span>
+                  </div>
+                  <div className="cbv-canvas-legend">
+                    <SymbolKindLegend />
+                  </div>
+                </section>
+              ) : null}
+              {showLayoutSuggestion ? (
+                <section className="cbv-canvas-utility-section">
+                  <div className="cbv-canvas-utility-section-header">
+                    <p className="cbv-eyebrow">Layout</p>
+                    <span>Suggest scene</span>
+                  </div>
+                  <form
+                    className={`cbv-layout-suggestion${layoutSuggestionPending ? ' is-pending' : ''}`}
+                    onSubmit={(event) => {
+                      event.preventDefault()
+                      onLayoutSuggestionSubmit()
                     }}
-                    type="range"
-                    value={semanticSearchLimit}
-                  />
-                </label>
-                <label className="cbv-semantic-search-slider">
-                  <span>Proximity</span>
-                  <strong>{semanticSearchStrictness}</strong>
-                  <input
-                    disabled={!semanticSearchAvailable}
-                    max={100}
-                    min={0}
-                    onChange={(event) => {
-                      onSemanticSearchStrictnessChange(Number(event.target.value))
-                    }}
-                    type="range"
-                    value={semanticSearchStrictness}
-                  />
-                </label>
-              </div>
-              <p
-                className={`cbv-semantic-search-meta${semanticSearchResultCount > 0 ? ' has-results' : ''}${!semanticSearchAvailable ? ' is-disabled' : ''}`}
-              >
-                {semanticSearchHelperText}
-              </p>
-            </form>
+                  >
+                    <div className="cbv-layout-suggestion-shell">
+                      <input
+                        aria-label="Suggest layout"
+                        className="cbv-layout-suggestion-input"
+                        disabled={layoutSuggestionPending}
+                        onChange={(event) => {
+                          onLayoutSuggestionChange(event.target.value)
+                        }}
+                        placeholder="Suggest layout"
+                        value={layoutSuggestionText}
+                      />
+                      <button
+                        className="cbv-layout-suggestion-submit"
+                        disabled={layoutSuggestionPending || !layoutSuggestionText.trim()}
+                        type="submit"
+                      >
+                        {layoutSuggestionPending ? 'Working…' : 'Go'}
+                      </button>
+                    </div>
+                    {layoutSuggestionPending ? (
+                      <p className="cbv-layout-suggestion-status">Generating a new layout draft…</p>
+                    ) : layoutSuggestionError ? (
+                      <p className="cbv-layout-suggestion-error">{layoutSuggestionError}</p>
+                    ) : null}
+                  </form>
+                </section>
+              ) : null}
+            </div>
           ) : null}
-          <div className="cbv-canvas-layer-toggles">
-            {visibleLayerToggles.map((layer) => (
-              <LayerToggle
-                active={graphLayers[layer]}
-                key={layer}
-                label={getLayerLabel(layer, viewMode)}
-                onClick={() => onToggleLayer(layer)}
-              />
-            ))}
-          </div>
         </div>
-        {viewMode === 'symbols' ? (
-          <div className="cbv-canvas-legend">
-            <SymbolKindLegend />
-          </div>
-        ) : null}
       </div>
       <ReactFlow
         defaultViewport={viewport}
@@ -3519,41 +3643,6 @@ const MemoizedCanvasViewport = memo(function CanvasViewport({
           />
         )}
       </ReactFlow>
-
-      {showLayoutSuggestion ? (
-        <form
-          className={`cbv-layout-suggestion${layoutSuggestionPending ? ' is-pending' : ''}`}
-          onSubmit={(event) => {
-            event.preventDefault()
-            onLayoutSuggestionSubmit()
-          }}
-        >
-          <div className="cbv-layout-suggestion-shell">
-            <input
-              aria-label="Suggest layout"
-              className="cbv-layout-suggestion-input"
-              disabled={layoutSuggestionPending}
-              onChange={(event) => {
-                onLayoutSuggestionChange(event.target.value)
-              }}
-              placeholder="Suggest layout"
-              value={layoutSuggestionText}
-            />
-            <button
-              className="cbv-layout-suggestion-submit"
-              disabled={layoutSuggestionPending || !layoutSuggestionText.trim()}
-              type="submit"
-            >
-              {layoutSuggestionPending ? 'Working…' : 'Go'}
-            </button>
-          </div>
-          {layoutSuggestionPending ? (
-            <p className="cbv-layout-suggestion-status">Generating a new layout draft…</p>
-          ) : layoutSuggestionError ? (
-            <p className="cbv-layout-suggestion-error">{layoutSuggestionError}</p>
-          ) : null}
-        </form>
-      ) : null}
     </section>
   )
 })

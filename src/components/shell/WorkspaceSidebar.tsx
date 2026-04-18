@@ -101,7 +101,7 @@ export function WorkspaceSidebar({
 
       <section className="cbv-sidebar-section">
         <div className="cbv-sidebar-section-header">
-          <span>Folders</span>
+          <span>Workspaces</span>
           <small>{recentProjects.length + 1}</small>
         </div>
         <div className="cbv-workspace-sidebar-actions">
@@ -110,7 +110,7 @@ export function WorkspaceSidebar({
             onClick={onOpenWorkspace}
             type="button"
           >
-            Open Folder
+            open folder
           </button>
           <button
             className="is-secondary"
@@ -118,7 +118,7 @@ export function WorkspaceSidebar({
             onClick={onCloseWorkspace}
             type="button"
           >
-            Close Current
+            close current
           </button>
         </div>
         {recentProjects.length ? (
@@ -148,7 +148,7 @@ export function WorkspaceSidebar({
       <section className="cbv-sidebar-section cbv-sidebar-outline">
         <div className="cbv-sidebar-section-header">
           <span>Symbols · {filteredGroups.reduce((count, group) => count + group.items.length, 0)}</span>
-          <small>loc ▾</small>
+          <small>sort: loc ▾</small>
         </div>
         <label className="cbv-sidebar-filter">
           <span className="cbv-sidebar-filter-icon">⌕</span>

@@ -74,6 +74,9 @@
   --app-code-gutter-highlight-bg: color-mix(in oklch, var(--app-accent) 4%, transparent);
   --app-code-gutter-highlight-text: oklch(0.84 0.08 180);
   --app-bg: oklch(0.178 0.008 260);
+  --app-scrollbar-track: oklch(0.178 0.008 260);
+  --app-scrollbar-thumb: oklch(0.305 0.01 260);
+  --app-scrollbar-thumb-hover: oklch(0.405 0.012 260);
 
   color: var(--app-text);
   background: var(--app-bg);
@@ -122,5 +125,8 @@
   --app-code-gutter-highlight-bg: rgb(78 142 131 / 0.12);
   --app-code-gutter-highlight-text: oklch(0.42 0.09 190);
   --app-bg: oklch(0.97 0.004 260);
+  --app-scrollbar-track: oklch(0.955 0.005 260);
+  --app-scrollbar-thumb: oklch(0.845 0.01 260);
+  --app-scrollbar-thumb-hover: oklch(0.72 0.012 260);
   color-scheme: light;
 }

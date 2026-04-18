@@ -5,33 +5,14 @@ interface LayoutOption {
 
 interface WorkspaceToolbarProps {
   agentDrawerOpen?: boolean
-  activeDraft: boolean
-  activeLayoutSyncNote?: {
-    label: string
-    title: string
-  } | null
-  compareOverlayActive: boolean
-  layoutActionsPending: boolean
   layoutOptions: LayoutOption[]
-  onAcceptDraft?: () => void | Promise<void>
-  onActivateCompareOverlay?: () => void
-  onBuildSemanticEmbeddings?: () => void
-  onClearCompareOverlay?: () => void
   onOpenAgentDrawer?: () => void
   onOpenAgentSettings: () => void
   onOpenRunsPanel?: () => void
-  onRejectDraft?: () => void | Promise<void>
   onSelectLayoutValue: (value: string) => void
-  onStartPreprocessing?: () => void
   onToggleProjectsSidebar?: () => void
   preprocessingStatus?: {
-    canBuildEmbeddings: boolean
-    currentItemPath?: string | null
-    embeddingActionLabel: string
     label: string
-    lastError?: string | null
-    preprocessingActionLabel: string
-    progressPercent: number
     runState: string
     title: string
     workspaceSync?: {
@@ -44,7 +25,6 @@ interface WorkspaceToolbarProps {
   projectsSidebarOpen: boolean
   runsActive?: boolean
   selectedLayoutValue: string
-  showCompareAction: boolean
   workingSetSummary?: {
     label: string
     title: string
@@ -55,37 +35,25 @@ interface WorkspaceToolbarProps {
 
 export function WorkspaceToolbar({
   agentDrawerOpen = false,
-  activeDraft,
-  activeLayoutSyncNote = null,
-  compareOverlayActive,
-  layoutActionsPending,
   layoutOptions,
-  onAcceptDraft,
-  onActivateCompareOverlay,
-  onBuildSemanticEmbeddings,
-  onClearCompareOverlay,
   onOpenAgentDrawer,
   onOpenAgentSettings,
   onOpenRunsPanel,
   onOpenWorkspaceSync,
-  onRejectDraft,
   onSelectLayoutValue,
-  onStartPreprocessing,
   onToggleProjectsSidebar,
   preprocessingStatus = null,
   projectsSidebarOpen,
   runsActive = false,
   selectedLayoutValue,
-  showCompareAction,
   workingSetSummary = null,
   workspaceName,
   workspaceRootDir,
 }: WorkspaceToolbarProps) {
-  const preprocessingBusy = preprocessingStatus?.runState === 'building'
   const preprocessingTone =
     preprocessingStatus?.runState === 'error'
       ? 'error'
-      : preprocessingBusy
+      : preprocessingStatus?.runState === 'building'
         ? 'running'
         : preprocessingStatus?.runState === 'ready'
           ? 'ready'
@@ -96,6 +64,18 @@ export function WorkspaceToolbar({
   return (
     <header className="cbv-toolbar">
       <div className="cbv-toolbar-brand">
+        {onToggleProjectsSidebar ? (
+          <button
+            aria-label={projectsSidebarOpen ? 'Hide outline' : 'Show outline'}
+            className={`cbv-toolbar-rail-toggle${projectsSidebarOpen ? ' is-active' : ''}`}
+            onClick={onToggleProjectsSidebar}
+            title={projectsSidebarOpen ? 'Hide outline' : 'Show outline'}
+            type="button"
+          >
+            <span aria-hidden="true">{projectsSidebarOpen ? '▾' : '▸'}</span>
+            <span>outline</span>
+          </button>
+        ) : null}
         <span aria-hidden="true" className="cbv-brand-mark">
           <span />
         </span>
@@ -138,11 +118,6 @@ export function WorkspaceToolbar({
               ))}
             </select>
           </label>
-          {activeLayoutSyncNote ? (
-            <p className="cbv-layout-sync-note" title={activeLayoutSyncNote.title}>
-              {activeLayoutSyncNote.label}
-            </p>
-          ) : null}
         </div>
       </div>
 
@@ -166,91 +141,7 @@ export function WorkspaceToolbar({
                 {preprocessingStatus.workspaceSync.label}
               </button>
             ) : null}
-            {onStartPreprocessing ? (
-              <button
-                className="cbv-toolbar-meta-button"
-                disabled={preprocessingBusy}
-                onClick={(event) => {
-                  event.preventDefault()
-                  event.stopPropagation()
-                  onStartPreprocessing()
-                }}
-                title="Use the agent to generate semantic purpose summaries."
-                type="button"
-              >
-                {preprocessingStatus.preprocessingActionLabel}
-              </button>
-            ) : null}
-            {onBuildSemanticEmbeddings ? (
-              <button
-                className="cbv-toolbar-meta-button"
-                disabled={preprocessingBusy || !preprocessingStatus.canBuildEmbeddings}
-                onClick={(event) => {
-                  event.preventDefault()
-                  event.stopPropagation()
-                  onBuildSemanticEmbeddings()
-                }}
-                title="Build local semantic embeddings from cached summaries."
-                type="button"
-              >
-                {preprocessingStatus.embeddingActionLabel}
-              </button>
-            ) : null}
           </div>
-        ) : null}
-        {activeDraft ? (
-          <div className="cbv-draft-actions">
-            <button
-              disabled={layoutActionsPending || !onAcceptDraft}
-              onClick={() => {
-                void onAcceptDraft?.()
-              }}
-              type="button"
-            >
-              Accept Draft
-            </button>
-            <button
-              className="is-danger"
-              disabled={layoutActionsPending || !onRejectDraft}
-              onClick={() => {
-                void onRejectDraft?.()
-              }}
-              type="button"
-            >
-              Reject Draft
-            </button>
-          </div>
-        ) : null}
-        {showCompareAction ? (
-          <div className="cbv-compare-actions">
-            <button
-              className={`cbv-toolbar-button${compareOverlayActive ? ' is-active' : ''}`}
-              onClick={onActivateCompareOverlay}
-              type="button"
-            >
-              {compareOverlayActive
-                ? 'Comparing in Semantic View'
-                : 'Compare in Semantic View'}
-            </button>
-            {compareOverlayActive ? (
-              <button
-                className="cbv-toolbar-button is-secondary"
-                onClick={onClearCompareOverlay}
-                type="button"
-              >
-                Clear Compare
-              </button>
-            ) : null}
-          </div>
-        ) : null}
-        {onToggleProjectsSidebar ? (
-          <button
-            className={`cbv-toolbar-button is-secondary${projectsSidebarOpen ? ' is-active' : ''}`}
-            onClick={onToggleProjectsSidebar}
-            type="button"
-          >
-            {projectsSidebarOpen ? 'Hide Outline' : 'Outline'}
-          </button>
         ) : null}
         {onOpenAgentDrawer ? (
           <button
@@ -271,13 +162,12 @@ export function WorkspaceToolbar({
           </button>
         ) : null}
         <button
-          aria-label="Settings"
-          className="cbv-toolbar-icon-button"
+          className="cbv-toolbar-meta-button"
           onClick={onOpenAgentSettings}
           title="Settings"
           type="button"
         >
-          cfg
+          Settings
         </button>
         <span className="cbv-toolbar-shortcut">⌘K</span>
       </div>
