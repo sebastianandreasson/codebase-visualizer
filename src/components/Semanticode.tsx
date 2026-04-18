@@ -43,7 +43,6 @@ import {
   type LayoutNodeScope,
   type LayoutSpec,
   type ProjectNode,
-  type ProjectSnapshot,
   type PreprocessedWorkspaceContext,
   type PreprocessingStatus,
   type SymbolNode,
@@ -98,6 +97,7 @@ import {
   THEME_STORAGE_KEY,
   UI_PREFERENCES_STORAGE_KEY,
 } from '../app/themeBootstrap'
+import { useAgentFollowController } from '../app/useAgentFollowController'
 import {
   filterSemanticSearchMatches,
   filterSearchableSemanticEmbeddings,
@@ -105,6 +105,9 @@ import {
   type SemanticSearchResult,
   type SemanticSearchMatch,
 } from '../semantic/semanticSearch'
+import {
+  getPreferredFollowSymbolIdsForFile,
+} from '../app/agentFollowModel'
 import {
   buildGroupPrototypeRecords,
   mergeGroupPrototypeRecords,
@@ -483,10 +486,6 @@ export function Semanticode({
   const workspaceRef = useRef<HTMLDivElement | null>(null)
   const inspectorBodyRef = useRef<HTMLDivElement | null>(null)
   const lastFittedCompareKeyRef = useRef<string | null>(null)
-  const lastFollowedAgentActivityKeyRef = useRef<string | null>(null)
-  const lastFollowedEditActivityKeyRef = useRef<string | null>(null)
-  const knownChangedPathsRef = useRef<Set<string>>(new Set())
-  const pendingEditedPathsRef = useRef<string[]>([])
   const followCameraLockUntilRef = useRef(0)
   const liveSnapshotRefreshTimeoutRef = useRef<number | null>(null)
   const liveSnapshotRefreshInFlightRef = useRef(false)
@@ -830,53 +829,6 @@ export function Semanticode({
     hasRunningAutonomousRun,
     workspaceSyncStatus,
   ])
-
-  useEffect(() => {
-    if (!followActiveAgent) {
-      knownChangedPathsRef.current = new Set()
-      pendingEditedPathsRef.current = []
-      return
-    }
-
-    const previousChangedPaths = knownChangedPathsRef.current
-    const nextChangedPaths = new Set(liveChangedFiles)
-    const newChangedPaths = liveChangedFiles.filter((path) => !previousChangedPaths.has(path))
-
-    if (newChangedPaths.length > 0) {
-      const telemetryIndexByPath = new Map<string, number>()
-
-      telemetryActivityEvents.forEach((event, index) => {
-        if (!telemetryIndexByPath.has(event.path)) {
-          telemetryIndexByPath.set(event.path, index)
-        }
-      })
-
-      newChangedPaths.sort((leftPath, rightPath) => {
-        const leftIndex = telemetryIndexByPath.get(leftPath) ?? Number.MAX_SAFE_INTEGER
-        const rightIndex = telemetryIndexByPath.get(rightPath) ?? Number.MAX_SAFE_INTEGER
-        return leftIndex - rightIndex
-      })
-
-      const existingPending = pendingEditedPathsRef.current.filter((path) =>
-        nextChangedPaths.has(path),
-      )
-      const nextPending = [...existingPending]
-
-      for (const path of newChangedPaths) {
-        if (!nextPending.includes(path)) {
-          nextPending.push(path)
-        }
-      }
-
-      pendingEditedPathsRef.current = nextPending
-    } else {
-      pendingEditedPathsRef.current = pendingEditedPathsRef.current.filter((path) =>
-        nextChangedPaths.has(path),
-      )
-    }
-
-    knownChangedPathsRef.current = nextChangedPaths
-  }, [followActiveAgent, liveChangedFiles, telemetryActivityEvents])
 
   useEffect(() => {
     let cancelled = false
@@ -1591,9 +1543,10 @@ export function Semanticode({
     const nextMap = new Map<string, { pulse: boolean; weight: number }>()
     const fileIdsByPath = new Map<string, string>()
     const symbolIdsByFileId = new Map<string, string[]>()
+    const snapshot = effectiveSnapshot
 
-    if (effectiveSnapshot) {
-      for (const node of Object.values(effectiveSnapshot.nodes)) {
+    if (snapshot) {
+      for (const node of Object.values(snapshot.nodes)) {
         if (isFileNode(node)) {
           fileIdsByPath.set(node.path, node.id)
           continue
@@ -1622,8 +1575,12 @@ export function Semanticode({
       }
 
       const targetNodeIds =
-        telemetryMode === 'symbols'
-          ? (symbolIdsByFileId.get(fileNodeId) ?? [])
+        telemetryMode === 'symbols' && snapshot
+          ? getPreferredFollowSymbolIdsForFile({
+              fileId: fileNodeId,
+              snapshot,
+              symbolIdsByFileId,
+            })
           : [fileNodeId]
 
       if (targetNodeIds.length === 0) {
@@ -1658,15 +1615,17 @@ export function Semanticode({
     telemetryObservedAt,
     telemetryWindow,
   ])
-  const latestAgentActivityTarget = getLatestAgentActivityTarget({
-    snapshot: effectiveSnapshot,
-    telemetryActivityEvents,
-    telemetryEnabled,
-    telemetryMode,
-    visibleNodes: nodes,
-  })
-  const latestAgentEditedTarget = getLatestEditedActivityTarget({
-    changedPaths: liveChangedFiles,
+  const {
+    activityCommand: followActivityCommand,
+    editCommand: followEditCommand,
+    latestAgentActivityTarget,
+    latestAgentEditedTarget,
+    resetFollowState,
+    acknowledgeActivityCommand,
+    acknowledgeEditCommand,
+  } = useAgentFollowController({
+    enabled: followActiveAgent,
+    liveChangedFiles,
     snapshot: effectiveSnapshot,
     telemetryActivityEvents,
     telemetryEnabled,
@@ -2061,11 +2020,11 @@ export function Semanticode({
   }, [])
   const handleToggleFollowActiveAgent = useCallback(() => {
     setTelemetryEnabled(true)
-    lastFollowedAgentActivityKeyRef.current = null
-    lastFollowedEditActivityKeyRef.current = null
+    resetFollowState()
     followCameraLockUntilRef.current = 0
+    setFollowedEditDiffRequestKey(null)
     setFollowActiveAgent((current) => !current)
-  }, [])
+  }, [resetFollowState])
   const focusCanvasOnFollowTarget = useCallback((input: {
     fileNodeId: string
     isEdit: boolean
@@ -2260,23 +2219,23 @@ export function Semanticode({
       return
     }
 
-    const followKey = `${telemetryMode}:${latestAgentActivityTarget.eventKey}`
-
-    if (lastFollowedAgentActivityKeyRef.current === followKey) {
+    if (!followActivityCommand) {
       return
     }
 
-    lastFollowedAgentActivityKeyRef.current = followKey
+    acknowledgeActivityCommand(followActivityCommand.key)
 
     window.setTimeout(() => {
       focusCanvasOnFollowTarget({
-        fileNodeId: latestAgentActivityTarget.fileNodeId,
+        fileNodeId: followActivityCommand.target.fileNodeId,
         isEdit: false,
         mode: telemetryMode,
-        nodeIds: latestAgentActivityTarget.nodeIds,
+        nodeIds: followActivityCommand.target.nodeIds,
       })
     }, 0)
   }, [
+    acknowledgeActivityCommand,
+    followActivityCommand,
     flowInstance,
     focusCanvasOnFollowTarget,
     followActiveAgent,
@@ -2291,40 +2250,15 @@ export function Semanticode({
       return
     }
 
-    const nextPendingPath = pendingEditedPathsRef.current[0] ?? null
-    const pendingEditedTarget =
-      nextPendingPath && effectiveSnapshot
-        ? getLatestAgentActivityTarget({
-            changedPaths: [nextPendingPath],
-            snapshot: effectiveSnapshot,
-            telemetryActivityEvents,
-            telemetryEnabled: true,
-            telemetryMode,
-            visibleNodes: nodes,
-          })
-        : null
-    const pendingFallbackTarget =
-      !pendingEditedTarget && nextPendingPath
-        ? buildPendingEditedTargetFromPath({
-            path: nextPendingPath,
-            snapshot: effectiveSnapshot,
-            telemetryMode,
-            visibleNodes: nodes,
-          })
-        : null
-    const target = pendingEditedTarget ?? pendingFallbackTarget ?? latestAgentEditedTarget
-
-    if (!target) {
+    if (!followEditCommand) {
       return
     }
 
-    const editFollowKey = `edit:${target.eventKey}`
-
-    if (lastFollowedEditActivityKeyRef.current === editFollowKey) {
-      return
-    }
-
-    lastFollowedEditActivityKeyRef.current = editFollowKey
+    const target = followEditCommand.target
+    acknowledgeEditCommand({
+      key: followEditCommand.key,
+      pendingPath: followEditCommand.pendingPath,
+    })
 
     window.setTimeout(() => {
       const focusedNodeIds =
@@ -2332,16 +2266,10 @@ export function Semanticode({
           ? target.nodeIds.slice(0, 1)
           : [target.fileNodeId]
 
-      if (nextPendingPath) {
-        pendingEditedPathsRef.current = pendingEditedPathsRef.current.filter(
-          (path) => path !== nextPendingPath,
-        )
-      }
-
       selectNode(target.fileNodeId)
       setInspectorTab('file')
       setInspectorOpen(true)
-      setFollowedEditDiffRequestKey(editFollowKey)
+      setFollowedEditDiffRequestKey(followEditCommand.diffRequestKey)
       focusCanvasOnFollowTarget({
         fileNodeId: target.fileNodeId,
         isEdit: true,
@@ -2350,14 +2278,15 @@ export function Semanticode({
       })
     }, 0)
   }, [
+    acknowledgeEditCommand,
     effectiveSnapshot,
+    followEditCommand,
     focusCanvasOnFollowTarget,
     followActiveAgent,
     latestAgentEditedTarget,
     nodes,
     selectNode,
     setInspectorTab,
-    telemetryActivityEvents,
     telemetryMode,
   ])
 
@@ -6111,213 +6040,6 @@ function getLayerTogglesForViewMode(
     : ['contains', 'imports', 'calls']
 }
 
-function getLatestAgentActivityTarget(input: {
-  changedPaths?: string[]
-  snapshot: ProjectSnapshot | null
-  telemetryActivityEvents: TelemetryActivityEvent[]
-  telemetryEnabled: boolean
-  telemetryMode: TelemetryMode
-  visibleNodes: Node[]
-}) {
-  if (
-    !input.telemetryEnabled ||
-    !input.snapshot ||
-    input.telemetryActivityEvents.length === 0
-  ) {
-    return null
-  }
-
-  const visibleNodeIds = new Set(input.visibleNodes.map((node) => node.id))
-  const changedPathSet =
-    input.changedPaths && input.changedPaths.length > 0
-      ? new Set(input.changedPaths)
-      : null
-  const fileIdsByPath = new Map<string, string>()
-  const symbolIdsByFileId = new Map<string, string[]>()
-
-  for (const node of Object.values(input.snapshot.nodes)) {
-    if (isFileNode(node)) {
-      fileIdsByPath.set(node.path, node.id)
-      continue
-    }
-
-    if (isSymbolNode(node)) {
-      const currentSymbolIds = symbolIdsByFileId.get(node.fileId) ?? []
-      currentSymbolIds.push(node.id)
-      symbolIdsByFileId.set(node.fileId, currentSymbolIds)
-    }
-  }
-
-  for (const event of input.telemetryActivityEvents) {
-    if (changedPathSet && !changedPathSet.has(event.path)) {
-      continue
-    }
-
-    const fileNodeId = fileIdsByPath.get(event.path)
-
-    if (!fileNodeId) {
-      continue
-    }
-
-    const targetNodeIds =
-      input.telemetryMode === 'symbols'
-        ? (symbolIdsByFileId.get(fileNodeId) ?? []).filter((nodeId) =>
-            visibleNodeIds.has(nodeId),
-          )
-        : visibleNodeIds.has(fileNodeId)
-          ? [fileNodeId]
-          : []
-    const fallbackNodeIds =
-      targetNodeIds.length === 0 && visibleNodeIds.has(fileNodeId)
-        ? [fileNodeId]
-        : targetNodeIds
-
-    if (
-      fallbackNodeIds.length === 0 &&
-      !(changedPathSet?.has(event.path) || isEditTelemetryEvent(event.toolNames))
-    ) {
-      continue
-    }
-
-    return {
-      fileNodeId,
-      eventKey: event.key,
-      nodeIds: fallbackNodeIds,
-      path: event.path,
-      toolNames: event.toolNames,
-    }
-  }
-
-  return null
-}
-
-function getLatestEditedActivityTarget(input: {
-  changedPaths?: string[]
-  snapshot: ProjectSnapshot | null
-  telemetryActivityEvents: TelemetryActivityEvent[]
-  telemetryEnabled: boolean
-  telemetryMode: TelemetryMode
-  visibleNodes: Node[]
-}) {
-  if (
-    !input.telemetryEnabled ||
-    !input.snapshot ||
-    input.telemetryActivityEvents.length === 0
-  ) {
-    return null
-  }
-
-  const visibleNodeIds = new Set(input.visibleNodes.map((node) => node.id))
-  const changedPathSet =
-    input.changedPaths && input.changedPaths.length > 0
-      ? new Set(input.changedPaths)
-      : null
-  const fileIdsByPath = new Map<string, string>()
-  const symbolIdsByFileId = new Map<string, string[]>()
-
-  for (const node of Object.values(input.snapshot.nodes)) {
-    if (isFileNode(node)) {
-      fileIdsByPath.set(node.path, node.id)
-      continue
-    }
-
-    if (isSymbolNode(node)) {
-      const currentSymbolIds = symbolIdsByFileId.get(node.fileId) ?? []
-      currentSymbolIds.push(node.id)
-      symbolIdsByFileId.set(node.fileId, currentSymbolIds)
-    }
-  }
-
-  for (const event of input.telemetryActivityEvents) {
-    if (!isEditTelemetryEvent(event.toolNames)) {
-      continue
-    }
-
-    if (changedPathSet && !changedPathSet.has(event.path)) {
-      continue
-    }
-
-    const fileNodeId = fileIdsByPath.get(event.path)
-
-    if (!fileNodeId) {
-      continue
-    }
-
-    const targetNodeIds =
-      input.telemetryMode === 'symbols'
-        ? (symbolIdsByFileId.get(fileNodeId) ?? []).filter((nodeId) =>
-            visibleNodeIds.has(nodeId),
-          )
-        : visibleNodeIds.has(fileNodeId)
-          ? [fileNodeId]
-          : []
-    const fallbackNodeIds =
-      targetNodeIds.length === 0 && visibleNodeIds.has(fileNodeId)
-        ? [fileNodeId]
-        : targetNodeIds
-
-    if (fallbackNodeIds.length === 0) {
-      continue
-    }
-
-    return {
-      fileNodeId,
-      eventKey: event.key,
-      nodeIds: fallbackNodeIds,
-      path: event.path,
-      toolNames: event.toolNames,
-    }
-  }
-
-  return null
-}
-
-function buildPendingEditedTargetFromPath(input: {
-  path: string
-  snapshot: ProjectSnapshot
-  telemetryMode: TelemetryMode
-  visibleNodes: Node[]
-}) {
-  const visibleNodeIds = new Set(input.visibleNodes.map((node) => node.id))
-  const fileNode = Object.values(input.snapshot.nodes).find(
-    (node): node is CodebaseFile => isFileNode(node) && node.path === input.path,
-  )
-
-  if (!fileNode) {
-    return null
-  }
-
-  const symbolNodeIds =
-    input.telemetryMode === 'symbols'
-      ? Object.values(input.snapshot.nodes)
-          .filter(
-            (node): node is SymbolNode =>
-              isSymbolNode(node) &&
-              node.fileId === fileNode.id &&
-              visibleNodeIds.has(node.id),
-          )
-          .map((node) => node.id)
-      : []
-  const nodeIds =
-    input.telemetryMode === 'symbols'
-      ? symbolNodeIds.length > 0
-        ? symbolNodeIds
-        : visibleNodeIds.has(fileNode.id)
-          ? [fileNode.id]
-          : []
-      : visibleNodeIds.has(fileNode.id)
-        ? [fileNode.id]
-        : [fileNode.id]
-
-  return {
-    eventKey: `git:${input.path}`,
-    fileNodeId: fileNode.id,
-    nodeIds,
-    path: input.path,
-    toolNames: ['git-diff'],
-  }
-}
-
 function getFollowTargetZoom(input: {
   isEdit: boolean
   mode: TelemetryMode
@@ -6336,20 +6058,6 @@ function getFollowTargetZoom(input: {
   }
 
   return FOLLOW_AGENT_ACTIVITY_FILE_ZOOM
-}
-
-function isEditTelemetryEvent(toolNames: string[]) {
-  return toolNames.some((toolName) => {
-    const normalizedToolName = toolName.trim().toLowerCase()
-
-    return (
-      normalizedToolName.includes('apply') ||
-      normalizedToolName.includes('write') ||
-      normalizedToolName.includes('edit') ||
-      normalizedToolName.includes('patch') ||
-      normalizedToolName.includes('replace')
-    )
-  })
 }
 
 function clampNumber(value: number, min: number, max: number) {

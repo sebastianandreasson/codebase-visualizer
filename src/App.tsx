@@ -133,15 +133,13 @@ export default function App() {
   }
 
   async function refreshWorkspaceSnapshotPreservingScene() {
-    const [{ layoutState, snapshot }, workspaceSyncStatus] = await Promise.all([
+    const [{ snapshot }, workspaceSyncStatus] = await Promise.all([
       fetchWorkspaceState(),
       fetchWorkspaceSyncStatus(),
     ])
 
     startTransition(() => {
       setSnapshot(snapshot)
-      setLayouts(layoutState.layouts)
-      setDraftLayouts(layoutState.draftLayouts)
       setWorkspaceSyncStatus(workspaceSyncStatus)
       setErrorMessage(null)
     })
