@@ -32,7 +32,8 @@ import {
   type WorkspaceProfile,
 } from '../../types'
 import { fetchGitFileDiff } from '../../app/apiClient'
-import { AgentPanel, type AgentScopeContext } from '../AgentPanel'
+import { type AgentScopeContext } from '../AgentPanel'
+import { AgentContextPane } from '../agent/AgentContextPane'
 import type { ThemeMode } from '../settings/GeneralSettingsPanel'
 import type { GroupPrototypeRecord } from '../../semantic/groups/groupPrototypes'
 
@@ -58,11 +59,11 @@ interface InspectorPaneProps {
   }
   inspectorBodyRef: RefObject<HTMLDivElement | null>
   inspectorTab: InspectorTab
-  onAgentRunSettled?: () => Promise<void>
   onAdoptInspectorContextAsWorkingSet?: () => void
   onClearCompareOverlay: () => void
   onClearWorkingSet?: () => void
   onClose: () => void
+  onOpenAgentDrawer?: () => void
   onOpenAgentSettings: () => void
   onSetInspectorTab: (tab: InspectorTab) => void
   preprocessedWorkspaceContext: PreprocessedWorkspaceContext | null
@@ -105,11 +106,11 @@ export function InspectorPane({
   header,
   inspectorBodyRef,
   inspectorTab,
-  onAgentRunSettled,
   onAdoptInspectorContextAsWorkingSet,
   onClearCompareOverlay,
   onClearWorkingSet,
   onClose,
+  onOpenAgentDrawer,
   onOpenAgentSettings,
   onSetInspectorTab,
   preprocessedWorkspaceContext,
@@ -181,7 +182,7 @@ export function InspectorPane({
 
       <div className="cbv-inspector-body" ref={inspectorBodyRef}>
         {inspectorTab === 'agent' ? (
-          <AgentPanel
+          <AgentContextPane
             desktopHostAvailable={desktopHostAvailable}
             inspectorContext={{
               file: selectedFile,
@@ -190,11 +191,10 @@ export function InspectorPane({
               symbol: selectedSymbol,
               symbols: selectedSymbols,
             }}
+            onOpenDrawer={onOpenAgentDrawer}
             onOpenSettings={onOpenAgentSettings}
-            onRunSettled={onAgentRunSettled}
             onAdoptInspectorContextAsWorkingSet={onAdoptInspectorContextAsWorkingSet}
             onClearWorkingSet={onClearWorkingSet}
-            preprocessedWorkspaceContext={preprocessedWorkspaceContext}
             workingSet={workingSet}
             workingSetContext={workingSetContext}
             workspaceProfile={workspaceProfile}

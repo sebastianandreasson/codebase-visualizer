@@ -4,6 +4,7 @@ interface LayoutOption {
 }
 
 interface WorkspaceToolbarProps {
+  agentDrawerOpen?: boolean
   activeDraft: boolean
   activeLayoutSyncNote?: {
     label: string
@@ -16,6 +17,7 @@ interface WorkspaceToolbarProps {
   onActivateCompareOverlay?: () => void
   onBuildSemanticEmbeddings?: () => void
   onClearCompareOverlay?: () => void
+  onOpenAgentDrawer?: () => void
   onOpenAgentSettings: () => void
   onOpenRunsPanel?: () => void
   onRejectDraft?: () => void | Promise<void>
@@ -52,6 +54,7 @@ interface WorkspaceToolbarProps {
 }
 
 export function WorkspaceToolbar({
+  agentDrawerOpen = false,
   activeDraft,
   activeLayoutSyncNote = null,
   compareOverlayActive,
@@ -61,6 +64,7 @@ export function WorkspaceToolbar({
   onActivateCompareOverlay,
   onBuildSemanticEmbeddings,
   onClearCompareOverlay,
+  onOpenAgentDrawer,
   onOpenAgentSettings,
   onOpenRunsPanel,
   onOpenWorkspaceSync,
@@ -77,103 +81,50 @@ export function WorkspaceToolbar({
   workspaceName,
   workspaceRootDir,
 }: WorkspaceToolbarProps) {
+  const preprocessingBusy = preprocessingStatus?.runState === 'building'
+  const preprocessingTone =
+    preprocessingStatus?.runState === 'error'
+      ? 'error'
+      : preprocessingBusy
+        ? 'running'
+        : preprocessingStatus?.runState === 'ready'
+          ? 'ready'
+          : preprocessingStatus?.runState === 'stale'
+            ? 'stale'
+            : 'idle'
+
   return (
     <header className="cbv-toolbar">
-      <div className="cbv-toolbar-left">
-        <div className="cbv-workspace-summary">
-          <strong>{workspaceName}</strong>
-          <p className="cbv-toolbar-path">{workspaceRootDir}</p>
+      <div className="cbv-toolbar-brand">
+        <span aria-hidden="true" className="cbv-brand-mark">
+          <span />
+        </span>
+        <div className="cbv-toolbar-workspace">
+          <div className="cbv-toolbar-eyebrow-row">
+            <span className="cbv-eyebrow">Semanticode</span>
+            {workingSetSummary ? (
+              <div className="cbv-working-set-chip" title={workingSetSummary.title}>
+                <span className="cbv-working-set-chip-dot" />
+                <span>{workingSetSummary.label}</span>
+              </div>
+            ) : null}
+          </div>
+          <div className="cbv-workspace-summary">
+            <strong>{workspaceName}</strong>
+            <p className="cbv-toolbar-path" title={workspaceRootDir}>
+              {workspaceRootDir}
+            </p>
+          </div>
         </div>
-        {workingSetSummary ? (
-          <div className="cbv-working-set-chip" title={workingSetSummary.title}>
-            <span className="cbv-working-set-chip-dot" />
-            <span>{workingSetSummary.label}</span>
-          </div>
-        ) : null}
-        {preprocessingStatus ? (
-          <div className="cbv-preprocessing-status-block">
-            <div className="cbv-preprocessing-inline">
-              <div
-                className={`cbv-preprocessing-status is-${preprocessingStatus.runState}`}
-                title={preprocessingStatus.title}
-              >
-                <span className="cbv-preprocessing-status-dot" />
-                <span>{preprocessingStatus.label}</span>
-              </div>
-              {onStartPreprocessing ? (
-                <button
-                  className="cbv-preprocessing-action"
-                  disabled={preprocessingStatus.runState === 'building'}
-                  onClick={(event) => {
-                    event.preventDefault()
-                    event.stopPropagation()
-                    onStartPreprocessing()
-                  }}
-                  title="Use the agent to generate semantic purpose summaries."
-                  type="button"
-                >
-                  {preprocessingStatus.preprocessingActionLabel}
-                </button>
-              ) : null}
-              {onBuildSemanticEmbeddings ? (
-                <button
-                  className="cbv-preprocessing-action is-secondary"
-                  disabled={
-                    preprocessingStatus.runState === 'building' ||
-                    !preprocessingStatus.canBuildEmbeddings
-                  }
-                  onClick={(event) => {
-                    event.preventDefault()
-                    event.stopPropagation()
-                    onBuildSemanticEmbeddings()
-                  }}
-                  title="Build local semantic embeddings from cached summaries."
-                  type="button"
-                >
-                  {preprocessingStatus.embeddingActionLabel}
-                </button>
-              ) : null}
-            </div>
-            {preprocessingStatus.runState === 'building' ||
-            preprocessingStatus.runState === 'stale' ? (
-              <div className="cbv-preprocessing-progress">
-                <div
-                  className="cbv-preprocessing-progress-bar"
-                  style={{
-                    width: `${preprocessingStatus.progressPercent}%`,
-                  }}
-                />
-              </div>
-            ) : null}
-            {preprocessingStatus.currentItemPath ? (
-              <p
-                className="cbv-preprocessing-current"
-                title={preprocessingStatus.currentItemPath}
-              >
-                {preprocessingStatus.currentItemPath}
-              </p>
-            ) : null}
-            {preprocessingStatus.lastError ? (
-              <p className="cbv-preprocessing-error">{preprocessingStatus.lastError}</p>
-            ) : null}
-            {preprocessingStatus.workspaceSync ? (
-              <button
-                className={`cbv-sync-summary${preprocessingStatus.workspaceSync.isOutdated ? ' is-outdated' : ''}`}
-                onClick={onOpenWorkspaceSync}
-                title={preprocessingStatus.workspaceSync.title}
-                type="button"
-              >
-                {preprocessingStatus.workspaceSync.label}
-              </button>
-            ) : null}
-          </div>
-        ) : null}
       </div>
 
       <div className="cbv-toolbar-center">
         <div className="cbv-layout-controls">
           <label className="cbv-layout-picker">
-            <span className="cbv-eyebrow">Layouts</span>
+            <span className="cbv-eyebrow">
+              <span className="cbv-layout-picker-dot" />
+              Scene
+            </span>
             <select
               onChange={(event) => {
                 onSelectLayoutValue(event.target.value)
@@ -196,6 +147,57 @@ export function WorkspaceToolbar({
       </div>
 
       <div className="cbv-toolbar-right">
+        {preprocessingStatus ? (
+          <div className="cbv-toolbar-status-cluster">
+            <div
+              className={`cbv-toolbar-status is-${preprocessingTone}`}
+              title={preprocessingStatus.title}
+            >
+              <span className="cbv-toolbar-status-dot" />
+              <span>{preprocessingStatus.label}</span>
+            </div>
+            {preprocessingStatus.workspaceSync ? (
+              <button
+                className={`cbv-toolbar-meta-button${preprocessingStatus.workspaceSync.isOutdated ? ' is-outdated' : ''}`}
+                onClick={onOpenWorkspaceSync}
+                title={preprocessingStatus.workspaceSync.title}
+                type="button"
+              >
+                {preprocessingStatus.workspaceSync.label}
+              </button>
+            ) : null}
+            {onStartPreprocessing ? (
+              <button
+                className="cbv-toolbar-meta-button"
+                disabled={preprocessingBusy}
+                onClick={(event) => {
+                  event.preventDefault()
+                  event.stopPropagation()
+                  onStartPreprocessing()
+                }}
+                title="Use the agent to generate semantic purpose summaries."
+                type="button"
+              >
+                {preprocessingStatus.preprocessingActionLabel}
+              </button>
+            ) : null}
+            {onBuildSemanticEmbeddings ? (
+              <button
+                className="cbv-toolbar-meta-button"
+                disabled={preprocessingBusy || !preprocessingStatus.canBuildEmbeddings}
+                onClick={(event) => {
+                  event.preventDefault()
+                  event.stopPropagation()
+                  onBuildSemanticEmbeddings()
+                }}
+                title="Build local semantic embeddings from cached summaries."
+                type="button"
+              >
+                {preprocessingStatus.embeddingActionLabel}
+              </button>
+            ) : null}
+          </div>
+        ) : null}
         {activeDraft ? (
           <div className="cbv-draft-actions">
             <button
@@ -247,7 +249,16 @@ export function WorkspaceToolbar({
             onClick={onToggleProjectsSidebar}
             type="button"
           >
-            {projectsSidebarOpen ? 'Hide Folders' : 'Folders'}
+            {projectsSidebarOpen ? 'Hide Outline' : 'Outline'}
+          </button>
+        ) : null}
+        {onOpenAgentDrawer ? (
+          <button
+            className={`cbv-toolbar-button is-secondary${agentDrawerOpen ? ' is-active' : ''}`}
+            onClick={onOpenAgentDrawer}
+            type="button"
+          >
+            Agent
           </button>
         ) : null}
         {onOpenRunsPanel ? (
@@ -266,8 +277,9 @@ export function WorkspaceToolbar({
           title="Settings"
           type="button"
         >
-          ⚙
+          cfg
         </button>
+        <span className="cbv-toolbar-shortcut">⌘K</span>
       </div>
     </header>
   )

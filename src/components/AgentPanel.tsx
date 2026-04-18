@@ -31,6 +31,7 @@ export interface AgentScopeContext {
 }
 
 interface AgentPanelProps {
+  autoFocusComposer?: boolean
   desktopHostAvailable?: boolean
   inspectorContext?: AgentScopeContext
   onOpenSettings?: () => void
@@ -38,6 +39,10 @@ interface AgentPanelProps {
   onAdoptInspectorContextAsWorkingSet?: () => void
   onClearWorkingSet?: () => void
   preprocessedWorkspaceContext?: PreprocessedWorkspaceContext | null
+  promptSeed?: {
+    id: string
+    value: string
+  } | null
   settingsOnly?: boolean
   workingSet?: WorkingSetState | null
   workingSetContext?: AgentScopeContext | null
@@ -45,6 +50,7 @@ interface AgentPanelProps {
 }
 
 export function AgentPanel({
+  autoFocusComposer = false,
   desktopHostAvailable = false,
   inspectorContext,
   onOpenSettings,
@@ -52,6 +58,7 @@ export function AgentPanel({
   onAdoptInspectorContextAsWorkingSet,
   onClearWorkingSet,
   preprocessedWorkspaceContext = null,
+  promptSeed = null,
   settingsOnly = false,
   workingSet = null,
   workingSetContext = null,
@@ -61,7 +68,13 @@ export function AgentPanel({
   const [bridgeInfo, setBridgeInfo] = useState<DesktopAgentBridgeInfo>(() =>
     normalizeBridgeInfo(agentClient.getBridgeInfo(), desktopHostAvailable),
   )
-  const [composerValue, setComposerValue] = useState('')
+  const [composerState, setComposerState] = useState<{
+    seedId: string | null
+    value: string
+  }>({
+    seedId: null,
+    value: '',
+  })
   const [messages, setMessages] = useState<AgentMessage[]>([])
   const [session, setSession] = useState<AgentSessionSummary | null>(null)
   const [settings, setSettings] = useState<AgentSettingsState | null>(null)
@@ -81,8 +94,13 @@ export function AgentPanel({
   const [oauthStatusMessage, setOauthStatusMessage] = useState<string | null>(null)
   const [oauthLoginUrl, setOauthLoginUrl] = useState<string | null>(null)
   const messageListRef = useRef<HTMLDivElement | null>(null)
+  const composerRef = useRef<HTMLTextAreaElement | null>(null)
   const sessionRef = useRef<AgentSessionSummary | null>(null)
   const previousRunStateRef = useRef<AgentSessionSummary['runState'] | null>(null)
+  const composerValue =
+    promptSeed && promptSeed.id !== composerState.seedId
+      ? promptSeed.value
+      : composerState.value
 
   useEffect(() => {
     sessionRef.current = session
@@ -273,6 +291,33 @@ export function AgentPanel({
     messageListRef.current.scrollTop = messageListRef.current.scrollHeight
   }, [messages])
 
+  useEffect(() => {
+    if (!promptSeed) {
+      return
+    }
+
+    window.setTimeout(() => {
+      composerRef.current?.focus()
+      composerRef.current?.setSelectionRange(
+        promptSeed.value.length,
+        promptSeed.value.length,
+      )
+    }, 0)
+  }, [promptSeed])
+
+  const sessionIsInteractive =
+    session?.runState === 'ready' || session?.runState === 'running'
+
+  useEffect(() => {
+    if (!autoFocusComposer || settingsOnly || !sessionIsInteractive) {
+      return
+    }
+
+    window.setTimeout(() => {
+      composerRef.current?.focus()
+    }, 0)
+  }, [autoFocusComposer, sessionIsInteractive, settingsOnly])
+
   async function handleSubmit() {
     const nextPrompt = composerValue.trim()
 
@@ -305,7 +350,10 @@ export function AgentPanel({
         throw new Error('No active desktop agent session is available.')
       }
 
-      setComposerValue('')
+      setComposerState({
+        seedId: promptSeed?.id ?? composerState.seedId,
+        value: '',
+      })
     } catch (error) {
       setErrorMessage(
         error instanceof Error ? error.message : 'Failed to send the prompt to the agent.',
@@ -654,8 +702,6 @@ export function AgentPanel({
           : pending
             ? 'A prompt is already being sent.'
             : null
-  const sessionIsInteractive =
-    session?.runState === 'ready' || session?.runState === 'running'
   const hasInspectorContext = hasScopeContext(inspectorContext)
   const hasWorkingSetContext = hasScopeContext(workingSetContext)
   const workingSetMatchesInspectorContext =
@@ -1032,7 +1078,13 @@ export function AgentPanel({
           </div>
         ) : null}
         <textarea
-          onChange={(event) => setComposerValue(event.target.value)}
+          ref={composerRef}
+          onChange={(event) =>
+            setComposerState({
+              seedId: promptSeed?.id ?? composerState.seedId,
+              value: event.target.value,
+            })
+          }
           onKeyDown={(event) => {
             if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
               event.preventDefault()
