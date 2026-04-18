@@ -225,30 +225,26 @@ export function InspectorPane({
             prototype={selectedLayoutGroupPrototype}
           />
         ) : selectedFile ? (
-          <>
-            {selectedSymbol ? (
-              <SemanticPurposeSummaryCard
-                summary={findPurposeSummary(preprocessedWorkspaceContext, selectedSymbol.id)}
-              />
-            ) : null}
-            <div className="cbv-preview-meta">
-              <span>{formatFileSize(selectedFile.size)}</span>
-              <span>{selectedFile.extension || 'no extension'}</span>
-              <span>{describeContentState(selectedFile)}</span>
-              {selectedSymbol ? (
-                <span>
-                  {selectedSymbol.symbolKind}
-                  {selectedSymbol.range ? ` · line ${selectedSymbol.range.start.line}` : ''}
-                </span>
-              ) : null}
-            </div>
+          <div className="cbv-file-inspector">
+            <FileIdentityHeader file={selectedFile} symbol={selectedSymbol} />
             <CodePreview
               file={selectedFile}
               highlightedRange={selectedSymbol?.range}
               scrollToDiffRequestKey={scrollToDiffRequestKey}
               themeMode={themeMode}
             />
-          </>
+            <InspectorRelatedSection neighbors={graphSummary.neighbors} />
+            {selectedSymbol ? (
+              <SemanticPurposeSummaryCard
+                summary={findPurposeSummary(preprocessedWorkspaceContext, selectedSymbol.id)}
+              />
+            ) : null}
+            <InspectorFileActions
+              onOpenAgentDrawer={onOpenAgentDrawer}
+              selectedFile={selectedFile}
+              selectedSymbol={selectedSymbol}
+            />
+          </div>
         ) : showContextSummary && (activeDraft || (compareOverlayActive && resolvedCompareOverlay)) ? (
           <InspectorContextSummary
             activeDraft={activeDraft}
@@ -386,6 +382,90 @@ function TelemetrySummaryCard({
           ))}
         </div>
       ) : null}
+    </section>
+  )
+}
+
+function FileIdentityHeader({
+  file,
+  symbol,
+}: {
+  file: CodebaseFile
+  symbol: SymbolNode | null
+}) {
+  const title = symbol?.name ?? file.path.split('/').at(-1) ?? file.path
+  const signature = symbol?.signature ?? `${file.extension || 'file'} · ${describeContentState(file)}`
+  const codeMeta = [
+    symbol?.range ? `L${formatRange(symbol.range)}` : null,
+    symbol?.range
+      ? `${Math.max(1, symbol.range.end.line - symbol.range.start.line + 1)} LOC`
+      : `${Math.max(1, file.content?.split('\n').length ?? 0)} lines`,
+    formatFileSize(file.size),
+  ]
+    .filter(Boolean)
+    .join(' · ')
+
+  return (
+    <section className="cbv-file-identity">
+      <div className="cbv-file-identity-topline">
+        <span className="cbv-node-kind">{formatKindTag(symbol)}</span>
+        <span className="cbv-file-identity-path" title={file.path}>
+          {file.path}
+        </span>
+      </div>
+      <strong>{title}</strong>
+      <p className="cbv-file-identity-signature">{signature}</p>
+      <p className="cbv-file-identity-meta">Code · {codeMeta}</p>
+    </section>
+  )
+}
+
+function InspectorRelatedSection({
+  neighbors,
+}: {
+  neighbors: ProjectNode[]
+}) {
+  if (neighbors.length === 0) {
+    return null
+  }
+
+  return (
+    <section className="cbv-inspector-support-section">
+      <div className="cbv-inspector-support-header">
+        <p className="cbv-eyebrow">Related · {neighbors.length}</p>
+      </div>
+      <div className="cbv-purpose-summary-tags">
+        {neighbors.slice(0, 10).map((neighbor) => (
+          <span className="cbv-purpose-summary-tag" key={neighbor.id}>
+            {neighbor.name}
+          </span>
+        ))}
+      </div>
+    </section>
+  )
+}
+
+function InspectorFileActions({
+  onOpenAgentDrawer,
+  selectedFile,
+  selectedSymbol,
+}: {
+  onOpenAgentDrawer?: () => void
+  selectedFile: CodebaseFile
+  selectedSymbol: SymbolNode | null
+}) {
+  if (!onOpenAgentDrawer) {
+    return null
+  }
+
+  return (
+    <section className="cbv-inspector-actions">
+      <button onClick={onOpenAgentDrawer} type="button">
+        ask agent ↵
+      </button>
+      <span title={selectedFile.path}>
+        {selectedSymbol ? `${selectedSymbol.name} · ${selectedFile.path}` : selectedFile.path}
+      </span>
     </section>
   )
 }
@@ -960,13 +1040,13 @@ const codePreviewThemeLight = EditorView.theme({
   '&': {
     backgroundColor: 'var(--app-code-bg)',
     border: '1px solid var(--app-code-border)',
-    borderRadius: '16px',
-    fontSize: '12px',
+    borderRadius: '0',
+    fontSize: '10.5px',
   },
   '.cm-content': {
     fontFamily:
       'ui-monospace, SFMono-Regular, SF Mono, Menlo, Consolas, Liberation Mono, monospace',
-    padding: '14px 0',
+    padding: '10px 0',
   },
   '.cm-scroller': {
     overflow: 'auto',
@@ -1021,13 +1101,13 @@ const codePreviewThemeDark = EditorView.theme({
   '&': {
     backgroundColor: 'var(--app-code-bg)',
     border: '1px solid var(--app-code-border)',
-    borderRadius: '16px',
-    fontSize: '12px',
+    borderRadius: '0',
+    fontSize: '10.5px',
   },
   '.cm-content': {
     fontFamily:
       'ui-monospace, SFMono-Regular, SF Mono, Menlo, Consolas, Liberation Mono, monospace',
-    padding: '14px 0',
+    padding: '10px 0',
     color: 'var(--app-text)',
   },
   '.cm-scroller': {
@@ -1268,6 +1348,34 @@ function getFlowEdgeData(edge: Edge | null | undefined) {
 
   return edge.data as {
     kind?: string
+  }
+}
+
+function formatKindTag(symbol: SymbolNode | null) {
+  if (!symbol) {
+    return 'file'
+  }
+
+  if (symbol.facets.includes('react:component')) {
+    return 'comp'
+  }
+
+  if (symbol.facets.includes('react:hook')) {
+    return 'hook'
+  }
+
+  switch (symbol.symbolKind) {
+    case 'class':
+      return 'class'
+    case 'constant':
+      return 'const'
+    case 'variable':
+      return 'var'
+    case 'method':
+      return 'meth'
+    case 'function':
+    default:
+      return 'fn'
   }
 }
 
