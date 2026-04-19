@@ -20,6 +20,7 @@ import {
   persistUiPreferences,
 } from './uiPreferences'
 import type { UiPreferences } from '../schema/store'
+import type { AgentPromptRequest } from '../schema/api'
 
 let mainWindow: BrowserWindow | null = null
 let serverHandle: StandaloneServerHandle | null = null
@@ -130,36 +131,16 @@ void app.whenReady().then(async () => {
     'semanticode:agent:send-message',
     async (
       _event,
-      payload:
-        | string
-        | {
-            message: string
-            metadata?: {
-              kind?: string
-              paths?: string[]
-              scope?: {
-                layoutTitle?: string
-                paths: string[]
-                symbolPaths?: string[]
-                title?: string
-              } | null
-              task?: string
-            }
-            mode?: 'send' | 'steer' | 'follow_up'
-          },
+      payload: string | AgentPromptRequest,
     ) => {
     if (!activeWorkspaceRootDir) {
       return false
     }
 
-    const message = typeof payload === 'string' ? payload : payload.message
-    const metadata = typeof payload === 'string' ? undefined : payload.metadata
-    const mode = typeof payload === 'string' ? undefined : payload.mode
-
     console.info(
       `[semanticode][agent] IPC send-message received for ${activeWorkspaceRootDir}.`,
     )
-    void piAgentService.promptWorkspaceSession(activeWorkspaceRootDir, message, metadata, mode).catch((error) => {
+    void piAgentService.promptWorkspaceSession(activeWorkspaceRootDir, payload).catch((error) => {
       console.error(
         '[semanticode][agent] Background prompt failed:',
         error instanceof Error ? error.message : error,

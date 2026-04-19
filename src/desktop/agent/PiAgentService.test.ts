@@ -147,6 +147,11 @@ describe('PiAgentService brokered oauth integration', () => {
 
   it('creates a codex-cli session and emits normalized tool and assistant events', async () => {
     const child = new MockChildProcess()
+    let codexPrompt = ''
+
+    child.stdin.on('data', (chunk) => {
+      codexPrompt += String(chunk)
+    })
 
     spawnMock.mockImplementation(() => {
       setTimeout(() => {
@@ -206,8 +211,18 @@ describe('PiAgentService brokered oauth integration', () => {
     expect(summary.transport).toBe('codex_cli')
     expect(summary.modelId).toBe('gpt-5.4')
     expect(summary.runState).toBe('ready')
+    expect(summary.capabilities).toMatchObject({
+      newSession: true,
+      prompt: true,
+      resumeSession: false,
+      setThinkingLevel: false,
+    })
 
-    await service.promptWorkspaceSession(workspaceRootDir, 'List the files in this repo.')
+    await service.promptWorkspaceSession(workspaceRootDir, {
+      contextInjection: 'Hidden Semanticode context.',
+      displayText: 'List the files in this repo.',
+      message: 'List the files in this repo.',
+    })
 
     const sessionCreated = events.find((event) => event.type === 'session_created')
     const userMessage = events.find(
@@ -264,6 +279,12 @@ describe('PiAgentService brokered oauth integration', () => {
     expect(service.getWorkspaceMessages(workspaceRootDir)).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
+          blocks: [
+            {
+              kind: 'text',
+              text: 'List the files in this repo.',
+            },
+          ],
           role: 'user',
         }),
         expect.objectContaining({
@@ -277,6 +298,14 @@ describe('PiAgentService brokered oauth integration', () => {
         }),
       ]),
     )
+    expect(codexPrompt).toContain('Hidden Semanticode context.')
+    expect(
+      service
+        .getWorkspaceMessages(workspaceRootDir)
+        .some((message) =>
+          message.blocks.some((block) => block.text.includes('Hidden Semanticode context.')),
+        ),
+    ).toBe(false)
     expect(
       service
         .getWorkspaceMessages(workspaceRootDir)

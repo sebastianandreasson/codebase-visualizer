@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron'
 
 import type { AgentEvent } from '../schema/agent'
+import type { AgentPromptRequest } from '../schema/api'
 import type { UiPreferences } from '../schema/store'
 
 const initialUiPreferences = ipcRenderer.sendSync(
@@ -23,23 +24,7 @@ contextBridge.exposeInMainWorld('semanticodeDesktop', {
   closeWorkspace: () => ipcRenderer.invoke('semanticode:close-workspace'),
   createSession: () => ipcRenderer.invoke('semanticode:agent:create-session'),
   sendMessage: (
-    payload:
-      | string
-      | {
-          message: string
-          metadata?: {
-            kind?: string
-            paths?: string[]
-            scope?: {
-              layoutTitle?: string
-              paths: string[]
-              symbolPaths?: string[]
-              title?: string
-            } | null
-            task?: string
-          }
-          mode?: 'send' | 'steer' | 'follow_up'
-        },
+    payload: string | AgentPromptRequest,
   ) => ipcRenderer.invoke('semanticode:agent:send-message', payload),
   listSessions: () => ipcRenderer.invoke('semanticode:agent:list-sessions'),
   newSession: () => ipcRenderer.invoke('semanticode:agent:new-session'),

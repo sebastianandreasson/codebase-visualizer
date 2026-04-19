@@ -4,6 +4,7 @@ import type {
   AgentBrokerCompleteRequest,
   AgentCodexImportResponse,
   AgentBrokerLoginStartResponse,
+  AgentPromptRequest,
   AgentResumeSessionRequest,
   AgentSessionListResponse,
   AgentBrokerSessionResponse,
@@ -39,23 +40,7 @@ interface DesktopAgentBridge {
   onEvent?: (listener: (event: AgentEvent) => void) => () => void
   openWorkspaceDialog?: () => Promise<boolean>
   sendMessage?: (
-    payload:
-      | string
-      | {
-          message: string
-          metadata?: {
-            kind?: string
-            paths?: string[]
-            scope?: {
-              layoutTitle?: string
-              paths: string[]
-              symbolPaths?: string[]
-              title?: string
-            } | null
-            task?: string
-          }
-          mode?: 'send' | 'steer' | 'follow_up'
-        },
+    payload: string | AgentPromptRequest,
   ) => Promise<boolean>
   listSessions?: () => Promise<AgentSessionListResponse>
   newSession?: () => Promise<AgentSessionSummary | null>
@@ -132,23 +117,7 @@ export class DesktopAgentClient {
   }
 
   async sendMessage(
-    message:
-      | string
-      | {
-          message: string
-          metadata?: {
-            kind?: string
-            paths?: string[]
-            scope?: {
-              layoutTitle?: string
-              paths: string[]
-              symbolPaths?: string[]
-              title?: string
-            } | null
-            task?: string
-          }
-          mode?: 'send' | 'steer' | 'follow_up'
-        },
+    message: string | AgentPromptRequest,
   ) {
     const bridge = this.getBridge()
 

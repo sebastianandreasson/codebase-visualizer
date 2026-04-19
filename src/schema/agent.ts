@@ -10,6 +10,18 @@ export type AgentAuthMode = 'api_key' | 'brokered_oauth'
 
 export type AgentTransportMode = 'provider' | 'app' | 'codex_cli'
 
+export type AgentRuntimeKind = 'pi-sdk' | 'codex-subscription'
+
+export interface AgentCapabilitySet {
+  compact: boolean
+  followUp: boolean
+  newSession: boolean
+  prompt: boolean
+  resumeSession: boolean
+  setThinkingLevel: boolean
+  steer: boolean
+}
+
 export type AgentBrokerAuthState = 'unconfigured' | 'signed_out' | 'pending' | 'authenticated'
 
 export interface AgentBrokerSessionSummary {
@@ -30,6 +42,8 @@ export interface AgentSessionSummary {
   createdAt: string
   updatedAt: string
   runState: AgentRunState
+  runtimeKind?: AgentRuntimeKind
+  capabilities?: AgentCapabilitySet
   bootPromptEnabled: boolean
   hasProviderApiKey: boolean
   thinkingLevel?: 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh'
@@ -197,6 +211,12 @@ export type AgentEvent =
       type: 'timeline'
       sessionId: string
       item: AgentTimelineItem
+    }
+  | {
+      type: 'timeline_snapshot'
+      sessionId: string
+      revision: number
+      items: AgentTimelineItem[]
     }
   | {
       type: 'permission_request'

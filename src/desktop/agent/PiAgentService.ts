@@ -14,19 +14,22 @@ import {
 } from '@mariozechner/pi-ai'
 import {
   AuthStorage,
-  createAgentSession,
-  createBashTool,
-  createEditTool,
+  createAgentSessionFromServices,
+  createAgentSessionRuntime,
+  createAgentSessionServices,
+  createCodingTools,
   createFindTool,
   createGrepTool,
   createLsTool,
-  createReadTool,
-  createWriteTool,
+  getAgentDir,
   ModelRegistry,
   SessionManager,
   SettingsManager,
   type AgentSession,
   type AgentSessionEvent,
+  type AgentSessionRuntime,
+  type CreateAgentSessionRuntimeFactory,
+  type ExtensionFactory,
   type SessionInfo,
 } from '@mariozechner/pi-coding-agent'
 
@@ -46,6 +49,7 @@ import type {
   AgentCodexImportResponse,
   AgentBrokerCallbackResult,
   AgentBrokerLoginStartResponse,
+  AgentPromptRequest,
 } from '../../schema/api'
 import { AgentTelemetryService } from '../../node/telemetryService'
 import { readProjectSnapshot } from '../../node/readProjectSnapshot'
@@ -70,6 +74,12 @@ import {
   summarizeTimelineValue,
   upsertTimelineItem,
 } from '../agent-runtime/agentTimeline'
+import {
+  CODEX_SUBSCRIPTION_AGENT_CAPABILITIES,
+  DISABLED_AGENT_CAPABILITIES,
+  PI_SDK_AGENT_CAPABILITIES,
+  type WorkspaceAgentCapabilities,
+} from '../agent-runtime/WorkspaceAgentRuntime'
 
 const DEFAULT_PI_PROVIDER = 'openai'
 const DEFAULT_PI_MODEL_ID = 'gpt-4.1-mini'
@@ -79,10 +89,12 @@ const PI_MODEL_ENV_NAME = 'SEMANTICODE_PI_MODEL'
 
 interface BaseAgentSessionRecord {
   activeAssistantMessageId: string | null
+  capabilities: WorkspaceAgentCapabilities
   completedAssistantMessageId: string | null
   messages: AgentMessage[]
   summary: AgentSessionSummary
   timeline: AgentTimelineItem[]
+  timelineRevision: number
   toolInvocationById: Map<string, AgentToolInvocation>
   promptSequence: number
   unsubscribe: () => void
@@ -96,6 +108,8 @@ interface LegacyPiAgentSessionRecord extends BaseAgentSessionRecord {
 
 interface PiSdkAgentSessionRecord extends BaseAgentSessionRecord {
   kind: 'sdk'
+  pendingContextQueue: string[]
+  runtime: AgentSessionRuntime
   session: AgentSession
 }
 
@@ -169,14 +183,18 @@ export class PiAgentService {
       settings.authMode === 'brokered_oauth'
         ? settings.modelId
         : resolveModel(provider, settings.modelId).id
+    const runtimeKind = resolveRuntimeKind(settings.authMode)
+    const capabilities = resolveCapabilities(settings.authMode, disabledReason)
     const summary: AgentSessionSummary = {
       authMode: settings.authMode,
       brokerSession: settings.brokerSession,
+      capabilities,
       id: `pi-session:${randomUUID()}`,
       workspaceRootDir,
       provider,
       modelId: resolvedModelId,
       transport: sessionTransport,
+      runtimeKind,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
       runState: disabledReason ? 'disabled' : 'ready',
@@ -242,7 +260,9 @@ export class PiAgentService {
 
     if (record.kind === 'sdk') {
       await record.session.abort().catch(() => undefined)
-      record.session.dispose()
+      await record.runtime.dispose().catch(() => {
+        record.session.dispose()
+      })
     } else {
       record.agent.abort()
       await record.agent.waitForIdle().catch(() => undefined)
@@ -309,15 +329,19 @@ export class PiAgentService {
     return {
       activeAssistantMessageId: null,
       agent,
+      capabilities: resolveCapabilities(input.settings.authMode, input.disabledReason),
       completedAssistantMessageId: null,
       kind: 'legacy',
       messages: [],
       promptSequence: 0,
       summary: {
         ...input.summary,
+        capabilities: resolveCapabilities(input.settings.authMode, input.disabledReason),
+        runtimeKind: resolveRuntimeKind(input.settings.authMode),
         thinkingLevel: 'medium',
       },
       timeline: [],
+      timelineRevision: 0,
       toolInvocationById: new Map(),
       unsubscribe,
       workspaceRootDir: input.workspaceRootDir,
@@ -347,6 +371,7 @@ export class PiAgentService {
       throw new Error(`No pi SDK model is available for provider "${input.provider}".`)
     }
 
+    const pendingContextQueue: string[] = []
     const settingsManager = SettingsManager.inMemory({
       defaultModel: model.id,
       defaultProvider: String(model.provider),
@@ -356,55 +381,86 @@ export class PiAgentService {
       },
     })
     const sessionManager = input.sessionManager ?? SessionManager.continueRecent(input.workspaceRootDir)
-    const { session } = await createAgentSession({
-      authStorage,
-      cwd: input.workspaceRootDir,
-      model,
-      modelRegistry,
+    const agentDir = getAgentDir()
+    const createRuntime: CreateAgentSessionRuntimeFactory = async ({
+      cwd,
       sessionManager,
-      settingsManager,
-      thinkingLevel: 'medium',
-      tools: [
-        createReadTool(input.workspaceRootDir),
-        createWriteTool(input.workspaceRootDir),
-        createEditTool(input.workspaceRootDir),
-        createBashTool(input.workspaceRootDir),
-        createGrepTool(input.workspaceRootDir),
-        createFindTool(input.workspaceRootDir),
-        createLsTool(input.workspaceRootDir),
-      ],
+      sessionStartEvent,
+    }) => {
+      const services = await createAgentSessionServices({
+        agentDir,
+        authStorage,
+        cwd,
+        modelRegistry,
+        resourceLoaderOptions: {
+          extensionFactories: [
+            createSemanticodeContextExtension(() => pendingContextQueue.shift()),
+          ],
+        },
+        settingsManager,
+      })
+
+      return {
+        ...(await createAgentSessionFromServices({
+          model,
+          services,
+          sessionManager,
+          sessionStartEvent,
+          thinkingLevel: 'medium',
+          tools: [
+            ...createCodingTools(cwd),
+            createGrepTool(cwd),
+            createFindTool(cwd),
+            createLsTool(cwd),
+          ],
+        })),
+        diagnostics: services.diagnostics,
+        services,
+      }
+    }
+    const runtime = await createAgentSessionRuntime(createRuntime, {
+      agentDir,
+      cwd: input.workspaceRootDir,
+      sessionManager,
     })
+    const session = runtime.session
     const hydratedMessages = normalizeStoredSessionMessages(
       input.summary.id,
       session.state.messages as unknown[],
     )
     const record: PiSdkAgentSessionRecord = {
       activeAssistantMessageId: null,
+      capabilities: PI_SDK_AGENT_CAPABILITIES,
       completedAssistantMessageId: null,
       kind: 'sdk',
       messages: hydratedMessages,
+      pendingContextQueue,
       promptSequence: 0,
+      runtime,
       session,
       summary: {
         ...input.summary,
+        capabilities: PI_SDK_AGENT_CAPABILITIES,
         modelId: model.id,
         provider: String(model.provider),
         queue: {
           followUp: 0,
           steering: 0,
         },
-        sessionFile: session.sessionManager.getSessionFile(),
-        sessionName: session.sessionManager.getSessionName(),
+        runtimeKind: 'pi-sdk',
+        sessionFile: session.sessionFile,
+        sessionName: session.sessionName,
         thinkingLevel: session.thinkingLevel,
       },
       timeline: hydratedMessages.flatMap(createMessageTimelineItems),
+      timelineRevision: 0,
       toolInvocationById: new Map(),
       unsubscribe: () => undefined,
       workspaceRootDir: input.workspaceRootDir,
     }
 
     record.unsubscribe = session.subscribe((event) => {
-      this.handleSdkAgentEvent(input.summary.id, input.workspaceRootDir, event)
+      this.handleSdkAgentEvent(record.summary.id, record.workspaceRootDir, event)
     })
 
     return record
@@ -458,18 +514,9 @@ export class PiAgentService {
 
   async promptWorkspaceSession(
     workspaceRootDir: string,
-    message: string,
-    metadata?: {
-      kind?: string
-      paths?: string[]
-      scope?: {
-        paths: string[]
-        symbolPaths?: string[]
-        title?: string
-      } | null
-      task?: string
-    },
-    mode: 'send' | 'steer' | 'follow_up' = 'send',
+    messageOrRequest: string | AgentPromptRequest,
+    metadata?: AgentPromptRequest['metadata'],
+    mode: AgentPromptRequest['mode'] = 'send',
   ) {
     this.logger.info(
       `[semanticode][agent] promptWorkspaceSession called for ${workspaceRootDir}.`,
@@ -495,6 +542,13 @@ export class PiAgentService {
       )
     }
 
+    const promptRequest = normalizeAgentPromptRequest(messageOrRequest, metadata, mode)
+    const displayText = (promptRequest.displayText ?? promptRequest.message).trim()
+    const contextInjection = promptRequest.contextInjection?.trim()
+    const promptMode = promptRequest.mode ?? 'send'
+    const agentText =
+      promptRequest.agentText?.trim() ||
+      (contextInjection ? buildContextualAgentPrompt(contextInjection, displayText) : displayText)
     const now = new Date().toISOString()
     const startedAt = now
     const promptSequence = record.promptSequence + 1
@@ -505,7 +559,7 @@ export class PiAgentService {
       const normalizedMessage: AgentMessage = {
         id: `agent-message:${randomUUID()}`,
         role: 'user',
-        blocks: [{ kind: 'text', text: message }],
+        blocks: [{ kind: 'text', text: displayText }],
         createdAt: now,
         isStreaming: false,
       }
@@ -529,6 +583,7 @@ export class PiAgentService {
     })
 
     let caughtError: unknown = null
+    let queuedContextInjection: string | undefined
 
     try {
       this.logger.info(
@@ -536,19 +591,32 @@ export class PiAgentService {
       )
       if (record.kind === 'sdk') {
         const streamingBehavior =
-          mode === 'steer'
+          promptMode === 'steer'
             ? 'steer'
-            : mode === 'follow_up' || record.session.isStreaming
+            : promptMode === 'follow_up' || record.session.isStreaming
               ? 'followUp'
               : undefined
 
-        await record.session.prompt(message, {
+        if (contextInjection) {
+          record.pendingContextQueue.push(contextInjection)
+          queuedContextInjection = contextInjection
+        }
+
+        await record.session.prompt(displayText, {
           streamingBehavior,
         })
       } else {
-        await record.agent.prompt(message)
+        await record.agent.prompt(agentText)
       }
     } catch (error) {
+      if (record.kind === 'sdk' && queuedContextInjection) {
+        const queuedIndex = record.pendingContextQueue.indexOf(queuedContextInjection)
+
+        if (queuedIndex !== -1) {
+          record.pendingContextQueue.splice(queuedIndex, 1)
+        }
+      }
+
       caughtError = error
       const message =
         error instanceof Error ? error.message : 'Unknown embedded agent runtime failure.'
@@ -573,13 +641,13 @@ export class PiAgentService {
     } finally {
       await this.telemetryService?.recordInteractivePrompt({
         finishedAt: new Date().toISOString(),
-        kind: metadata?.kind ?? 'workspace_chat',
-        message,
+        kind: promptRequest.metadata?.kind ?? 'workspace_chat',
+        message: displayText,
         modelId: record.summary.modelId,
         promptSequence,
         provider: record.summary.provider,
         rootDir: workspaceRootDir,
-        scope: metadata,
+        scope: promptRequest.metadata,
         sessionId: record.summary.id,
         startedAt,
         toolInvocations: collectNewToolInvocations(
@@ -841,19 +909,26 @@ export class PiAgentService {
       throw new Error('No workspace agent session exists for the active repository.')
     }
 
-    if (record.kind === 'sdk') {
-      record.session.setThinkingLevel(thinkingLevel)
-      record.summary = {
-        ...record.summary,
-        thinkingLevel: record.session.thinkingLevel as AgentSessionSummary['thinkingLevel'],
-        updatedAt: new Date().toISOString(),
-      }
-    } else {
-      record.summary = {
-        ...record.summary,
-        thinkingLevel,
-        updatedAt: new Date().toISOString(),
-      }
+    if (record.kind !== 'sdk') {
+      const message = 'Thinking level changes are only available for pi SDK sessions.'
+
+      this.addTimelineItem(
+        record,
+        createLifecycleTimelineItem({
+          detail: message,
+          event: 'error',
+          label: 'thinking failed',
+          status: 'error',
+        }),
+      )
+      throw new Error(message)
+    }
+
+    record.session.setThinkingLevel(thinkingLevel)
+    record.summary = {
+      ...record.summary,
+      thinkingLevel: record.session.thinkingLevel as AgentSessionSummary['thinkingLevel'],
+      updatedAt: new Date().toISOString(),
     }
 
     this.emit({
@@ -863,7 +938,6 @@ export class PiAgentService {
     this.addTimelineItem(
       record,
       createLifecycleTimelineItem({
-        detail: record.kind === 'sdk' ? undefined : 'Legacy transport records the setting for UI continuity only.',
         event: 'session_updated',
         label: `thinking ${record.summary.thinkingLevel ?? thinkingLevel}`,
         status: 'completed',
@@ -948,6 +1022,34 @@ export class PiAgentService {
   }
 
   async startNewWorkspaceSession(workspaceRootDir: string) {
+    const existingRecord = this.sessionsByWorkspaceRootDir.get(workspaceRootDir)
+
+    if (existingRecord?.kind === 'sdk') {
+      existingRecord.summary = updateSessionSummary(existingRecord.summary, {
+        lastError: undefined,
+        runState: 'running',
+      })
+      this.emit({
+        session: existingRecord.summary,
+        type: 'session_updated',
+      })
+      await existingRecord.runtime.newSession()
+      this.refreshSdkRecordFromRuntime(existingRecord, `pi-session:${randomUUID()}`)
+      this.emit({
+        session: existingRecord.summary,
+        type: 'session_created',
+      })
+      this.addTimelineItem(
+        existingRecord,
+        createLifecycleTimelineItem({
+          event: 'session_created',
+          label: 'new session',
+          status: 'completed',
+        }),
+      )
+      return existingRecord.summary
+    }
+
     await this.disposeWorkspaceSession(workspaceRootDir)
     const record = await this.createWorkspaceSessionWithManager(
       workspaceRootDir,
@@ -971,6 +1073,42 @@ export class PiAgentService {
   }
 
   async resumeWorkspaceSession(workspaceRootDir: string, sessionFile: string) {
+    const existingRecord = this.sessionsByWorkspaceRootDir.get(workspaceRootDir)
+
+    if (existingRecord?.kind === 'sdk') {
+      existingRecord.summary = updateSessionSummary(existingRecord.summary, {
+        lastError: undefined,
+        runState: 'running',
+      })
+      this.emit({
+        session: existingRecord.summary,
+        type: 'session_updated',
+      })
+      await existingRecord.runtime.switchSession(sessionFile, workspaceRootDir)
+      this.refreshSdkRecordFromRuntime(existingRecord, `pi-session:${randomUUID()}`)
+      this.emit({
+        session: existingRecord.summary,
+        type: 'session_created',
+      })
+      this.addTimelineItem(
+        existingRecord,
+        createLifecycleTimelineItem({
+          detail: sessionFile,
+          event: 'session_created',
+          label: 'session resumed',
+          status: 'completed',
+        }),
+      )
+      return existingRecord.summary
+    }
+
+    await this.settingsStore.applyConfiguredApiKeys()
+    const settings = await this.getSettings()
+
+    if (settings.authMode !== 'api_key') {
+      throw new Error('Resume is only available for pi SDK sessions.')
+    }
+
     await this.disposeWorkspaceSession(workspaceRootDir)
     const record = await this.createWorkspaceSessionWithManager(
       workspaceRootDir,
@@ -1008,33 +1146,46 @@ export class PiAgentService {
       settings.authMode === 'brokered_oauth'
         ? settings.modelId
         : resolveModel(provider, settings.modelId).id
+    const capabilities = resolveCapabilities(settings.authMode, disabledReason)
 
-    if (settings.authMode !== 'api_key' || disabledReason) {
+    if (disabledReason) {
       throw new Error(
         disabledReason ??
-          'Persistent pi SDK sessions are currently available for API-key agent mode.',
+          'The workspace agent session is not currently available.',
       )
     }
-
-    return this.createSdkSessionRecord({
+    const summary: AgentSessionSummary = {
+      authMode: settings.authMode,
+      bootPromptEnabled: false,
+      brokerSession: settings.brokerSession,
+      capabilities,
+      createdAt: new Date().toISOString(),
+      hasProviderApiKey,
+      id: `pi-session:${randomUUID()}`,
+      lastError: undefined,
+      modelId: resolvedModelId,
       provider,
-      sessionManager,
-      settings,
-      summary: {
-        authMode: settings.authMode,
-        bootPromptEnabled: false,
-        brokerSession: settings.brokerSession,
-        createdAt: new Date().toISOString(),
-        hasProviderApiKey,
-        id: `pi-session:${randomUUID()}`,
-        lastError: undefined,
-        modelId: resolvedModelId,
+      runState: 'ready',
+      runtimeKind: resolveRuntimeKind(settings.authMode),
+      transport: resolveTransportMode(settings.authMode),
+      updatedAt: new Date().toISOString(),
+      workspaceRootDir,
+    }
+
+    if (settings.authMode === 'api_key') {
+      return this.createSdkSessionRecord({
         provider,
-        runState: 'ready',
-        transport: resolveTransportMode(settings.authMode),
-        updatedAt: new Date().toISOString(),
+        sessionManager,
+        settings,
+        summary,
         workspaceRootDir,
-      },
+      })
+    }
+
+    return this.createLegacySessionRecord({
+      provider,
+      settings,
+      summary,
       workspaceRootDir,
     })
   }
@@ -1327,6 +1478,43 @@ export class PiAgentService {
     })
   }
 
+  private refreshSdkRecordFromRuntime(
+    record: PiSdkAgentSessionRecord,
+    nextSessionId: string,
+  ) {
+    record.unsubscribe()
+    record.session = record.runtime.session
+    record.activeAssistantMessageId = null
+    record.completedAssistantMessageId = null
+    record.promptSequence = 0
+    record.toolInvocationById = new Map()
+    record.messages = normalizeStoredSessionMessages(
+      nextSessionId,
+      record.session.state.messages as unknown[],
+    )
+    record.timeline = record.messages.flatMap(createMessageTimelineItems)
+    record.summary = {
+      ...record.summary,
+      id: nextSessionId,
+      lastError: undefined,
+      modelId: record.session.model?.id ?? record.summary.modelId,
+      provider: String(record.session.model?.provider ?? record.summary.provider),
+      queue: {
+        followUp: record.session.getFollowUpMessages().length,
+        steering: record.session.getSteeringMessages().length,
+      },
+      runState: resolveSessionReadyState(record.summary),
+      sessionFile: record.session.sessionFile,
+      sessionName: record.session.sessionName,
+      thinkingLevel: record.session.thinkingLevel,
+      updatedAt: new Date().toISOString(),
+    }
+    record.unsubscribe = record.session.subscribe((event) => {
+      this.handleSdkAgentEvent(record.summary.id, record.workspaceRootDir, event)
+    })
+    this.emitTimelineSnapshot(record)
+  }
+
   private emitNormalizedMessage(
     record: AgentSessionRecord,
     message: Message | AssistantMessage,
@@ -1611,6 +1799,7 @@ export class PiAgentService {
         type: 'timeline',
       })
     }
+    this.emitTimelineSnapshot(record)
   }
 
   private addTimelineItem(record: AgentSessionRecord, item: AgentTimelineItem) {
@@ -1619,6 +1808,17 @@ export class PiAgentService {
       item,
       sessionId: record.summary.id,
       type: 'timeline',
+    })
+    this.emitTimelineSnapshot(record)
+  }
+
+  private emitTimelineSnapshot(record: AgentSessionRecord) {
+    record.timelineRevision += 1
+    this.emit({
+      items: record.timeline,
+      revision: record.timelineRevision,
+      sessionId: record.summary.id,
+      type: 'timeline_snapshot',
     })
   }
 
@@ -1843,6 +2043,80 @@ function createDisabledTransport() {
   return new ProviderTransport({
     getApiKey: () => undefined,
   })
+}
+
+function normalizeAgentPromptRequest(
+  messageOrRequest: string | AgentPromptRequest,
+  metadata: AgentPromptRequest['metadata'] | undefined,
+  mode: AgentPromptRequest['mode'] | undefined,
+): Required<Pick<AgentPromptRequest, 'message'>> &
+  Pick<AgentPromptRequest, 'agentText' | 'contextInjection' | 'displayText' | 'metadata' | 'mode'> {
+  if (typeof messageOrRequest === 'string') {
+    return {
+      displayText: messageOrRequest,
+      message: messageOrRequest,
+      metadata,
+      mode,
+    }
+  }
+
+  return {
+    ...messageOrRequest,
+    displayText: messageOrRequest.displayText ?? messageOrRequest.message,
+    metadata: messageOrRequest.metadata ?? metadata,
+    mode: messageOrRequest.mode ?? mode,
+  }
+}
+
+function buildContextualAgentPrompt(contextInjection: string, displayText: string) {
+  return [
+    contextInjection,
+    '',
+    'User request:',
+    displayText,
+  ].join('\n')
+}
+
+function createSemanticodeContextExtension(
+  takeContextInjection: () => string | undefined,
+): ExtensionFactory {
+  return (pi) => {
+    pi.on('before_agent_start', () => {
+      const contextInjection = takeContextInjection()?.trim()
+
+      if (!contextInjection) {
+        return undefined
+      }
+
+      return {
+        message: {
+          content: contextInjection,
+          customType: 'semanticode-workspace-context',
+          details: {
+            source: 'semanticode',
+          },
+          display: false,
+        },
+      }
+    })
+  }
+}
+
+function resolveRuntimeKind(authMode: AgentAuthMode): AgentSessionSummary['runtimeKind'] {
+  return authMode === 'brokered_oauth' ? 'codex-subscription' : 'pi-sdk'
+}
+
+function resolveCapabilities(
+  authMode: AgentAuthMode,
+  disabledReason: string | undefined,
+): WorkspaceAgentCapabilities {
+  if (disabledReason) {
+    return DISABLED_AGENT_CAPABILITIES
+  }
+
+  return authMode === 'brokered_oauth'
+    ? CODEX_SUBSCRIPTION_AGENT_CAPABILITIES
+    : PI_SDK_AGENT_CAPABILITIES
 }
 
 function resolveTransportMode(authMode: AgentAuthMode): AgentSessionSummary['transport'] {

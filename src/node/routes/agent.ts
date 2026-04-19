@@ -97,7 +97,9 @@ export async function handleAgentRoute(
   if (pathname === SEMANTICODE_AGENT_MESSAGE_ROUTE && method === 'POST') {
     const payload = await readJsonBody<AgentPromptRequest>(request)
 
-    if (!payload?.message?.trim()) {
+    const displayText = payload?.displayText ?? payload?.message
+
+    if (!payload || !displayText?.trim()) {
       sendJson(response, 400, {
         message: 'A non-empty message is required.',
       })
@@ -107,9 +109,7 @@ export async function handleAgentRoute(
     await ensureAgentInstructions(options.rootDir)
     void options.agentRuntime.promptWorkspaceSession(
       options.rootDir,
-      payload.message,
-      payload.metadata,
-      payload.mode,
+      payload,
     ).catch((error) => {
       console.error(
         '[semanticode][agent] Background prompt failed:',

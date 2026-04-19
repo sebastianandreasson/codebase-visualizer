@@ -185,6 +185,9 @@ export interface AgentStateResponse {
 }
 
 export interface AgentPromptRequest {
+  agentText?: string
+  contextInjection?: string
+  displayText?: string
   message: string
   metadata?: {
     kind?: string

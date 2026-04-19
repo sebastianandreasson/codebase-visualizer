@@ -132,7 +132,7 @@ describe('AgentPanel OAuth reconciliation', () => {
     const sendButton = screen.getByRole('button', { name: 'Send' })
     const composer = screen.getByRole('textbox')
 
-    expect(mockClient.createSession.mock.calls.length).toBeGreaterThanOrEqual(2)
+    expect(mockClient.createSession.mock.calls.length).toBeGreaterThanOrEqual(1)
     expect(sendButton.hasAttribute('disabled')).toBe(true)
     expect(sendButton.getAttribute('title')).toBe('Enter a prompt to send.')
     expect(composer).not.toBeNull()
@@ -257,14 +257,30 @@ describe('AgentPanel OAuth reconciliation', () => {
 
     await act(async () => {
       listener?.({
-        invocation: {
-          args: { path: 'src/App.tsx' },
-          startedAt: '2026-04-15T00:00:02.000Z',
-          toolCallId: 'call-1',
-          toolName: 'read',
-        },
+        items: [
+          {
+            blockKind: 'text',
+            createdAt: '2026-04-15T00:00:00.000Z',
+            id: 'timeline:user',
+            messageId: 'message:user',
+            role: 'user',
+            text: 'Change the panel',
+            type: 'message',
+          },
+          {
+            args: { path: 'src/App.tsx' },
+            createdAt: '2026-04-15T00:00:02.000Z',
+            id: 'agent-timeline:tool:call-1',
+            startedAt: '2026-04-15T00:00:02.000Z',
+            status: 'running',
+            toolCallId: 'call-1',
+            toolName: 'read',
+            type: 'tool',
+          },
+        ],
+        revision: 2,
         sessionId: readySession.id,
-        type: 'tool',
+        type: 'timeline_snapshot',
       })
     })
 
@@ -306,29 +322,41 @@ describe('AgentPanel OAuth reconciliation', () => {
 
     await act(async () => {
       listener?.({
-        message: {
-          blocks: [],
-          createdAt: '2026-04-15T00:00:01.000Z',
-          id: 'message-assistant',
-          isStreaming: true,
-          role: 'assistant',
-        },
+        items: [
+          {
+            blockKind: 'text',
+            createdAt: '2026-04-15T00:00:01.000Z',
+            id: 'agent-timeline:message:message-assistant:empty',
+            isStreaming: true,
+            messageId: 'message-assistant',
+            role: 'assistant',
+            text: '',
+            type: 'message',
+          },
+        ],
+        revision: 1,
         sessionId: readySession.id,
-        type: 'message',
+        type: 'timeline_snapshot',
       })
     })
 
     await act(async () => {
       listener?.({
-        message: {
-          blocks: [{ kind: 'text', text: 'hi there' }],
-          createdAt: '2026-04-15T00:00:01.000Z',
-          id: 'message-assistant',
-          isStreaming: true,
-          role: 'assistant',
-        },
+        items: [
+          {
+            blockKind: 'text',
+            createdAt: '2026-04-15T00:00:01.000Z',
+            id: 'agent-timeline:message:message-assistant:text:0',
+            isStreaming: true,
+            messageId: 'message-assistant',
+            role: 'assistant',
+            text: 'hi there',
+            type: 'message',
+          },
+        ],
+        revision: 2,
         sessionId: readySession.id,
-        type: 'message',
+        type: 'timeline_snapshot',
       })
     })
 
@@ -416,6 +444,27 @@ describe('AgentPanel OAuth reconciliation', () => {
 
     await act(async () => {
       listener?.({
+        items: [
+          ...initialTimeline,
+          {
+            blockKind: 'text',
+            createdAt: '2026-04-15T00:00:01.000Z',
+            id: 'timeline:assistant',
+            isStreaming: true,
+            messageId: 'message-assistant',
+            role: 'assistant',
+            text: 'streaming response',
+            type: 'message',
+          },
+        ],
+        revision: 2,
+        sessionId: readySession.id,
+        type: 'timeline_snapshot',
+      })
+    })
+
+    await act(async () => {
+      listener?.({
         message: {
           blocks: [{ kind: 'text', text: 'streaming response' }],
           createdAt: '2026-04-15T00:00:01.000Z',
@@ -477,12 +526,32 @@ function buildSession(input: {
       hasAppSessionToken: input.brokerState === 'authenticated',
       state: input.brokerState,
     },
+    capabilities: input.runState === 'disabled'
+      ? {
+          compact: false,
+          followUp: false,
+          newSession: false,
+          prompt: false,
+          resumeSession: false,
+          setThinkingLevel: false,
+          steer: false,
+        }
+      : {
+          compact: false,
+          followUp: false,
+          newSession: true,
+          prompt: true,
+          resumeSession: false,
+          setThinkingLevel: false,
+          steer: false,
+        },
     createdAt: '2026-04-15T00:00:00.000Z',
     hasProviderApiKey: false,
     id: input.id,
     modelId: 'gpt-5.4',
     provider: 'openai',
     runState: input.runState,
+    runtimeKind: 'codex-subscription',
     transport: 'codex_cli',
     updatedAt: '2026-04-15T00:00:00.000Z',
     workspaceRootDir: '/tmp/workspace',

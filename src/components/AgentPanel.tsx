@@ -9,7 +9,6 @@ import type {
   AgentSessionSummary,
   AgentSettingsState,
   AgentTimelineItem,
-  AgentToolInvocation,
 } from '../schema/agent'
 import type {
   CodebaseFile,
@@ -80,7 +79,7 @@ export function AgentPanel({
     seedId: null,
     value: '',
   })
-  const [messages, setMessages] = useState<AgentMessage[]>([])
+  const [, setMessages] = useState<AgentMessage[]>([])
   const [timeline, setTimeline] = useState<AgentTimelineItem[]>([])
   const [, setSessions] = useState<AgentSessionListItem[]>([])
   const [session, setSession] = useState<AgentSessionSummary | null>(null)
@@ -109,10 +108,7 @@ export function AgentPanel({
     promptSeed && promptSeed.id !== composerState.seedId
       ? promptSeed.value
       : composerState.value
-  const displayTimeline = useMemo(
-    () => timeline.length > 0 ? timeline : createTimelineFromMessages(messages),
-    [messages, timeline],
-  )
+  const displayTimeline = timeline
 
   useEffect(() => {
     sessionRef.current = session
@@ -141,7 +137,13 @@ export function AgentPanel({
 
   useEffect(() => {
     const updateBridgeInfo = () => {
-      setBridgeInfo(normalizeBridgeInfo(agentClient.getBridgeInfo(), desktopHostAvailable))
+      const nextBridgeInfo = normalizeBridgeInfo(agentClient.getBridgeInfo(), desktopHostAvailable)
+
+      setBridgeInfo((currentBridgeInfo) =>
+        areBridgeInfoEqual(currentBridgeInfo, nextBridgeInfo)
+          ? currentBridgeInfo
+          : nextBridgeInfo,
+      )
     }
 
     updateBridgeInfo()
@@ -256,13 +258,15 @@ export function AgentPanel({
           return
         }
 
-        handleAgentEvent(event, setMessages, setTimeline, setSession)
+        handleAgentEvent(event, sessionRef, setMessages, setTimeline, setSession)
       })
     }
 
-    intervalId = window.setInterval(() => {
-      void syncAll()
-    }, 1000)
+    if (!bridgeInfo.hasAgentBridge) {
+      intervalId = window.setInterval(() => {
+        void syncAll()
+      }, 1000)
+    }
 
     void syncAll()
 
@@ -273,7 +277,7 @@ export function AgentPanel({
         window.clearInterval(intervalId)
       }
     }
-  }, [agentClient, bridgeInfo, openAiOAuthClientIdDirty, settingsDraftDirty])
+  }, [agentClient, bridgeInfo.hasAgentBridge, openAiOAuthClientIdDirty, settingsDraftDirty])
 
   useEffect(() => {
     if (!settings || !providerValue) {
@@ -331,6 +335,7 @@ export function AgentPanel({
 
   const sessionIsInteractive =
     session?.runState === 'ready' || session?.runState === 'running'
+  const sessionCapabilities = getSessionCapabilities(session)
 
   useEffect(() => {
     if (!autoFocusComposer || settingsOnly || !sessionIsInteractive) {
@@ -349,6 +354,11 @@ export function AgentPanel({
       return
     }
 
+    if (!getSessionCapabilities(sessionRef.current).prompt) {
+      setErrorMessage('Prompting is not available for the current agent runtime.')
+      return
+    }
+
     try {
       setPending(true)
       setErrorMessage(null)
@@ -363,15 +373,17 @@ export function AgentPanel({
       }
 
       await persistSettingsDraftIfNeeded()
+      const contextInjection = buildWorkspaceContextInjection(
+        workspaceProfile,
+        preprocessedWorkspaceContext,
+        workingSetContext,
+        inspectorContext,
+      )
       const ok = await agentClient.sendMessage(
         {
-          message: buildWorkspaceScopedPrompt(
-            nextPrompt,
-            workspaceProfile,
-            preprocessedWorkspaceContext,
-            workingSetContext,
-            inspectorContext,
-          ),
+          contextInjection,
+          displayText: nextPrompt,
+          message: nextPrompt,
           metadata: buildAgentPromptMetadata(
             nextPrompt,
             workingSetContext,
@@ -415,8 +427,14 @@ export function AgentPanel({
 
     const [commandName, ...commandArgs] = command.slice(1).trim().split(/\s+/)
     const commandValue = commandArgs.join(' ').trim()
+    const capabilities = getSessionCapabilities(sessionRef.current)
 
     if (commandName === 'new') {
+      if (!capabilities.newSession) {
+        appendLocalLifecycle('new failed', 'New sessions are not available for the current agent runtime.', 'error')
+        return true
+      }
+
       const nextSession = await agentClient.newSession()
       const state = await agentClient.getHttpState()
 
@@ -427,6 +445,11 @@ export function AgentPanel({
     }
 
     if (commandName === 'resume') {
+      if (!capabilities.resumeSession) {
+        appendLocalLifecycle('resume failed', 'Resume is only available for pi SDK sessions.', 'error')
+        return true
+      }
+
       const result = await agentClient.listSessions()
       const latestSession = commandValue
         ? result.sessions.find((entry) => entry.path === commandValue || entry.id === commandValue)
@@ -511,6 +534,11 @@ export function AgentPanel({
     }
 
     if (commandName === 'thinking') {
+      if (!capabilities.setThinkingLevel) {
+        appendLocalLifecycle('thinking unavailable', 'Thinking level changes are only available for pi SDK sessions.', 'error')
+        return true
+      }
+
       if (!commandValue) {
         appendLocalLifecycle(
           'thinking',
@@ -539,6 +567,11 @@ export function AgentPanel({
     }
 
     if (commandName === 'compact') {
+      if (!capabilities.compact) {
+        appendLocalLifecycle('compact unavailable', 'Manual compaction is only available for pi SDK sessions.', 'error')
+        return true
+      }
+
       const state = await agentClient.compact(commandValue || undefined)
 
       setSession(state.session)
@@ -913,7 +946,9 @@ export function AgentPanel({
 
   const availableModels = settings ? getSelectableModels(settings, authModeValue, providerValue) : []
   const sendDisabledReason =
-    session?.runState === 'disabled'
+    !sessionCapabilities.prompt
+      ? 'Prompting is not available for the current agent runtime.'
+      : session?.runState === 'disabled'
       ? session.lastError ?? 'The current agent session is disabled.'
       : session?.runState === 'initializing'
         ? 'The agent session is still initializing.'
@@ -1269,7 +1304,7 @@ export function AgentPanel({
                 void handleSubmit(session.runState === 'running' ? 'steer' : 'send')
               }
             }}
-            placeholder="/new /resume /model /thinking /session /compact /clear or ask…"
+            placeholder={buildComposerPlaceholder(session)}
             rows={1}
             value={composerValue}
           />
@@ -1286,33 +1321,38 @@ export function AgentPanel({
             </button>
             {session.runState === 'running' ? (
               <>
-                <button
-                  disabled={pending || composerValue.trim().length === 0}
-                  onClick={() => {
-                    void handleSubmit('steer')
-                  }}
-                  title={sendDisabledReason ?? undefined}
-                  type="button"
-                >
-                  Steer
-                </button>
-                <button
-                  className="is-secondary"
-                  disabled={pending || composerValue.trim().length === 0}
-                  onClick={() => {
-                    void handleSubmit('follow_up')
-                  }}
-                  title={sendDisabledReason ?? undefined}
-                  type="button"
-                >
-                  Follow-Up
-                </button>
+                {sessionCapabilities.steer ? (
+                  <button
+                    disabled={pending || composerValue.trim().length === 0}
+                    onClick={() => {
+                      void handleSubmit('steer')
+                    }}
+                    title={sendDisabledReason ?? undefined}
+                    type="button"
+                  >
+                    Steer
+                  </button>
+                ) : null}
+                {sessionCapabilities.followUp ? (
+                  <button
+                    className="is-secondary"
+                    disabled={pending || composerValue.trim().length === 0}
+                    onClick={() => {
+                      void handleSubmit('follow_up')
+                    }}
+                    title={sendDisabledReason ?? undefined}
+                    type="button"
+                  >
+                    Follow-Up
+                  </button>
+                ) : null}
               </>
             ) : (
               <button
                 disabled={
                   pending ||
                   composerValue.trim().length === 0 ||
+                  !sessionCapabilities.prompt ||
                   session.runState === 'disabled' ||
                   session.runState === 'initializing'
                 }
@@ -1335,31 +1375,48 @@ export function AgentPanel({
 
 function handleAgentEvent(
   event: AgentEvent,
+  sessionRef: { current: AgentSessionSummary | null },
   setMessages: Dispatch<SetStateAction<AgentMessage[]>>,
   setTimeline: Dispatch<SetStateAction<AgentTimelineItem[]>>,
   setSession: Dispatch<SetStateAction<AgentSessionSummary | null>>,
 ) {
+  const activeSession = sessionRef.current
+
+  if (
+    activeSession &&
+    event.type === 'session_updated' &&
+    event.session.id !== activeSession.id
+  ) {
+    return
+  }
+
+  if (
+    activeSession &&
+    'sessionId' in event &&
+    event.sessionId !== activeSession.id
+  ) {
+    return
+  }
+
   switch (event.type) {
     case 'session_created':
     case 'session_updated':
+      sessionRef.current = event.session
       setSession(event.session)
       break
 
     case 'message':
       setMessages((messages) => upsertMessage(messages, event.message))
-      setTimeline((timeline) =>
-        replaceMessageTimelineItems(timeline, event.message),
-      )
       break
 
     case 'tool':
-      setTimeline((timeline) =>
-        upsertTimelineItem(timeline, createToolTimelineItemFromInvocation(event.invocation)),
-      )
       break
 
     case 'timeline':
-      setTimeline((timeline) => upsertTimelineItem(timeline, event.item))
+      break
+
+    case 'timeline_snapshot':
+      setTimeline(event.items)
       break
 
     case 'permission_request':
@@ -1602,143 +1659,6 @@ function renderTerminalContextRows(input: {
   return null
 }
 
-function createTimelineFromMessages(messages: AgentMessage[]): AgentTimelineItem[] {
-  return messages.flatMap((message) => {
-    if (message.blocks.length === 0) {
-      return [
-        {
-          blockKind: 'text',
-          createdAt: message.createdAt,
-          id: `agent-timeline:message:${message.id}:empty`,
-          isStreaming: message.isStreaming,
-          messageId: message.id,
-          role: message.role,
-          text: '',
-          type: 'message' as const,
-        },
-      ]
-    }
-
-    return message.blocks.map((block, index) => ({
-      blockKind: block.kind,
-      createdAt: message.createdAt,
-      id: `agent-timeline:message:${message.id}:${block.kind}:${index}`,
-      isStreaming: message.isStreaming,
-      messageId: message.id,
-      role: message.role,
-      text: block.text,
-      type: 'message' as const,
-    }))
-  })
-}
-
-function replaceMessageTimelineItems(
-  timeline: AgentTimelineItem[],
-  message: AgentMessage,
-) {
-  const nextItems = createTimelineFromMessages([message])
-  const firstExistingIndex = timeline.findIndex(
-    (item) => item.type === 'message' && item.messageId === message.id,
-  )
-
-  if (firstExistingIndex === -1) {
-    return [...timeline, ...nextItems]
-  }
-
-  const withoutMessage = timeline.filter(
-    (item) => !(item.type === 'message' && item.messageId === message.id),
-  )
-  const insertionIndex = timeline
-    .slice(0, firstExistingIndex)
-    .filter((item) => !(item.type === 'message' && item.messageId === message.id))
-    .length
-
-  return [
-    ...withoutMessage.slice(0, insertionIndex),
-    ...nextItems,
-    ...withoutMessage.slice(insertionIndex),
-  ]
-}
-
-function createToolTimelineItemFromInvocation(
-  invocation: AgentToolInvocation,
-): AgentTimelineItem {
-  const startedAtMs = new Date(invocation.startedAt).getTime()
-  const endedAtMs = invocation.endedAt ? new Date(invocation.endedAt).getTime() : null
-  const durationMs =
-    endedAtMs !== null && Number.isFinite(startedAtMs)
-      ? Math.max(0, endedAtMs - startedAtMs)
-      : undefined
-
-  return {
-    args: invocation.args,
-    createdAt: invocation.startedAt,
-    durationMs,
-    endedAt: invocation.endedAt,
-    id: `agent-timeline:tool:${invocation.toolCallId}`,
-    isError: invocation.isError,
-    paths: invocation.paths,
-    resultPreview: invocation.resultPreview,
-    startedAt: invocation.startedAt,
-    status: invocation.endedAt ? (invocation.isError ? 'error' : 'completed') : 'running',
-    toolCallId: invocation.toolCallId,
-    toolName: invocation.toolName,
-    type: 'tool',
-  }
-}
-
-function upsertTimelineItem(
-  timeline: AgentTimelineItem[],
-  nextItem: AgentTimelineItem,
-) {
-  if (
-    nextItem.type === 'message' &&
-    isEmptyMessagePlaceholder(nextItem) &&
-    timeline.some(
-      (item) =>
-        item.type === 'message' &&
-        item.messageId === nextItem.messageId &&
-        !isEmptyMessagePlaceholder(item),
-    )
-  ) {
-    return timeline
-  }
-
-  const normalizedTimeline =
-    nextItem.type === 'message'
-      ? removeStaleEmptyMessageRows(timeline, nextItem)
-      : timeline
-  const existingIndex = normalizedTimeline.findIndex((item) => item.id === nextItem.id)
-
-  if (existingIndex === -1) {
-    return [...normalizedTimeline, nextItem]
-  }
-
-  return normalizedTimeline.map((item, index) => index === existingIndex ? nextItem : item)
-}
-
-function removeStaleEmptyMessageRows(
-  timeline: AgentTimelineItem[],
-  nextItem: Extract<AgentTimelineItem, { type: 'message' }>,
-) {
-  if (isEmptyMessagePlaceholder(nextItem)) {
-    return timeline
-  }
-
-  return timeline.filter(
-    (item) =>
-      item.type !== 'message' ||
-      item.messageId !== nextItem.messageId ||
-      !isEmptyMessagePlaceholder(item),
-  )
-}
-
-function isEmptyMessagePlaceholder(
-  item: Extract<AgentTimelineItem, { type: 'message' }>,
-) {
-  return item.blockKind === 'text' && item.text.length === 0
-}
-
 function isTimelineScrolledNearBottom(listElement: HTMLDivElement) {
   return (
     listElement.scrollHeight - listElement.scrollTop - listElement.clientHeight <= 48
@@ -1857,6 +1777,51 @@ function normalizeBridgeInfo(
   }
 }
 
+function areBridgeInfoEqual(
+  left: DesktopAgentBridgeInfo,
+  right: DesktopAgentBridgeInfo,
+) {
+  return (
+    left.hasAgentBridge === right.hasAgentBridge &&
+    left.hasDesktopHost === right.hasDesktopHost
+  )
+}
+
+function getSessionCapabilities(session: AgentSessionSummary | null) {
+  return session?.capabilities ?? {
+    compact: false,
+    followUp: false,
+    newSession: false,
+    prompt: false,
+    resumeSession: false,
+    setThinkingLevel: false,
+    steer: false,
+  }
+}
+
+function buildComposerPlaceholder(session: AgentSessionSummary | null) {
+  const capabilities = getSessionCapabilities(session)
+  const commands = ['/model', '/session', '/clear']
+
+  if (capabilities.newSession) {
+    commands.unshift('/new')
+  }
+
+  if (capabilities.resumeSession) {
+    commands.push('/resume')
+  }
+
+  if (capabilities.setThinkingLevel) {
+    commands.push('/thinking')
+  }
+
+  if (capabilities.compact) {
+    commands.push('/compact')
+  }
+
+  return `${commands.join(' ')} or ask…`
+}
+
 function getSelectableModels(
   settings: AgentSettingsState,
   authMode: AgentAuthMode,
@@ -1881,6 +1846,33 @@ function upsertMessage(messages: AgentMessage[], nextMessage: AgentMessage) {
   return messages.map((message, index) =>
     index === existingIndex ? nextMessage : message,
   )
+}
+
+function buildWorkspaceContextInjection(
+  workspaceProfile: WorkspaceProfile | null | undefined,
+  preprocessedWorkspaceContext: PreprocessedWorkspaceContext | null | undefined,
+  workingSetContext: AgentScopeContext | null | undefined,
+  inspectorContext: AgentPanelProps['inspectorContext'],
+) {
+  const sentinel = '__SEMANTICODE_USER_REQUEST__'
+  const scopedPrompt = buildWorkspaceScopedPrompt(
+    sentinel,
+    workspaceProfile,
+    preprocessedWorkspaceContext,
+    workingSetContext,
+    inspectorContext,
+  )
+
+  if (scopedPrompt === sentinel) {
+    return undefined
+  }
+
+  const marker = `\n\nUser request:\n${sentinel}`
+  const contextInjection = scopedPrompt.endsWith(marker)
+    ? scopedPrompt.slice(0, -marker.length).trim()
+    : scopedPrompt.replace(sentinel, '').trim()
+
+  return contextInjection || undefined
 }
 
 function buildInspectorScopedPrompt(

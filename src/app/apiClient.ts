@@ -123,7 +123,11 @@ export async function postAgentMessage(
     headers: {
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({ message, metadata } satisfies AgentPromptRequest),
+    body: JSON.stringify({
+      displayText: message,
+      message,
+      metadata,
+    } satisfies AgentPromptRequest),
   })
 
   if (!response.ok) {

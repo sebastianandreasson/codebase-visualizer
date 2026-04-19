@@ -1,6 +1,7 @@
 import type { ReadProjectSnapshotOptions } from '../../types'
 import type {
   AgentBrokerLoginStartResponse,
+  AgentPromptRequest,
   AgentBrokerSessionResponse,
   AgentCodexImportResponse,
   AutonomousRunDetail,
@@ -41,14 +42,9 @@ export interface AgentRuntimeRequestBridge {
   compactWorkspaceSession: (workspaceRootDir: string, instructions?: string) => Promise<AgentStateResponse['session']>
   promptWorkspaceSession: (
     workspaceRootDir: string,
-    message: string,
-    metadata?: {
-      kind?: string
-      paths?: string[]
-      scope?: AutonomousRunScope | null
-      task?: string
-    },
-    mode?: 'send' | 'steer' | 'follow_up',
+    request: string | AgentPromptRequest,
+    metadata?: AgentPromptRequest['metadata'],
+    mode?: AgentPromptRequest['mode'],
   ) => Promise<void>
   resumeWorkspaceSession: (workspaceRootDir: string, sessionFile: string) => Promise<AgentStateResponse['session']>
   setWorkspaceThinkingLevel: (
