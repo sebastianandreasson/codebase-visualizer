@@ -691,9 +691,13 @@
 }
 
 .cbv-node.is-symbol.is-loc-scaled .cbv-node-title {
-  overflow-wrap: anywhere;
+  overflow-wrap: normal;
   text-overflow: clip;
-  white-space: normal;
+  white-space: nowrap;
+}
+
+.cbv-node.is-symbol.is-loc-scaled .cbv-node-subtitle {
+  text-overflow: clip;
 }
 
 .cbv-node-title {

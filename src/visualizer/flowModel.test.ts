@@ -327,6 +327,80 @@ describe('flowModel extracted helpers', () => {
     })
   })
 
+  it('keeps large clustered symbols tall enough for runtime badges', () => {
+    const symbols = [
+      symbol('large', 'SkyTestBridge', null, 'function', 1, 155),
+      symbol('child', 'childBridgePart', null, 'function', 20, 24),
+    ]
+    const snapshot = buildSnapshot(symbols)
+    const layout = buildSymbolLayout(symbols.map((item) => item.id))
+
+    const baseline = buildFlowModel(
+      snapshot,
+      layout,
+      { contains: false, imports: false, calls: false },
+      'symbols',
+      emptySymbolClusterState(),
+      new Set<string>(),
+      new Map(),
+      new Map(),
+      new Map(),
+      new Set<string>(),
+      () => {},
+      { viewportZoom: 0.25 },
+    )
+    const clustered = buildFlowModel(
+      snapshot,
+      layout,
+      { contains: false, imports: false, calls: false },
+      'symbols',
+      {
+        callerCounts: { large: 2 },
+        clusterByNodeId: {
+          child: {
+            id: 'cluster:large',
+            label: 'SkyTestBridge internals',
+            memberNodeIds: ['large', 'child'],
+            ownerByMemberNodeId: { child: 'large', large: 'large' },
+            rootNodeId: 'large',
+          },
+          large: {
+            id: 'cluster:large',
+            label: 'SkyTestBridge internals',
+            memberNodeIds: ['large', 'child'],
+            ownerByMemberNodeId: { child: 'large', large: 'large' },
+            rootNodeId: 'large',
+          },
+        },
+        clusters: [
+          {
+            id: 'cluster:large',
+            label: 'SkyTestBridge internals',
+            memberNodeIds: ['large', 'child'],
+            ownerByMemberNodeId: { child: 'large', large: 'large' },
+            rootNodeId: 'large',
+          },
+        ],
+      },
+      new Set<string>(),
+      new Map(),
+      new Map(),
+      new Map(),
+      new Set<string>(),
+      () => {},
+      { viewportZoom: 0.25 },
+    )
+
+    const baselineLarge = baseline.nodes.find((node) => node.id === 'large')
+    const clusteredLarge = clustered.nodes.find((node) => node.id === 'large')
+
+    expect(clusteredLarge?.height).toBeGreaterThan(baselineLarge?.height ?? 0)
+    expect(clusteredLarge?.data).toMatchObject({
+      clusterSize: 2,
+      sharedCallerCount: 2,
+    })
+  })
+
   it('does not promote tiny constants to large-symbol size when zoomed out', () => {
     const snapshot = buildSnapshot([
       symbol('tinyConstant', 'MAX_RETRIES', null, 'constant', 1, 1),

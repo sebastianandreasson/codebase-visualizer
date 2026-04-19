@@ -103,6 +103,10 @@ interface NodeDimensions {
   compact: boolean
 }
 
+interface SymbolDimensionOptions {
+  extraMetaLabels?: string[]
+}
+
 export interface FlowModel {
   nodes: Node[]
   edges: Edge[]
@@ -574,12 +578,23 @@ function buildFlowNode(
       expandedClusterIds.has(cluster?.id ?? '')
     const containedPlacement = cluster ? clusterLayout?.childPlacements[node.id] : undefined
     const loc = getSymbolLoc(node)
+    const sharedCallerCount = symbolClusterState.callerCounts[node.id] ?? 0
+    const clusterExpanded =
+      clusterSize > 0 && cluster ? expandedClusterIds.has(cluster.id) : undefined
     const symbolDimensions = getSymbolNodeDimensions(
       node,
       placement,
       isContainedNode,
       containedPlacement,
       options.viewportZoom,
+      snapshot,
+      {
+        extraMetaLabels: getRuntimeSymbolMetaLabels(
+          sharedCallerCount,
+          clusterSize,
+          clusterExpanded,
+        ),
+      },
     )
     const width =
       isContainedNode
@@ -618,9 +633,8 @@ function buildFlowNode(
         locScale: symbolDimensions.scale,
         contentScale: symbolDimensions.contentScale,
         clusterSize,
-        clusterExpanded:
-          clusterSize > 0 && cluster ? expandedClusterIds.has(cluster.id) : undefined,
-        sharedCallerCount: symbolClusterState.callerCounts[node.id],
+        clusterExpanded,
+        sharedCallerCount,
         contained: isContainedNode,
         compact: symbolDimensions.compact,
         dimmed: false,
@@ -1267,7 +1281,21 @@ export function buildExpandedClusterLayouts(
       continue
     }
 
-    const rootDimensions = getSymbolNodeDimensions(rootNode, rootPlacement, false)
+    const rootDimensions = getSymbolNodeDimensions(
+      rootNode,
+      rootPlacement,
+      false,
+      undefined,
+      1,
+      snapshot,
+      {
+        extraMetaLabels: getRuntimeSymbolMetaLabels(
+          symbolClusterState.callerCounts[rootNode.id] ?? 0,
+          cluster.memberNodeIds.length,
+          true,
+        ),
+      },
+    )
     const rootWidth = rootDimensions.width
     const rootHeight = rootDimensions.height
 
@@ -1329,6 +1357,9 @@ export function buildExpandedClusterLayouts(
           memberNode,
           layout.placements[memberId],
           true,
+          undefined,
+          1,
+          snapshot,
         ),
       )
     }
@@ -1396,6 +1427,9 @@ export function buildExpandedClusterLayouts(
             memberNode,
             layout.placements[childId],
             true,
+            undefined,
+            1,
+            snapshot,
           )
         const subtreeWidth = computeSubtreeWidth(childId)
         const depth = computeDepth(childId)
@@ -1454,6 +1488,9 @@ export function buildExpandedClusterLayouts(
         memberNode,
         layout.placements[memberId],
         true,
+        undefined,
+        1,
+        snapshot,
       )
 
       childPlacements[memberId] = {
@@ -1533,6 +1570,8 @@ function getSymbolNodeDimensions(
   contained: boolean,
   containedPlacement?: ExpandedClusterLayout['childPlacements'][string],
   viewportZoom = 1,
+  snapshot?: CodebaseSnapshot,
+  options: SymbolDimensionOptions = {},
 ): NodeDimensions {
   if (containedPlacement) {
     return {
@@ -1552,6 +1591,8 @@ function getSymbolNodeDimensions(
       baseWidth,
       baseHeight,
       viewportZoom,
+      snapshot,
+      options,
     )
 
     return {
@@ -1564,7 +1605,14 @@ function getSymbolNodeDimensions(
   const baseHeight = placement?.height ?? DEFAULT_NODE_HEIGHT
 
   return {
-    ...getLocScaledSymbolDimensions(symbol, baseWidth, baseHeight, viewportZoom),
+    ...getLocScaledSymbolDimensions(
+      symbol,
+      baseWidth,
+      baseHeight,
+      viewportZoom,
+      snapshot,
+      options,
+    ),
     compact: false,
   }
 }
@@ -1574,6 +1622,8 @@ function getLocScaledSymbolDimensions(
   baseWidth: number,
   baseHeight: number,
   viewportZoom: number,
+  snapshot?: CodebaseSnapshot,
+  options: SymbolDimensionOptions = {},
 ) {
   const loc = getSymbolLoc(symbol)
 
@@ -1598,21 +1648,34 @@ function getLocScaledSymbolDimensions(
   const scale = getViewportAdjustedSymbolScale(baseScale, viewportZoom)
   const contentScale = getSymbolContentScale(scale, viewportZoom, loc)
   const scaledWidth = baseWidth * scale
-  const titleWidth = getSymbolTitleWidth(symbol.name, contentScale)
+  const contentTextWidth = getSymbolContentTextWidth(
+    symbol,
+    snapshot,
+    contentScale,
+    options,
+  )
   const width = Math.round(
     clamp(
-      Math.max(scaledWidth, titleWidth),
+      Math.max(scaledWidth, contentTextWidth),
       LOC_SCALED_SYMBOL_MIN_WIDTH,
       LOC_SCALED_SYMBOL_MAX_WIDTH,
     ),
   )
   const heightScale = Math.max(scale, contentScale * 0.9)
+  const contentHeight = getSymbolContentHeight(
+    symbol,
+    snapshot,
+    contentScale,
+    width,
+    options,
+  )
+  const importantHeightFloor = getImportantSymbolHeightFloor(width, logLoc)
 
   return {
     width,
     height: Math.round(
       clamp(
-        baseHeight * heightScale,
+        Math.max(baseHeight * heightScale, contentHeight, importantHeightFloor),
         LOC_SCALED_SYMBOL_MIN_HEIGHT,
         LOC_SCALED_SYMBOL_MAX_HEIGHT,
       ),
@@ -1662,11 +1725,153 @@ function getSymbolContentScale(
   return clamp(1 + (nodeScale - 1) * 0.62, 1, 3.4)
 }
 
-function getSymbolTitleWidth(title: string, contentScale: number) {
-  const estimatedMonoCharacterWidth = 7.5 * contentScale
-  const horizontalChrome = 44 * contentScale
+function getImportantSymbolHeightFloor(width: number, logLoc: number) {
+  const importantLocWeight = clamp((logLoc - 1.45) / 0.85, 0, 1)
 
-  return Math.ceil(title.length * estimatedMonoCharacterWidth + horizontalChrome)
+  if (importantLocWeight <= 0) {
+    return 0
+  }
+
+  return width * (0.28 + importantLocWeight * 0.16)
+}
+
+function getSymbolContentTextWidth(
+  symbol: SymbolNode,
+  snapshot: CodebaseSnapshot | undefined,
+  contentScale: number,
+  options: SymbolDimensionOptions = {},
+) {
+  const subtitle = snapshot ? getSymbolSubtitle(symbol, snapshot) : symbol.path
+  const metaLabels = getSymbolDimensionMetaLabels(symbol, snapshot, options)
+
+  return Math.max(
+    getScaledTextWidth(symbol.name, contentScale, 7.8),
+    getScaledTextWidth(subtitle, contentScale, 6.25),
+    getScaledMetaRowWidth(metaLabels, contentScale),
+  )
+}
+
+function getScaledTextWidth(
+  text: string,
+  contentScale: number,
+  characterWidth: number,
+) {
+  const horizontalChrome = 62 * contentScale
+
+  return Math.ceil(text.length * characterWidth * contentScale + horizontalChrome)
+}
+
+function getSymbolContentHeight(
+  symbol: SymbolNode,
+  snapshot: CodebaseSnapshot | undefined,
+  contentScale: number,
+  width: number,
+  options: SymbolDimensionOptions = {},
+) {
+  const metaLabels = getSymbolDimensionMetaLabels(symbol, snapshot, options)
+  const horizontalPadding = 22 * contentScale
+  const availableWidth = Math.max(64, width - horizontalPadding)
+  const metaRows = getWrappedMetaRowCount(metaLabels, availableWidth, contentScale)
+  const metaHeight =
+    metaRows > 0
+      ? metaRows * 16 * contentScale + (metaRows - 1) * 4 * contentScale
+      : 0
+  const metaMargin = metaRows > 0 ? 5 * contentScale : 0
+  const titleHeight = 11.5 * contentScale * 1.3
+  const subtitleHeight = 10 * contentScale * 1.35
+  const subtitleMargin = 2 * contentScale
+  const verticalPadding = 14 * contentScale
+  const safetyPadding = 8 * contentScale
+  const runtimeBadgeReserve =
+    (options.extraMetaLabels?.length ?? 0) > 0 ? 18 * contentScale : 0
+
+  return Math.ceil(
+    verticalPadding +
+      metaHeight +
+      metaMargin +
+      titleHeight +
+      subtitleMargin +
+      subtitleHeight +
+      runtimeBadgeReserve +
+      safetyPadding,
+  )
+}
+
+function getSymbolDimensionMetaLabels(
+  symbol: SymbolNode,
+  snapshot: CodebaseSnapshot | undefined,
+  options: SymbolDimensionOptions,
+) {
+  const tagLabels = snapshot ? getNodeBadgeLabels(symbol, snapshot) : []
+
+  return [
+    getSymbolVisualKindClass(symbol),
+    ...tagLabels,
+    symbol.range ? `${getSymbolLoc(symbol) ?? 0} loc` : null,
+    ...(options.extraMetaLabels ?? []),
+  ].filter((label): label is string => Boolean(label))
+}
+
+function getScaledMetaRowWidth(labels: string[], contentScale: number) {
+  if (labels.length === 0) {
+    return 0
+  }
+
+  const gap = 4 * contentScale
+  const horizontalChrome = 28 * contentScale
+  const labelsWidth = labels.reduce(
+    (width, label) => width + label.length * 6.1 * contentScale + 12 * contentScale,
+    0,
+  )
+
+  return Math.ceil(labelsWidth + gap * Math.max(0, labels.length - 1) + horizontalChrome)
+}
+
+function getRuntimeSymbolMetaLabels(
+  sharedCallerCount: number,
+  clusterSize: number,
+  clusterExpanded: boolean | undefined,
+) {
+  const labels: string[] = []
+
+  if (sharedCallerCount > 1) {
+    labels.push(`${sharedCallerCount} callers`)
+  }
+
+  if (clusterSize > 0) {
+    labels.push(`${clusterSize} internal ${clusterExpanded ? 'open' : 'hidden'}`)
+  }
+
+  return labels
+}
+
+function getWrappedMetaRowCount(
+  labels: string[],
+  availableWidth: number,
+  contentScale: number,
+) {
+  if (labels.length === 0) {
+    return 0
+  }
+
+  let rows = 1
+  let rowWidth = 0
+  const gap = 4 * contentScale
+
+  for (const label of labels) {
+    const chipWidth = label.length * 6.1 * contentScale + 12 * contentScale
+    const nextWidth = rowWidth === 0 ? chipWidth : rowWidth + gap + chipWidth
+
+    if (rowWidth > 0 && nextWidth > availableWidth) {
+      rows += 1
+      rowWidth = chipWidth
+      continue
+    }
+
+    rowWidth = nextWidth
+  }
+
+  return rows
 }
 
 function getSymbolLoc(symbol: SymbolNode) {
