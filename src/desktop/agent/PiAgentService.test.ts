@@ -277,6 +277,22 @@ describe('PiAgentService brokered oauth integration', () => {
         }),
       ]),
     )
+    expect(
+      service
+        .getWorkspaceMessages(workspaceRootDir)
+        .filter((message) => message.role === 'assistant'),
+    ).toHaveLength(1)
+    expect(
+      service
+        .getWorkspaceTimeline(workspaceRootDir)
+        .filter(
+          (item) =>
+            item.type === 'message' &&
+            item.role === 'assistant' &&
+            item.blockKind === 'text' &&
+            item.text === 'Found the file list.',
+        ),
+    ).toHaveLength(1)
 
     await service.disposeWorkspaceSession(workspaceRootDir)
   })

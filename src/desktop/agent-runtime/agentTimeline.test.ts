@@ -5,6 +5,7 @@ import {
   createMessageTimelineItems,
   createToolTimelineItem,
   normalizeToolInvocation,
+  replaceMessageTimelineItems,
   upsertTimelineItem,
 } from './agentTimeline'
 
@@ -134,5 +135,32 @@ describe('agent timeline normalization', () => {
     }
 
     expect(upsertTimelineItem(upsertTimelineItem([], started), ended)).toEqual([ended])
+  })
+
+  it('replaces empty streaming message placeholders with concrete message rows', () => {
+    const emptyAssistant = {
+      blocks: [],
+      createdAt: '2026-04-15T00:00:00.000Z',
+      id: 'message-1',
+      isStreaming: true,
+      role: 'assistant' as const,
+    }
+    const textAssistant = {
+      ...emptyAssistant,
+      blocks: [{ kind: 'text' as const, text: 'Hello' }],
+    }
+
+    const timeline = replaceMessageTimelineItems(
+      replaceMessageTimelineItems([], emptyAssistant),
+      textAssistant,
+    )
+
+    expect(timeline).toMatchObject([
+      {
+        messageId: 'message-1',
+        text: 'Hello',
+        type: 'message',
+      },
+    ])
   })
 })

@@ -110,15 +110,60 @@ export function upsertTimelineItem(
   timeline: AgentTimelineItem[],
   nextItem: AgentTimelineItem,
 ) {
-  const existingIndex = timeline.findIndex((item) => item.id === nextItem.id)
-
-  if (existingIndex === -1) {
-    return [...timeline, nextItem]
+  if (
+    nextItem.type === 'message' &&
+    isEmptyMessagePlaceholder(nextItem) &&
+    timeline.some(
+      (item) =>
+        item.type === 'message' &&
+        item.messageId === nextItem.messageId &&
+        !isEmptyMessagePlaceholder(item),
+    )
+  ) {
+    return timeline
   }
 
-  return timeline.map((item, index) =>
+  const normalizedTimeline =
+    nextItem.type === 'message'
+      ? removeStaleEmptyMessageRows(timeline, nextItem)
+      : timeline
+  const existingIndex = normalizedTimeline.findIndex((item) => item.id === nextItem.id)
+
+  if (existingIndex === -1) {
+    return [...normalizedTimeline, nextItem]
+  }
+
+  return normalizedTimeline.map((item, index) =>
     index === existingIndex ? nextItem : item,
   )
+}
+
+export function replaceMessageTimelineItems(
+  timeline: AgentTimelineItem[],
+  message: AgentMessage,
+) {
+  const nextItems = createMessageTimelineItems(message)
+  const firstExistingIndex = timeline.findIndex(
+    (item) => item.type === 'message' && item.messageId === message.id,
+  )
+
+  if (firstExistingIndex === -1) {
+    return [...timeline, ...nextItems]
+  }
+
+  const withoutMessage = timeline.filter(
+    (item) => !(item.type === 'message' && item.messageId === message.id),
+  )
+  const insertionIndex = timeline
+    .slice(0, firstExistingIndex)
+    .filter((item) => !(item.type === 'message' && item.messageId === message.id))
+    .length
+
+  return [
+    ...withoutMessage.slice(0, insertionIndex),
+    ...nextItems,
+    ...withoutMessage.slice(insertionIndex),
+  ]
 }
 
 export function summarizeTimelineValue(value: unknown) {
@@ -235,4 +280,38 @@ function safeJsonStringify(value: unknown) {
   } catch {
     return String(value)
   }
+}
+
+function removeStaleEmptyMessageRows(
+  timeline: AgentTimelineItem[],
+  nextItem: Extract<AgentTimelineItem, { type: 'message' }>,
+) {
+  const nextItemIsEmptyPlaceholder = isEmptyMessagePlaceholder(nextItem)
+  const hasConcreteRow = timeline.some(
+    (item) =>
+      item.type === 'message' &&
+      item.messageId === nextItem.messageId &&
+      !isEmptyMessagePlaceholder(item),
+  )
+
+  if (nextItemIsEmptyPlaceholder && hasConcreteRow) {
+    return timeline
+  }
+
+  if (nextItemIsEmptyPlaceholder) {
+    return timeline
+  }
+
+  return timeline.filter(
+    (item) =>
+      item.type !== 'message' ||
+      item.messageId !== nextItem.messageId ||
+      !isEmptyMessagePlaceholder(item),
+  )
+}
+
+function isEmptyMessagePlaceholder(
+  item: Extract<AgentTimelineItem, { type: 'message' }>,
+) {
+  return item.blockKind === 'text' && item.text.length === 0
 }

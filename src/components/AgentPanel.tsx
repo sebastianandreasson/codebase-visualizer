@@ -104,6 +104,7 @@ export function AgentPanel({
   const composerRef = useRef<HTMLTextAreaElement | null>(null)
   const sessionRef = useRef<AgentSessionSummary | null>(null)
   const previousRunStateRef = useRef<AgentSessionSummary['runState'] | null>(null)
+  const shouldStickToTimelineBottomRef = useRef(true)
   const composerValue =
     promptSeed && promptSeed.id !== composerState.seedId
       ? promptSeed.value
@@ -295,11 +296,13 @@ export function AgentPanel({
   }, [authModeValue, providerValue])
 
   useEffect(() => {
-    if (!messageListRef.current) {
+    const listElement = messageListRef.current
+
+    if (!listElement || !shouldStickToTimelineBottomRef.current) {
       return
     }
 
-    messageListRef.current.scrollTop = messageListRef.current.scrollHeight
+    listElement.scrollTop = listElement.scrollHeight
   }, [displayTimeline])
 
   useEffect(() => {
@@ -349,6 +352,7 @@ export function AgentPanel({
     try {
       setPending(true)
       setErrorMessage(null)
+      shouldStickToTimelineBottomRef.current = true
 
       if (await handleLocalCommand(nextPrompt)) {
         setComposerState({
@@ -392,6 +396,16 @@ export function AgentPanel({
     } finally {
       setPending(false)
     }
+  }
+
+  function handleTimelineScroll() {
+    const listElement = messageListRef.current
+
+    if (!listElement) {
+      return
+    }
+
+    shouldStickToTimelineBottomRef.current = isTimelineScrolledNearBottom(listElement)
   }
 
   async function handleLocalCommand(command: string) {
@@ -1221,7 +1235,11 @@ export function AgentPanel({
           </span>
         </div>
 
-        <AgentTerminalTimeline items={displayTimeline} listRef={messageListRef} />
+        <AgentTerminalTimeline
+          items={displayTimeline}
+          listRef={messageListRef}
+          onScroll={handleTimelineScroll}
+        />
 
         <div className="cbv-agent-composer is-terminal">
           {renderTerminalContextRows({
@@ -1330,7 +1348,7 @@ function handleAgentEvent(
     case 'message':
       setMessages((messages) => upsertMessage(messages, event.message))
       setTimeline((timeline) =>
-        createTimelineFromMessages([event.message]).reduce(upsertTimelineItem, timeline),
+        replaceMessageTimelineItems(timeline, event.message),
       )
       break
 
@@ -1364,12 +1382,14 @@ function handleAgentEvent(
 function AgentTerminalTimeline({
   items,
   listRef,
+  onScroll,
 }: {
   items: AgentTimelineItem[]
   listRef: RefObject<HTMLDivElement | null>
+  onScroll: () => void
 }) {
   return (
-    <div className="cbv-agent-terminal-timeline" ref={listRef}>
+    <div className="cbv-agent-terminal-timeline" onScroll={onScroll} ref={listRef}>
       {items.length > 0 ? (
         items.map((item, index) => (
           <AgentTimelineRow
@@ -1433,7 +1453,14 @@ function MessageTimelineRow({
   }
 
   return (
-    <article className={`cbv-agent-terminal-row is-message is-${item.role}`}>
+    <article
+      className={[
+        'cbv-agent-terminal-row',
+        'is-message',
+        `is-${item.role}`,
+        item.isStreaming ? 'is-streaming' : '',
+      ].filter(Boolean).join(' ')}
+    >
       <div className="cbv-agent-terminal-row-line">
         <span className="cbv-agent-terminal-glyph">{glyph}</span>
         <span>{rowLabel}</span>
@@ -1605,6 +1632,34 @@ function createTimelineFromMessages(messages: AgentMessage[]): AgentTimelineItem
   })
 }
 
+function replaceMessageTimelineItems(
+  timeline: AgentTimelineItem[],
+  message: AgentMessage,
+) {
+  const nextItems = createTimelineFromMessages([message])
+  const firstExistingIndex = timeline.findIndex(
+    (item) => item.type === 'message' && item.messageId === message.id,
+  )
+
+  if (firstExistingIndex === -1) {
+    return [...timeline, ...nextItems]
+  }
+
+  const withoutMessage = timeline.filter(
+    (item) => !(item.type === 'message' && item.messageId === message.id),
+  )
+  const insertionIndex = timeline
+    .slice(0, firstExistingIndex)
+    .filter((item) => !(item.type === 'message' && item.messageId === message.id))
+    .length
+
+  return [
+    ...withoutMessage.slice(0, insertionIndex),
+    ...nextItems,
+    ...withoutMessage.slice(insertionIndex),
+  ]
+}
+
 function createToolTimelineItemFromInvocation(
   invocation: AgentToolInvocation,
 ): AgentTimelineItem {
@@ -1636,13 +1691,58 @@ function upsertTimelineItem(
   timeline: AgentTimelineItem[],
   nextItem: AgentTimelineItem,
 ) {
-  const existingIndex = timeline.findIndex((item) => item.id === nextItem.id)
-
-  if (existingIndex === -1) {
-    return [...timeline, nextItem]
+  if (
+    nextItem.type === 'message' &&
+    isEmptyMessagePlaceholder(nextItem) &&
+    timeline.some(
+      (item) =>
+        item.type === 'message' &&
+        item.messageId === nextItem.messageId &&
+        !isEmptyMessagePlaceholder(item),
+    )
+  ) {
+    return timeline
   }
 
-  return timeline.map((item, index) => index === existingIndex ? nextItem : item)
+  const normalizedTimeline =
+    nextItem.type === 'message'
+      ? removeStaleEmptyMessageRows(timeline, nextItem)
+      : timeline
+  const existingIndex = normalizedTimeline.findIndex((item) => item.id === nextItem.id)
+
+  if (existingIndex === -1) {
+    return [...normalizedTimeline, nextItem]
+  }
+
+  return normalizedTimeline.map((item, index) => index === existingIndex ? nextItem : item)
+}
+
+function removeStaleEmptyMessageRows(
+  timeline: AgentTimelineItem[],
+  nextItem: Extract<AgentTimelineItem, { type: 'message' }>,
+) {
+  if (isEmptyMessagePlaceholder(nextItem)) {
+    return timeline
+  }
+
+  return timeline.filter(
+    (item) =>
+      item.type !== 'message' ||
+      item.messageId !== nextItem.messageId ||
+      !isEmptyMessagePlaceholder(item),
+  )
+}
+
+function isEmptyMessagePlaceholder(
+  item: Extract<AgentTimelineItem, { type: 'message' }>,
+) {
+  return item.blockKind === 'text' && item.text.length === 0
+}
+
+function isTimelineScrolledNearBottom(listElement: HTMLDivElement) {
+  return (
+    listElement.scrollHeight - listElement.scrollTop - listElement.clientHeight <= 48
+  )
 }
 
 function formatToolTitle(item: Extract<AgentTimelineItem, { type: 'tool' }>) {

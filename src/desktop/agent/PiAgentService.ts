@@ -66,6 +66,7 @@ import {
   createMessageTimelineItems,
   createToolTimelineItem,
   normalizeToolInvocation,
+  replaceMessageTimelineItems,
   summarizeTimelineValue,
   upsertTimelineItem,
 } from '../agent-runtime/agentTimeline'
@@ -78,6 +79,7 @@ const PI_MODEL_ENV_NAME = 'SEMANTICODE_PI_MODEL'
 
 interface BaseAgentSessionRecord {
   activeAssistantMessageId: string | null
+  completedAssistantMessageId: string | null
   messages: AgentMessage[]
   summary: AgentSessionSummary
   timeline: AgentTimelineItem[]
@@ -307,6 +309,7 @@ export class PiAgentService {
     return {
       activeAssistantMessageId: null,
       agent,
+      completedAssistantMessageId: null,
       kind: 'legacy',
       messages: [],
       promptSequence: 0,
@@ -377,6 +380,7 @@ export class PiAgentService {
     )
     const record: PiSdkAgentSessionRecord = {
       activeAssistantMessageId: null,
+      completedAssistantMessageId: null,
       kind: 'sdk',
       messages: hydratedMessages,
       promptSequence: 0,
@@ -1197,6 +1201,7 @@ export class PiAgentService {
         break
 
       case 'turn_start':
+        record.completedAssistantMessageId = null
         this.updateRecordSummary(record, {
           runState: 'running',
           lastError: undefined,
@@ -1218,6 +1223,7 @@ export class PiAgentService {
         })
         if (event.type === 'message_start' && event.message.role === 'assistant') {
           record.activeAssistantMessageId = `agent-message:${randomUUID()}`
+          record.completedAssistantMessageId = null
           this.emitNormalizedMessage(record, event.message, true)
         }
         break
@@ -1277,8 +1283,13 @@ export class PiAgentService {
               ? event.message.errorMessage
               : record.summary.lastError,
         })
-        if (event.type === 'turn_end' && event.message.role === 'assistant') {
-          this.emitNormalizedMessage(record, event.message, false)
+        if (
+          event.type === 'turn_end' &&
+          event.message.role === 'assistant' &&
+          !record.completedAssistantMessageId
+        ) {
+          const normalizedMessage = this.emitNormalizedMessage(record, event.message, false)
+          record.completedAssistantMessageId = normalizedMessage?.id ?? null
           record.activeAssistantMessageId = null
         }
         this.addTimelineItem(
@@ -1297,7 +1308,8 @@ export class PiAgentService {
 
       case 'message_end':
         if (event.message.role === 'assistant') {
-          this.emitNormalizedMessage(record, event.message, false)
+          const normalizedMessage = this.emitNormalizedMessage(record, event.message, false)
+          record.completedAssistantMessageId = normalizedMessage?.id ?? null
           record.activeAssistantMessageId = null
         }
         break
@@ -1319,7 +1331,7 @@ export class PiAgentService {
     record: AgentSessionRecord,
     message: Message | AssistantMessage,
     isStreaming: boolean,
-  ) {
+  ): AgentMessage | null {
     const normalizedMessage = normalizeAgentMessage(
       record.summary.id,
       record.activeAssistantMessageId,
@@ -1328,7 +1340,7 @@ export class PiAgentService {
     )
 
     if (!normalizedMessage) {
-      return
+      return null
     }
 
     this.emit({
@@ -1338,6 +1350,7 @@ export class PiAgentService {
     })
     record.messages = upsertNormalizedMessage(record.messages, normalizedMessage)
     this.addMessageTimelineItems(record, normalizedMessage)
+    return normalizedMessage
   }
 
   private finishToolInvocation(
@@ -1381,6 +1394,7 @@ export class PiAgentService {
     switch (event.type) {
       case 'agent_start':
       case 'turn_start':
+        record.completedAssistantMessageId = null
         this.updateRecordSummary(record, {
           runState: 'running',
           lastError: undefined,
@@ -1398,6 +1412,7 @@ export class PiAgentService {
       case 'message_start':
         if (event.message.role === 'assistant') {
           record.activeAssistantMessageId = `agent-message:${randomUUID()}`
+          record.completedAssistantMessageId = null
         }
         this.emitNormalizedUnknownMessage(record, event.message, true)
         break
@@ -1406,12 +1421,14 @@ export class PiAgentService {
         this.emitNormalizedUnknownMessage(record, event.message, true)
         break
 
-      case 'message_end':
-        this.emitNormalizedUnknownMessage(record, event.message, false)
+      case 'message_end': {
+        const normalizedMessage = this.emitNormalizedUnknownMessage(record, event.message, false)
         if (event.message.role === 'assistant') {
+          record.completedAssistantMessageId = normalizedMessage?.id ?? null
           record.activeAssistantMessageId = null
         }
         break
+      }
 
       case 'tool_execution_start': {
         const invocation = normalizeToolInvocation({
@@ -1477,7 +1494,13 @@ export class PiAgentService {
           lastError: errorMessage,
           runState: resolveSessionReadyState(record.summary),
         })
-        this.emitNormalizedUnknownMessage(record, event.message, false)
+        if (event.message.role !== 'assistant' || !record.completedAssistantMessageId) {
+          const normalizedMessage = this.emitNormalizedUnknownMessage(record, event.message, false)
+          if (event.message.role === 'assistant') {
+            record.completedAssistantMessageId = normalizedMessage?.id ?? null
+            record.activeAssistantMessageId = null
+          }
+        }
         this.addTimelineItem(
           record,
           createLifecycleTimelineItem({
@@ -1556,7 +1579,7 @@ export class PiAgentService {
     record: AgentSessionRecord,
     message: unknown,
     isStreaming: boolean,
-  ) {
+  ): AgentMessage | null {
     const normalizedMessage = normalizeUnknownAgentMessage(
       record.summary.id,
       record.activeAssistantMessageId,
@@ -1565,7 +1588,7 @@ export class PiAgentService {
     )
 
     if (!normalizedMessage) {
-      return
+      return null
     }
 
     record.messages = upsertNormalizedMessage(record.messages, normalizedMessage)
@@ -1575,11 +1598,18 @@ export class PiAgentService {
       type: 'message',
     })
     this.addMessageTimelineItems(record, normalizedMessage)
+    return normalizedMessage
   }
 
   private addMessageTimelineItems(record: AgentSessionRecord, message: AgentMessage) {
+    record.timeline = replaceMessageTimelineItems(record.timeline, message)
+
     for (const item of createMessageTimelineItems(message)) {
-      this.addTimelineItem(record, item)
+      this.emit({
+        item,
+        sessionId: record.summary.id,
+        type: 'timeline',
+      })
     }
   }
 

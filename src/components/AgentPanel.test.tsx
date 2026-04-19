@@ -1,5 +1,5 @@
 import { act } from 'react'
-import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -269,6 +269,169 @@ describe('AgentPanel OAuth reconciliation', () => {
     })
 
     expect(screen.getByText('tool read src/App.tsx')).not.toBeNull()
+  })
+
+  it('replaces the empty streaming assistant placeholder with the text row', async () => {
+    const readySession = buildSession({
+      accountLabel: 'tester@example.com',
+      brokerState: 'authenticated',
+      id: 'session-ready',
+      runState: 'ready',
+    })
+    let listener: ((event: AgentEvent) => void) | null = null
+
+    mockClient.getBridgeInfo.mockReturnValue({
+      hasAgentBridge: true,
+      hasDesktopHost: true,
+    })
+    mockClient.subscribe.mockImplementation((nextListener) => {
+      listener = nextListener
+      return () => undefined
+    })
+    mockClient.getSettings.mockResolvedValue(buildSettings({
+      accountLabel: 'tester@example.com',
+      brokerState: 'authenticated',
+    }))
+    mockClient.getHttpState.mockResolvedValue({
+      messages: [],
+      session: readySession,
+      timeline: [],
+    })
+
+    const { container } = render(<AgentPanel desktopHostAvailable />)
+
+    await waitFor(() => {
+      expect(listener).not.toBeNull()
+    })
+
+    await act(async () => {
+      listener?.({
+        message: {
+          blocks: [],
+          createdAt: '2026-04-15T00:00:01.000Z',
+          id: 'message-assistant',
+          isStreaming: true,
+          role: 'assistant',
+        },
+        sessionId: readySession.id,
+        type: 'message',
+      })
+    })
+
+    await act(async () => {
+      listener?.({
+        message: {
+          blocks: [{ kind: 'text', text: 'hi there' }],
+          createdAt: '2026-04-15T00:00:01.000Z',
+          id: 'message-assistant',
+          isStreaming: true,
+          role: 'assistant',
+        },
+        sessionId: readySession.id,
+        type: 'message',
+      })
+    })
+
+    expect(screen.getByText('hi there')).not.toBeNull()
+    expect(
+      container.querySelectorAll('.cbv-agent-terminal-row.is-message.is-assistant'),
+    ).toHaveLength(1)
+  })
+
+  it('does not force-scroll when timeline updates after the user scrolls away', async () => {
+    const readySession = buildSession({
+      accountLabel: 'tester@example.com',
+      brokerState: 'authenticated',
+      id: 'session-ready',
+      runState: 'ready',
+    })
+    let listener: ((event: AgentEvent) => void) | null = null
+
+    mockClient.getBridgeInfo.mockReturnValue({
+      hasAgentBridge: true,
+      hasDesktopHost: true,
+    })
+    mockClient.subscribe.mockImplementation((nextListener) => {
+      listener = nextListener
+      return () => undefined
+    })
+    mockClient.getSettings.mockResolvedValue(buildSettings({
+      accountLabel: 'tester@example.com',
+      brokerState: 'authenticated',
+    }))
+    const initialTimeline = [
+      {
+        blockKind: 'text' as const,
+        createdAt: '2026-04-15T00:00:00.000Z',
+        id: 'timeline:user',
+        messageId: 'message:user',
+        role: 'user' as const,
+        text: 'hello',
+        type: 'message' as const,
+      },
+    ]
+
+    mockClient.getHttpState.mockResolvedValue({
+      messages: [],
+      session: readySession,
+      timeline: initialTimeline,
+    })
+
+    const { container } = render(<AgentPanel desktopHostAvailable />)
+
+    await waitFor(() => {
+      expect(listener).not.toBeNull()
+    })
+
+    const timelineElement = container.querySelector('.cbv-agent-terminal-timeline') as HTMLDivElement
+
+    Object.defineProperty(timelineElement, 'scrollHeight', {
+      configurable: true,
+      value: 1000,
+    })
+    Object.defineProperty(timelineElement, 'clientHeight', {
+      configurable: true,
+      value: 300,
+    })
+    timelineElement.scrollTop = 120
+    fireEvent.scroll(timelineElement)
+
+    mockClient.getHttpState.mockResolvedValue({
+      messages: [],
+      session: readySession,
+      timeline: [
+        ...initialTimeline,
+        {
+          blockKind: 'text',
+          createdAt: '2026-04-15T00:00:01.000Z',
+          id: 'timeline:assistant',
+          isStreaming: true,
+          messageId: 'message-assistant',
+          role: 'assistant',
+          text: 'streaming response',
+          type: 'message',
+        },
+      ],
+    })
+
+    await act(async () => {
+      listener?.({
+        message: {
+          blocks: [{ kind: 'text', text: 'streaming response' }],
+          createdAt: '2026-04-15T00:00:01.000Z',
+          id: 'message-assistant',
+          isStreaming: true,
+          role: 'assistant',
+        },
+        sessionId: readySession.id,
+        type: 'message',
+      })
+    })
+
+    await waitFor(() => {
+      expect(screen.getByText('streaming response')).not.toBeNull()
+    })
+    expect(timelineElement.scrollTop).toBe(120)
   })
 })
 

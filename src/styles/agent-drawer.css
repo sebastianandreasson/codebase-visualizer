@@ -1181,6 +1181,16 @@
   color: var(--app-text);
   font-family: var(--cbv-font-sans);
   font-size: 0.78125rem;
+  font-weight: 400;
+  letter-spacing: 0;
+  line-height: 1.55;
+}
+
+.cbv-agent-terminal-row.is-message.is-assistant.is-streaming .cbv-agent-terminal-message-body {
+  font-family: var(--cbv-font-sans);
+  font-size: 0.78125rem;
+  font-weight: 400;
+  letter-spacing: 0;
   line-height: 1.55;
 }
 
