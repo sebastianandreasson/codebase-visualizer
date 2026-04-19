@@ -274,13 +274,11 @@ export function AgentPanel({
       return
     }
 
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     setModelValue(availableModels[0]?.id ?? '')
   }, [authModeValue, modelValue, providerValue, settings])
 
   useEffect(() => {
     if (authModeValue === 'brokered_oauth' && providerValue && providerValue !== 'openai') {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       setProviderValue('openai')
     }
   }, [authModeValue, providerValue])
