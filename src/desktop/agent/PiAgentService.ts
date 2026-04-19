@@ -1,6 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { dirname, join, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { join } from 'node:path'
 
 import { Agent, ProviderTransport, type AgentEvent as PiAgentEvent } from '@mariozechner/pi-agent'
 import {
@@ -23,6 +22,7 @@ import {
   createLsTool,
   getAgentDir,
   ModelRegistry,
+  type OAuthCredential,
   SessionManager,
   SettingsManager,
   type AgentSession,
@@ -67,8 +67,7 @@ import {
   registerLayoutQuerySession,
 } from '../../node/layoutQueryRegistry'
 import { listLayoutDrafts, listSavedLayouts } from '../../planner'
-import { CODEX_OPENAI_MODELS, PiAgentSettingsStore } from './PiAgentSettingsStore'
-import { CodexCliTransport, createCodexCliModel } from '../agent-runtime/CodexCliTransport'
+import { CODEX_OPENAI_MODELS, CODEX_PROVIDER, PiAgentSettingsStore } from './PiAgentSettingsStore'
 import { OpenAICodexProvider } from '../providers/openai-codex/provider'
 import type {
   LayoutSuggestionPayload,
@@ -88,7 +87,6 @@ import {
   upsertTimelineItem,
 } from '../agent-runtime/agentTimeline'
 import {
-  CODEX_SUBSCRIPTION_AGENT_CAPABILITIES,
   DISABLED_AGENT_CAPABILITIES,
   PI_SDK_AGENT_CAPABILITIES,
   type WorkspaceAgentCapabilities,
@@ -112,6 +110,7 @@ interface BaseAgentSessionRecord {
   summary: AgentSessionSummary
   timeline: AgentTimelineItem[]
   timelineRevision: number
+  turnToolCallIds: Set<string>
   toolInvocationById: Map<string, AgentToolInvocation>
   promptSequence: number
   unsubscribe: () => void
@@ -131,6 +130,15 @@ interface PiSdkAgentSessionRecord extends BaseAgentSessionRecord {
 }
 
 type AgentSessionRecord = LegacyPiAgentSessionRecord | PiSdkAgentSessionRecord
+
+function createTurnToolCounts(
+  record: AgentSessionRecord,
+  reportedToolResultCount: number,
+) {
+  const toolResults = Math.max(reportedToolResultCount, record.turnToolCallIds.size)
+
+  return toolResults > 0 ? { toolResults } : undefined
+}
 
 export interface PiAgentServiceOptions {
   logger?: Pick<Console, 'error' | 'info' | 'warn'>
@@ -191,34 +199,23 @@ export class PiAgentService {
     await this.settingsStore.applyConfiguredApiKeys()
     const settings = await this.getSettings()
     const provider = resolveProvider(settings)
-    const sdkAuthStorage =
-      settings.authMode === 'api_key'
-        ? await this.createSdkAuthStorage()
-        : undefined
-    const sdkModelRegistry =
-      sdkAuthStorage
-        ? ModelRegistry.create(sdkAuthStorage, join(getAgentDir(), 'models.json'))
-        : undefined
-    const sdkModel =
-      sdkModelRegistry
-        ? resolveSdkModel(sdkModelRegistry, provider, settings.modelId)
-        : null
+    const sdkAuthStorage = await this.createSdkAuthStorage(settings)
+    const sdkModelRegistry = ModelRegistry.create(sdkAuthStorage, join(getAgentDir(), 'models.json'))
+    const sdkModel = resolveSdkModel(sdkModelRegistry, provider, settings.modelId)
     const hasProviderApiKey =
-      settings.authMode === 'api_key' && sdkModel && sdkModelRegistry
+      sdkModel && sdkModelRegistry
         ? sdkModelRegistry.hasConfiguredAuth(sdkModel)
         : false
     const bootPrompt = process.env[BOOT_PROMPT_ENV_NAME]?.trim() ?? ''
-    const sessionTransport = resolveTransportMode(settings.authMode)
+    const sessionTransport = resolveTransportMode()
     const disabledReason =
-      settings.authMode === 'api_key'
-        ? resolveSdkDisabledReason(provider, settings.modelId, sdkModel, sdkModelRegistry)
-        : resolveDisabledReason(settings.authMode, provider, settings)
-    const resolvedModelId =
       settings.authMode === 'brokered_oauth'
-        ? settings.modelId
-        : sdkModel?.id ?? settings.modelId
-    const runtimeKind = resolveRuntimeKind(settings.authMode)
-    const capabilities = resolveCapabilities(settings.authMode, disabledReason)
+        ? resolveDisabledReason(settings.authMode, provider, settings) ??
+          resolveSdkDisabledReason(provider, settings.modelId, sdkModel, sdkModelRegistry)
+        : resolveSdkDisabledReason(provider, settings.modelId, sdkModel, sdkModelRegistry)
+    const resolvedModelId = sdkModel?.id ?? settings.modelId
+    const runtimeKind = resolveRuntimeKind()
+    const capabilities = resolveCapabilities(disabledReason)
     const summary: AgentSessionSummary = {
       authMode: settings.authMode,
       brokerSession: settings.brokerSession,
@@ -237,7 +234,7 @@ export class PiAgentService {
       lastError: disabledReason,
     }
     const record =
-      settings.authMode === 'api_key' && !disabledReason
+      !disabledReason
         ? await this.createSdkSessionRecord({
             authStorage: sdkAuthStorage,
             modelRegistry: sdkModelRegistry,
@@ -270,7 +267,7 @@ export class PiAgentService {
     )
 
     this.logger.info(
-      `[semanticode][pi] Created ${record.kind === 'sdk' ? 'SDK' : summary.transport === 'codex_cli' ? 'Codex CLI' : 'provider'} workspace session ${record.summary.id} for ${workspaceRootDir} using ${record.summary.provider}/${record.summary.modelId}.`,
+      `[semanticode][pi] Created ${record.kind === 'sdk' ? 'SDK' : 'provider'} workspace session ${record.summary.id} for ${workspaceRootDir} using ${record.summary.provider}/${record.summary.modelId}.`,
     )
 
     if (disabledReason) {
@@ -349,13 +346,26 @@ export class PiAgentService {
     )
   }
 
-  private async createSdkAuthStorage() {
+  private async createSdkAuthStorage(settings?: AgentSettingsState) {
     const agentDir = getAgentDir()
-    const authStorage = AuthStorage.create(join(agentDir, 'auth.json'))
+    const authStorage = settings?.authMode === 'brokered_oauth'
+      ? AuthStorage.inMemory()
+      : AuthStorage.create(join(agentDir, 'auth.json'))
     const storedApiKeys = await this.settingsStore.getStoredApiKeys()
 
     for (const [provider, apiKey] of Object.entries(storedApiKeys)) {
       authStorage.setRuntimeApiKey(provider, apiKey)
+    }
+
+    if (settings?.authMode === 'brokered_oauth') {
+      const credential = await this.openAICodexProvider.getPiOAuthCredential()
+
+      if (credential) {
+        authStorage.set(CODEX_PROVIDER, {
+          type: 'oauth',
+          ...credential,
+        } satisfies OAuthCredential)
+      }
     }
 
     return authStorage
@@ -370,17 +380,8 @@ export class PiAgentService {
   }): LegacyPiAgentSessionRecord {
     const transport = input.disabledReason
       ? createDisabledTransport()
-      : input.settings.authMode === 'brokered_oauth'
-        ? new CodexCliTransport({
-            authProvider: this.openAICodexProvider,
-            logger: this.logger,
-            workspaceRootDir: input.workspaceRootDir,
-          })
-        : this.createTransport(input.provider)
-    const model =
-      input.settings.authMode === 'brokered_oauth'
-        ? createCodexCliModel(input.settings.modelId)
-        : resolveLegacyProviderModel(input.provider, input.settings.modelId)
+      : this.createTransport(input.provider)
+    const model = resolveLegacyProviderModel(input.provider, input.settings.modelId)
     const agent = new Agent({
       initialState: {
         model,
@@ -397,7 +398,7 @@ export class PiAgentService {
     return {
       activeAssistantMessageId: null,
       agent,
-      capabilities: resolveCapabilities(input.settings.authMode, input.disabledReason),
+      capabilities: resolveCapabilities(input.disabledReason),
       completedAssistantMessageId: null,
       fileOperations: [],
       kind: 'legacy',
@@ -405,12 +406,13 @@ export class PiAgentService {
       promptSequence: 0,
       summary: {
         ...input.summary,
-        capabilities: resolveCapabilities(input.settings.authMode, input.disabledReason),
-        runtimeKind: resolveRuntimeKind(input.settings.authMode),
+        capabilities: resolveCapabilities(input.disabledReason),
+        runtimeKind: resolveRuntimeKind(),
         thinkingLevel: 'medium',
       },
       timeline: [],
       timelineRevision: 0,
+      turnToolCallIds: new Set(),
       toolInvocationById: new Map(),
       unsubscribe,
       workspaceRootDir: input.workspaceRootDir,
@@ -445,7 +447,20 @@ export class PiAgentService {
         enabled: true,
       },
     })
-    const sessionManager = input.sessionManager ?? SessionManager.continueRecent(input.workspaceRootDir)
+    const requestedSessionManager = input.sessionManager
+    let sessionManager = requestedSessionManager ?? SessionManager.continueRecent(input.workspaceRootDir)
+
+    if (
+      !requestedSessionManager &&
+      shouldStartFreshImplicitSessionForModel(
+        sessionManager,
+        input.provider,
+        input.settings.modelId,
+        input.settings.authMode,
+      )
+    ) {
+      sessionManager = SessionManager.create(input.workspaceRootDir)
+    }
     const createRuntime: CreateAgentSessionRuntimeFactory = async ({
       cwd,
       sessionManager,
@@ -529,6 +544,7 @@ export class PiAgentService {
       },
       timeline: hydratedMessages.flatMap(createMessageTimelineItems),
       timelineRevision: 0,
+      turnToolCallIds: new Set(),
       toolInvocationById: new Map(),
       unsubscribe: () => undefined,
       workspaceRootDir: input.workspaceRootDir,
@@ -662,7 +678,7 @@ export class PiAgentService {
 
     try {
       this.logger.info(
-        `[semanticode][agent] Prompting ${record.summary.transport === 'codex_cli' ? 'Codex CLI' : 'PI'} session ${record.summary.id} with model ${record.summary.modelId}.`,
+        `[semanticode][agent] Prompting PI session ${record.summary.id} with model ${record.summary.modelId}.`,
       )
       if (record.kind === 'sdk') {
         const streamingBehavior =
@@ -744,9 +760,6 @@ export class PiAgentService {
   async suggestLayout(
     workspaceRootDir: string,
     input: LayoutSuggestionPayload,
-    options: {
-      helperBaseUrl: string
-    },
   ): Promise<LayoutSuggestionResponse> {
     await this.telemetryService?.ensureWorkspaceTelemetry(workspaceRootDir).catch(() => undefined)
     await this.settingsStore.applyConfiguredApiKeys()
@@ -758,8 +771,7 @@ export class PiAgentService {
       throw new Error(disabledReason)
     }
 
-    const executionPath =
-      settings.authMode === 'brokered_oauth' ? 'codex_cli_bridge' : 'native_tools'
+    const executionPath = 'native_tools' as const
     const snapshot = await readProjectSnapshot({
       analyzeCalls: true,
       analyzeImports: true,
@@ -783,8 +795,8 @@ export class PiAgentService {
     })
 
     try {
-      if (executionPath === 'native_tools') {
-        await this.runNativeLayoutSuggestion({
+      if (settings.authMode === 'brokered_oauth') {
+        await this.runSdkLayoutSuggestion({
           input,
           provider,
           querySession,
@@ -792,10 +804,11 @@ export class PiAgentService {
           workspaceRootDir,
         })
       } else {
-        await this.runCodexLayoutSuggestion({
-          helperBaseUrl: options.helperBaseUrl,
+        await this.runNativeLayoutSuggestion({
           input,
+          provider,
           querySession,
+          settings,
           workspaceRootDir,
         })
       }
@@ -846,18 +859,38 @@ export class PiAgentService {
       throw new Error(disabledReason)
     }
 
-    const transport =
-      settings.authMode === 'brokered_oauth'
-        ? new CodexCliTransport({
-            authProvider: this.openAICodexProvider,
-            logger: this.logger,
-            workspaceRootDir,
-          })
-        : this.createTransport(provider)
-    const model =
-      settings.authMode === 'brokered_oauth'
-        ? createCodexCliModel(settings.modelId)
-        : resolveLegacyProviderModel(provider, settings.modelId)
+    if (settings.authMode === 'brokered_oauth') {
+      const result = await this.runTransientSdkPrompt({
+        message: input.message,
+        provider,
+        rootDir: workspaceRootDir,
+        settings,
+        systemPrompt: input.systemPrompt ?? buildWorkspaceSystemPrompt(workspaceRootDir),
+      })
+
+      await this.telemetryService?.recordInteractivePrompt({
+        finishedAt: new Date().toISOString(),
+        kind: input.telemetry?.kind ?? 'one_off_prompt',
+        message: input.message,
+        modelId: result.model.id,
+        promptSequence: 1,
+        provider: String(result.model.provider),
+        rootDir: workspaceRootDir,
+        scope: input.telemetry,
+        sessionId: `one-off:${randomUUID()}`,
+        startedAt: result.startedAt,
+        toolInvocations: result.toolInvocations,
+      }).catch((error) => {
+        this.logger.warn(
+          `[semanticode][telemetry] Failed to write one-off telemetry: ${error instanceof Error ? error.message : error}`,
+        )
+      })
+
+      return result.assistantText
+    }
+
+    const transport = this.createTransport(provider)
+    const model = resolveLegacyProviderModel(provider, settings.modelId)
     const agent = new Agent({
       initialState: {
         model,
@@ -1041,7 +1074,7 @@ export class PiAgentService {
       const targetAuthMode = resolveModelSelectionAuthMode(input, settings.authMode)
 
       if (targetAuthMode === 'brokered_oauth') {
-        if (input.provider !== 'openai' || !isCodexOpenAIModel(input.modelId)) {
+        if (!isCodexModelSelection(input.provider, input.modelId)) {
           throw new Error(`Codex subscription mode does not support ${input.provider}/${input.modelId}.`)
         }
       }
@@ -1049,7 +1082,7 @@ export class PiAgentService {
       await this.saveSettings({
         authMode: targetAuthMode,
         modelId: input.modelId,
-        provider: input.provider,
+        provider: targetAuthMode === 'brokered_oauth' ? CODEX_PROVIDER : input.provider,
       })
 
       return this.ensureWorkspaceSession(workspaceRootDir)
@@ -1058,14 +1091,14 @@ export class PiAgentService {
     const targetAuthMode = resolveModelSelectionAuthMode(input, record.summary.authMode)
 
     if (targetAuthMode === 'brokered_oauth') {
-      if (input.provider !== 'openai' || !isCodexOpenAIModel(input.modelId)) {
+      if (!isCodexModelSelection(input.provider, input.modelId)) {
         throw new Error(`Codex subscription mode does not support ${input.provider}/${input.modelId}.`)
       }
 
       await this.saveSettings({
         authMode: 'brokered_oauth',
         modelId: input.modelId,
-        provider: 'openai',
+        provider: CODEX_PROVIDER,
       })
 
       return this.ensureWorkspaceSession(workspaceRootDir)
@@ -1113,15 +1146,18 @@ export class PiAgentService {
     }
 
     await record.session.setModel(model)
+    const nextAuthMode: AgentAuthMode =
+      String(model.provider) === CODEX_PROVIDER ? 'brokered_oauth' : 'api_key'
+
     await this.settingsStore.saveSettings({
-      authMode: 'api_key',
+      authMode: nextAuthMode,
       modelId: model.id,
       provider: String(model.provider),
     })
     record.summary = updateSessionSummary(
       {
         ...record.summary,
-        authMode: 'api_key',
+        authMode: nextAuthMode,
         modelId: model.id,
         provider: String(model.provider),
         thinkingLevel: record.session.thinkingLevel,
@@ -1356,13 +1392,6 @@ export class PiAgentService {
       return existingRecord.summary
     }
 
-    await this.settingsStore.applyConfiguredApiKeys()
-    const settings = await this.getSettings()
-
-    if (settings.authMode !== 'api_key') {
-      throw new Error('Resume is only available for pi SDK sessions.')
-    }
-
     await this.disposeWorkspaceSession(workspaceRootDir)
     const record = await this.createWorkspaceSessionWithManager(
       workspaceRootDir,
@@ -1393,31 +1422,20 @@ export class PiAgentService {
     await this.settingsStore.applyConfiguredApiKeys()
     const settings = await this.getSettings()
     const provider = resolveProvider(settings)
-    const sdkAuthStorage =
-      settings.authMode === 'api_key'
-        ? await this.createSdkAuthStorage()
-        : undefined
-    const sdkModelRegistry =
-      sdkAuthStorage
-        ? ModelRegistry.create(sdkAuthStorage, join(getAgentDir(), 'models.json'))
-        : undefined
-    const sdkModel =
-      sdkModelRegistry
-        ? resolveSdkModel(sdkModelRegistry, provider, settings.modelId)
-        : null
+    const sdkAuthStorage = await this.createSdkAuthStorage(settings)
+    const sdkModelRegistry = ModelRegistry.create(sdkAuthStorage, join(getAgentDir(), 'models.json'))
+    const sdkModel = resolveSdkModel(sdkModelRegistry, provider, settings.modelId)
     const hasProviderApiKey =
-      settings.authMode === 'api_key' && sdkModel && sdkModelRegistry
+      sdkModel && sdkModelRegistry
         ? sdkModelRegistry.hasConfiguredAuth(sdkModel)
         : false
     const disabledReason =
-      settings.authMode === 'api_key'
-        ? resolveSdkDisabledReason(provider, settings.modelId, sdkModel, sdkModelRegistry)
-        : resolveDisabledReason(settings.authMode, provider, settings)
-    const resolvedModelId =
       settings.authMode === 'brokered_oauth'
-        ? settings.modelId
-        : sdkModel?.id ?? settings.modelId
-    const capabilities = resolveCapabilities(settings.authMode, disabledReason)
+        ? resolveDisabledReason(settings.authMode, provider, settings) ??
+          resolveSdkDisabledReason(provider, settings.modelId, sdkModel, sdkModelRegistry)
+        : resolveSdkDisabledReason(provider, settings.modelId, sdkModel, sdkModelRegistry)
+    const resolvedModelId = sdkModel?.id ?? settings.modelId
+    const capabilities = resolveCapabilities(disabledReason)
 
     if (disabledReason) {
       throw new Error(
@@ -1437,26 +1455,17 @@ export class PiAgentService {
       modelId: resolvedModelId,
       provider,
       runState: 'ready',
-      runtimeKind: resolveRuntimeKind(settings.authMode),
-      transport: resolveTransportMode(settings.authMode),
+      runtimeKind: resolveRuntimeKind(),
+      transport: resolveTransportMode(),
       updatedAt: new Date().toISOString(),
       workspaceRootDir,
     }
 
-    if (settings.authMode === 'api_key') {
-      return this.createSdkSessionRecord({
-        authStorage: sdkAuthStorage,
-        modelRegistry: sdkModelRegistry,
-        provider,
-        sessionManager,
-        settings,
-        summary,
-        workspaceRootDir,
-      })
-    }
-
-    return this.createLegacySessionRecord({
+    return this.createSdkSessionRecord({
+      authStorage: sdkAuthStorage,
+      modelRegistry: sdkModelRegistry,
       provider,
+      sessionManager,
       settings,
       summary,
       workspaceRootDir,
@@ -1534,27 +1543,190 @@ export class PiAgentService {
     }
   }
 
-  private async runCodexLayoutSuggestion(input: {
-    helperBaseUrl: string
+  private async runSdkLayoutSuggestion(input: {
     input: LayoutSuggestionPayload
+    provider: string
     querySession: ReturnType<typeof registerLayoutQuerySession>
+    settings: AgentSettingsState
     workspaceRootDir: string
   }) {
-    const helperUrl = `${input.helperBaseUrl}/${encodeURIComponent(input.querySession.id)}`
-    const helperCommand = buildLayoutHelperCommand(input.workspaceRootDir)
+    const result = await this.runTransientSdkPrompt({
+      message: buildLayoutSuggestionUserPrompt(input.input),
+      provider: input.provider,
+      requireAssistantText: false,
+      rootDir: input.workspaceRootDir,
+      settings: input.settings,
+      systemPrompt: buildLayoutSuggestionSystemPrompt(),
+      tools: createLayoutQueryTools(input.querySession),
+    })
 
-    await this.runOneOffPrompt(input.workspaceRootDir, {
-      message: buildCodexLayoutSuggestionPrompt({
-        helperCommand,
-        helperUrl,
-        input: input.input,
-      }),
-      systemPrompt: buildWorkspaceSystemPrompt(input.workspaceRootDir),
-      telemetry: {
-        kind: 'layout_suggestion',
+    await this.telemetryService?.recordInteractivePrompt({
+      finishedAt: new Date().toISOString(),
+      kind: 'layout_suggestion',
+      message: input.input.prompt,
+      modelId: result.model.id,
+      promptSequence: 1,
+      provider: String(result.model.provider),
+      rootDir: input.workspaceRootDir,
+      scope: {
         task: input.input.prompt,
       },
+      sessionId: `layout-suggestion:${randomUUID()}`,
+      startedAt: result.startedAt,
+      toolInvocations: result.toolInvocations,
+    }).catch((error) => {
+      this.logger.warn(
+        `[semanticode][telemetry] Failed to write layout suggestion telemetry: ${error instanceof Error ? error.message : error}`,
+      )
     })
+  }
+
+  private async runTransientSdkPrompt(input: {
+    message: string
+    provider: string
+    requireAssistantText?: boolean
+    rootDir: string
+    settings: AgentSettingsState
+    systemPrompt?: string
+    tools?: AgentTool[]
+  }) {
+    const startedAt = new Date().toISOString()
+    const agentDir = getAgentDir()
+    const authStorage = await this.createSdkAuthStorage(input.settings)
+    const modelRegistry = ModelRegistry.create(authStorage, join(agentDir, 'models.json'))
+    const model = resolveSdkModel(modelRegistry, input.provider, input.settings.modelId)
+    const disabledReason = resolveSdkDisabledReason(
+      input.provider,
+      input.settings.modelId,
+      model,
+      modelRegistry,
+    )
+
+    if (disabledReason || !model) {
+      throw new Error(disabledReason ?? `No pi SDK model is available for provider "${input.provider}".`)
+    }
+
+    const settingsManager = SettingsManager.inMemory({
+      defaultModel: model.id,
+      defaultProvider: String(model.provider),
+      defaultThinkingLevel: 'medium',
+      retry: {
+        enabled: true,
+      },
+    })
+    const sessionManager = SessionManager.inMemory(input.rootDir)
+    const extensionFactories = input.systemPrompt?.trim()
+      ? [createStaticSystemPromptExtension(input.systemPrompt)]
+      : []
+    const createRuntime: CreateAgentSessionRuntimeFactory = async ({
+      cwd,
+      sessionManager,
+      sessionStartEvent,
+    }) => {
+      const services = await createAgentSessionServices({
+        agentDir,
+        authStorage,
+        cwd,
+        modelRegistry,
+        resourceLoaderOptions: {
+          extensionFactories,
+        },
+        settingsManager,
+      })
+      const resolvedModel = resolveSdkModel(
+        services.modelRegistry,
+        input.provider,
+        input.settings.modelId,
+      )
+
+      if (!resolvedModel) {
+        throw new Error(`No pi SDK model is available for provider "${input.provider}".`)
+      }
+
+      return {
+        ...(await createAgentSessionFromServices({
+          model: resolvedModel,
+          services,
+          sessionManager,
+          sessionStartEvent,
+          thinkingLevel: 'medium',
+          tools: (input.tools ?? []) as never,
+        })),
+        diagnostics: services.diagnostics,
+        services,
+      }
+    }
+    const runtime = await createAgentSessionRuntime(createRuntime, {
+      agentDir,
+      cwd: input.rootDir,
+      sessionManager,
+    })
+    let assistantText = ''
+    const toolInvocationById = new Map<string, AgentToolInvocation>()
+    const unsubscribe = runtime.session.subscribe((event) => {
+      if (event.type === 'tool_execution_start') {
+        toolInvocationById.set(event.toolCallId, normalizeToolInvocation({
+          args: event.args,
+          startedAt: new Date().toISOString(),
+          toolCallId: event.toolCallId,
+          toolName: event.toolName,
+        }))
+      }
+
+      if (event.type === 'tool_execution_update') {
+        const existingInvocation = toolInvocationById.get(event.toolCallId)
+
+        if (existingInvocation) {
+          toolInvocationById.set(event.toolCallId, {
+            ...existingInvocation,
+            resultPreview: summarizeTimelineValue(event.partialResult),
+          })
+        }
+      }
+
+      if (event.type === 'tool_execution_end') {
+        const existingInvocation = toolInvocationById.get(event.toolCallId)
+
+        toolInvocationById.set(event.toolCallId, normalizeToolInvocation({
+          args: existingInvocation?.args ?? {},
+          endedAt: new Date().toISOString(),
+          isError: event.isError,
+          result: event.result,
+          startedAt: existingInvocation?.startedAt,
+          toolCallId: event.toolCallId,
+          toolName: event.toolName,
+        }))
+      }
+
+      if (
+        (event.type === 'message_end' || event.type === 'turn_end') &&
+        event.message.role === 'assistant'
+      ) {
+        const nextText = extractUnknownAssistantText(event.message)
+
+        if (nextText) {
+          assistantText = nextText
+        }
+      }
+    })
+
+    try {
+      await runtime.session.prompt(input.message)
+
+      if (input.requireAssistantText !== false && !assistantText.trim()) {
+        throw new Error('The preprocessing prompt returned no assistant text.')
+      }
+
+      return {
+        assistantText: assistantText.trim(),
+        model,
+        startedAt,
+        toolInvocations: [...toolInvocationById.values()],
+      }
+    } finally {
+      unsubscribe()
+      await runtime.dispose().catch(() => undefined)
+    }
   }
 
   private createTransport(provider: string) {
@@ -1610,6 +1782,7 @@ export class PiAgentService {
 
     switch (event.type) {
       case 'agent_start':
+        record.turnToolCallIds = new Set()
         this.updateRecordSummary(record, {
           runState: 'running',
           lastError: undefined,
@@ -1625,6 +1798,7 @@ export class PiAgentService {
         break
 
       case 'turn_start':
+        record.turnToolCallIds = new Set()
         record.completedAssistantMessageId = null
         this.updateRecordSummary(record, {
           runState: 'running',
@@ -1661,6 +1835,7 @@ export class PiAgentService {
         })
 
         record.toolInvocationById.set(event.toolCallId, invocation)
+        record.turnToolCallIds.add(event.toolCallId)
         this.logger.info(
           `[semanticode][pi] ${sessionId} tool start: ${event.toolName}`,
         )
@@ -1673,6 +1848,7 @@ export class PiAgentService {
       }
 
       case 'tool_execution_end':
+        record.turnToolCallIds.add(event.toolCallId)
         this.finishToolInvocation(record, sessionId, event)
         if (event.isError) {
           this.logger.warn(
@@ -1720,7 +1896,7 @@ export class PiAgentService {
           createLifecycleTimelineItem({
             counts:
               event.type === 'turn_end'
-                ? { toolResults: event.toolResults.length }
+                ? createTurnToolCounts(record, event.toolResults.length)
                 : undefined,
             event: event.type,
             label: event.type === 'turn_end' ? 'turn done' : 'agent done',
@@ -1760,6 +1936,7 @@ export class PiAgentService {
     record.completedAssistantMessageId = null
     record.promptSequence = 0
     record.toolInvocationById = new Map()
+    record.turnToolCallIds = new Set()
     record.messages = normalizeStoredSessionMessages(
       nextSessionId,
       record.session.state.messages as unknown[],
@@ -1795,24 +1972,34 @@ export class PiAgentService {
   private async createUnifiedModelControlOptions(
     record: AgentSessionRecord | null,
   ): Promise<AgentModelControlOption[]> {
-    const models: AgentModelControlOption[] = CODEX_OPENAI_MODELS.map((id) => ({
-      authMode: 'brokered_oauth',
-      id,
-      provider: 'openai',
-    }))
+    const settings = await this.getSettings()
     const modelRegistry = record?.kind === 'sdk'
       ? record.session.modelRegistry
       : ModelRegistry.create(
-        await this.createSdkAuthStorage(),
+        await this.createSdkAuthStorage(settings),
         join(getAgentDir(), 'models.json'),
       )
 
     modelRegistry.refresh()
 
-    models.push(...modelRegistry.getAvailable().map((model) => createModelControlOption(
-      model,
-      'api_key',
-    )))
+    const brokeredModels = modelRegistry
+      .getAll()
+      .filter((model) => String(model.provider) === CODEX_PROVIDER)
+    const models: AgentModelControlOption[] =
+      (brokeredModels.length > 0
+        ? brokeredModels.map((model) => createModelControlOption(model, 'brokered_oauth'))
+        : CODEX_OPENAI_MODELS.map((id) => ({
+            authMode: 'brokered_oauth' as const,
+            id,
+            provider: CODEX_PROVIDER,
+          })))
+
+    models.push(
+      ...modelRegistry
+        .getAvailable()
+        .filter((model) => String(model.provider) !== CODEX_PROVIDER)
+        .map((model) => createModelControlOption(model, 'api_key')),
+    )
 
     return dedupeModelControlOptions(models)
   }
@@ -1980,6 +2167,7 @@ export class PiAgentService {
     switch (event.type) {
       case 'agent_start':
       case 'turn_start':
+        record.turnToolCallIds = new Set()
         record.completedAssistantMessageId = null
         this.updateRecordSummary(record, {
           runState: 'running',
@@ -2025,12 +2213,14 @@ export class PiAgentService {
         })
 
         record.toolInvocationById.set(event.toolCallId, invocation)
+        record.turnToolCallIds.add(event.toolCallId)
         this.emitToolInvocation(record, sessionId, invocation)
         this.addTimelineItem(record, createToolTimelineItem(invocation))
         break
       }
 
       case 'tool_execution_update': {
+        record.turnToolCallIds.add(event.toolCallId)
         const existingInvocation = record.toolInvocationById.get(event.toolCallId)
 
         if (!existingInvocation) {
@@ -2049,6 +2239,7 @@ export class PiAgentService {
       }
 
       case 'tool_execution_end': {
+        record.turnToolCallIds.add(event.toolCallId)
         const existingInvocation = record.toolInvocationById.get(event.toolCallId)
         const completedInvocation = normalizeToolInvocation({
           args: existingInvocation?.args ?? {},
@@ -2083,7 +2274,7 @@ export class PiAgentService {
         this.addTimelineItem(
           record,
           createLifecycleTimelineItem({
-            counts: { toolResults: event.toolResults.length },
+            counts: createTurnToolCounts(record, event.toolResults.length),
             event: 'turn_end',
             label: 'turn done',
             status: errorMessage ? 'error' : 'completed',
@@ -2287,7 +2478,7 @@ function getFileOperationSource(record: AgentSessionRecord): AgentFileOperationS
     return 'pi-sdk'
   }
 
-  return record.summary.transport === 'codex_cli' ? 'codex-cli' : 'agent-tool'
+  return 'agent-tool'
 }
 
 function formatSessionListItem(session: SessionInfo): AgentSessionListItem {
@@ -2416,48 +2607,6 @@ function buildLayoutSuggestionUserPrompt(input: LayoutSuggestionPayload) {
   ].join('\n')
 }
 
-function buildCodexLayoutSuggestionPrompt(input: {
-  helperCommand: string
-  helperUrl: string
-  input: LayoutSuggestionPayload
-}) {
-  return [
-    'Create a Semanticode layout draft for the active repository.',
-    '',
-    'Do not read or dump the full Semanticode snapshot. Use the query-first helper instead.',
-    '',
-    'Preferred helper endpoint:',
-    input.helperUrl,
-    '',
-    'Call it with curl like:',
-    `curl -sS -X POST ${JSON.stringify(input.helperUrl)} -H 'Content-Type: application/json' -d '{"operation":"getWorkspaceSummary","args":{}}'`,
-    '',
-    'Fallback CLI helper if the HTTP endpoint is unavailable:',
-    input.helperCommand,
-    '',
-    'The helper operations are: getWorkspaceSummary, findNodes, getNodes, getNeighborhood, summarizeScope, previewHybridLayout, createLayoutDraft.',
-    'You must finish by calling createLayoutDraft with a HybridLayoutProposal. Do not create draft files manually.',
-    '',
-    'Layout request:',
-    input.input.prompt,
-    '',
-    `Requested node scope: ${input.input.nodeScope ?? 'symbols'}`,
-    input.input.baseLayoutId
-      ? `Base layout id: ${input.input.baseLayoutId}`
-      : 'No base layout id was selected.',
-  ].join('\n')
-}
-
-function buildLayoutHelperCommand(rootDir: string) {
-  const currentDir = dirname(fileURLToPath(import.meta.url))
-  const packageRoot = currentDir.endsWith('/dist/desktop')
-    ? resolve(currentDir, '../..')
-    : resolve(currentDir, '../../..')
-  const cliEntryPath = resolve(packageRoot, 'bin/semanticode.js')
-
-  return `node ${JSON.stringify(cliEntryPath)} layout-helper --root ${JSON.stringify(rootDir)}`
-}
-
 async function findNewLayoutDraft(rootDir: string, existingDraftIds: Set<string>) {
   const drafts = await listLayoutDrafts(rootDir)
 
@@ -2552,6 +2701,42 @@ function createSemanticodeContextExtension(
       }
     })
   }
+}
+
+function createStaticSystemPromptExtension(systemPrompt: string): ExtensionFactory {
+  return (pi) => {
+    pi.on('before_agent_start', () => ({
+      systemPrompt,
+    }))
+  }
+}
+
+function extractUnknownAssistantText(message: unknown) {
+  if (!message || typeof message !== 'object') {
+    return ''
+  }
+
+  const content = (message as { content?: unknown }).content
+
+  if (typeof content === 'string') {
+    return content.trim()
+  }
+
+  if (!Array.isArray(content)) {
+    return ''
+  }
+
+  return content
+    .flatMap((block) =>
+      block &&
+      typeof block === 'object' &&
+      (block as { type?: unknown }).type === 'text' &&
+      typeof (block as { text?: unknown }).text === 'string'
+        ? [(block as { text: string }).text]
+        : [],
+    )
+    .join('\n')
+    .trim()
 }
 
 function createEmptyAgentControlState(): AgentControlState {
@@ -2785,8 +2970,7 @@ function resolveModelSelectionAuthMode(
 
   if (
     currentAuthMode === 'brokered_oauth' &&
-    input.provider === 'openai' &&
-    isCodexOpenAIModel(input.modelId)
+    isCodexModelSelection(input.provider, input.modelId)
   ) {
     return 'brokered_oauth'
   }
@@ -2794,8 +2978,35 @@ function resolveModelSelectionAuthMode(
   return 'api_key'
 }
 
+function isCodexModelSelection(provider: string, modelId: string) {
+  return (provider === CODEX_PROVIDER || provider === 'openai') && isCodexOpenAIModel(modelId)
+}
+
 function isCodexOpenAIModel(modelId: string) {
   return (CODEX_OPENAI_MODELS as readonly string[]).includes(modelId)
+}
+
+function shouldStartFreshImplicitSessionForModel(
+  sessionManager: SessionManager,
+  provider: string,
+  modelId: string,
+  authMode: AgentAuthMode,
+) {
+  if (authMode !== 'brokered_oauth') {
+    return false
+  }
+
+  const messages = sessionManager.buildSessionContext().messages as Array<{
+    model?: string
+    provider?: string
+    role?: string
+  }>
+
+  return messages.some(
+    (message) =>
+      message.role === 'assistant' &&
+      (message.provider !== provider || message.model !== modelId),
+  )
 }
 
 function isAgentThinkingLevel(
@@ -2827,25 +3038,22 @@ function normalizeAgentSourceInfo(sourceInfo: unknown): AgentSourceInfo | undefi
   }
 }
 
-function resolveRuntimeKind(authMode: AgentAuthMode): AgentSessionSummary['runtimeKind'] {
-  return authMode === 'brokered_oauth' ? 'codex-subscription' : 'pi-sdk'
+function resolveRuntimeKind(): AgentSessionSummary['runtimeKind'] {
+  return 'pi-sdk'
 }
 
 function resolveCapabilities(
-  authMode: AgentAuthMode,
   disabledReason: string | undefined,
 ): WorkspaceAgentCapabilities {
   if (disabledReason) {
     return DISABLED_AGENT_CAPABILITIES
   }
 
-  return authMode === 'brokered_oauth'
-    ? CODEX_SUBSCRIPTION_AGENT_CAPABILITIES
-    : PI_SDK_AGENT_CAPABILITIES
+  return PI_SDK_AGENT_CAPABILITIES
 }
 
-function resolveTransportMode(authMode: AgentAuthMode): AgentSessionSummary['transport'] {
-  return authMode === 'brokered_oauth' ? 'codex_cli' : 'provider'
+function resolveTransportMode(): AgentSessionSummary['transport'] {
+  return 'provider'
 }
 
 function resolveSessionReadyState(summary: AgentSessionSummary): AgentSessionSummary['runState'] {
@@ -2862,8 +3070,8 @@ function resolveDisabledReason(
   settings: AgentSettingsState,
 ) {
   if (authMode === 'brokered_oauth') {
-    if (provider !== 'openai') {
-      return 'OpenAI Codex auth currently only supports the openai provider.'
+    if (provider !== CODEX_PROVIDER) {
+      return 'OpenAI Codex auth currently only supports the openai-codex provider.'
     }
 
     if (settings.brokerSession.state === 'signed_out') {
@@ -2897,6 +3105,10 @@ function resolveSdkDisabledReason(
   }
 
   if (!modelRegistry.hasConfiguredAuth(model)) {
+    if (provider === CODEX_PROVIDER) {
+      return 'OpenAI Codex auth is selected, but no usable OAuth token was found.'
+    }
+
     return `No API key found for provider "${provider}".`
   }
 

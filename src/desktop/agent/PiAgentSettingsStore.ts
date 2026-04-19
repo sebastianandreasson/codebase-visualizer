@@ -3,7 +3,7 @@ import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 
 import { app, safeStorage } from 'electron'
-import { getModels, getProviders, setApiKey, type KnownProvider } from '@mariozechner/pi-ai'
+import { getModels, setApiKey, type KnownProvider } from '@mariozechner/pi-ai'
 import {
   AuthStorage,
   getAgentDir,
@@ -20,6 +20,7 @@ import type {
 
 const DEFAULT_AUTH_MODE: AgentAuthMode = 'brokered_oauth'
 const DEFAULT_PROVIDER = 'openai'
+export const CODEX_PROVIDER = 'openai-codex'
 const DEFAULT_MODEL_ID = 'gpt-4.1-mini'
 const DEFAULT_CODEX_MODEL_ID = 'gpt-5.4'
 const SETTINGS_FILENAME = 'agent-settings.json'
@@ -416,10 +417,10 @@ export class PiAgentSettingsStore {
     modelRegistry = this.createPiModelRegistry(),
   ) {
     const providers = authMode === 'brokered_oauth'
-      ? [...getProviders()]
+      ? [CODEX_PROVIDER]
       : [...new Set(modelRegistry.getAll().map((model) => String(model.provider)))]
 
-    if (!providers.includes(DEFAULT_PROVIDER)) {
+    if (authMode !== 'brokered_oauth' && !providers.includes(DEFAULT_PROVIDER)) {
       providers.unshift(DEFAULT_PROVIDER)
     }
 
@@ -443,13 +444,6 @@ export class PiAgentSettingsStore {
     provider: string,
     modelRegistry = this.createPiModelRegistry(),
   ) {
-    if (authMode === 'brokered_oauth' && provider === 'openai') {
-      return CODEX_OPENAI_MODELS.map((id) => ({
-        authMode: 'brokered_oauth' as const,
-        id,
-      }))
-    }
-
     const registryModels = modelRegistry
       .getAll()
       .filter((model) => String(model.provider) === provider)
@@ -460,6 +454,13 @@ export class PiAgentSettingsStore {
 
     if (registryModels.length > 0) {
       return registryModels
+    }
+
+    if (authMode === 'brokered_oauth' && provider === CODEX_PROVIDER) {
+      return CODEX_OPENAI_MODELS.map((id) => ({
+        authMode: 'brokered_oauth' as const,
+        id,
+      }))
     }
 
     return getModels(provider as KnownProvider).map((model) => ({
@@ -475,11 +476,15 @@ export class PiAgentSettingsStore {
   ) {
     const availableProviders = this.getAvailableProviders(authMode, modelRegistry)
 
+    if (authMode === 'brokered_oauth' && provider === DEFAULT_PROVIDER) {
+      return CODEX_PROVIDER
+    }
+
     if (provider && availableProviders.some((candidate) => candidate === provider)) {
       return provider
     }
 
-    return DEFAULT_PROVIDER
+    return authMode === 'brokered_oauth' ? CODEX_PROVIDER : DEFAULT_PROVIDER
   }
 
   private normalizeAuthMode(authMode: AgentAuthMode | undefined): AgentAuthMode {
@@ -502,7 +507,7 @@ export class PiAgentSettingsStore {
       return modelId
     }
 
-    if (authMode === 'brokered_oauth' && provider === 'openai') {
+    if (authMode === 'brokered_oauth' && provider === CODEX_PROVIDER) {
       return models[0]?.id ?? DEFAULT_CODEX_MODEL_ID
     }
 

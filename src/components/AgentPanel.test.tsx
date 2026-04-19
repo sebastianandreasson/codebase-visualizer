@@ -221,7 +221,7 @@ describe('AgentPanel OAuth reconciliation', () => {
         expect.objectContaining({
           authMode: 'brokered_oauth',
           modelId: 'gpt-5.4-mini',
-          provider: 'openai',
+          provider: 'openai-codex',
         }),
       )
     })
@@ -725,10 +725,10 @@ describe('AgentPanel OAuth reconciliation', () => {
       availableThinkingLevels: [],
       commands: [],
       models: [
-        { authMode: 'brokered_oauth', id: 'gpt-5.4', provider: 'openai' },
+        { authMode: 'brokered_oauth', id: 'gpt-5.4', provider: 'openai-codex' },
         { authMode: 'api_key', id: 'qwen2.5-coder:7b', provider: 'ollama' },
       ],
-      runtimeKind: 'codex-subscription',
+      runtimeKind: 'pi-sdk',
       sessionId: readySession.id,
       tools: [],
     })
@@ -916,9 +916,9 @@ function buildSettings(input: {
   return {
     authMode: 'brokered_oauth',
     availableModelsByProvider: {
-      openai: [{ id: 'gpt-5.4' }, { id: 'gpt-5.4-mini' }],
+      'openai-codex': [{ id: 'gpt-5.4' }, { id: 'gpt-5.4-mini' }],
     },
-    availableProviders: ['openai'],
+    availableProviders: ['openai-codex'],
     brokerSession: {
       accountLabel: input.accountLabel,
       hasAppSessionToken: input.brokerState === 'authenticated',
@@ -932,7 +932,7 @@ function buildSettings(input: {
     hasOpenAiOAuthClientSecret: false,
     modelId: 'gpt-5.4',
     openAiOAuthClientId: '',
-    provider: 'openai',
+    provider: 'openai-codex',
     storageKind: 'plaintext',
   }
 }
@@ -944,6 +944,10 @@ function buildApiKeySettings(): AgentSettingsState {
       brokerState: 'signed_out',
     }),
     authMode: 'api_key',
+    availableModelsByProvider: {
+      openai: [{ id: 'gpt-5.4' }, { id: 'gpt-5.4-mini' }],
+    },
+    availableProviders: ['openai'],
     brokerSession: {
       state: 'signed_out',
     },
@@ -977,22 +981,22 @@ function buildSession(input: {
           steer: false,
         }
       : {
-          compact: false,
-          followUp: false,
+          compact: true,
+          followUp: true,
           newSession: true,
           prompt: true,
-          resumeSession: false,
-          setThinkingLevel: false,
-          steer: false,
+          resumeSession: true,
+          setThinkingLevel: true,
+          steer: true,
         },
     createdAt: '2026-04-15T00:00:00.000Z',
-    hasProviderApiKey: false,
+    hasProviderApiKey: input.brokerState === 'authenticated',
     id: input.id,
     modelId: 'gpt-5.4',
-    provider: 'openai',
+    provider: 'openai-codex',
     runState: input.runState,
-    runtimeKind: 'codex-subscription',
-    transport: 'codex_cli',
+    runtimeKind: 'pi-sdk',
+    transport: 'provider',
     updatedAt: '2026-04-15T00:00:00.000Z',
     workspaceRootDir: '/tmp/workspace',
   }

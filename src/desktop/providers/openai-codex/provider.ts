@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { readFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 
@@ -14,6 +14,13 @@ export interface OpenAICodexProviderOptions {
   logger?: Pick<Console, 'error' | 'info' | 'warn'>
   onAuthStateChanged?: () => Promise<void> | void
   openExternal?: (url: string) => Promise<void> | void
+}
+
+export interface OpenAICodexPiOAuthCredential {
+  access: string
+  accountId?: string
+  expires: number
+  refresh: string
 }
 
 export class OpenAICodexProvider {
@@ -148,6 +155,22 @@ export class OpenAICodexProvider {
     return tokenSet?.accessToken ?? null
   }
 
+  async getPiOAuthCredential(): Promise<OpenAICodexPiOAuthCredential | null> {
+    await this.refreshTokenSetIfNeeded(false)
+    const tokenSet = await this.storage.getTokenSet()
+
+    if (!tokenSet?.accessToken) {
+      return null
+    }
+
+    return {
+      access: tokenSet.accessToken,
+      accountId: tokenSet.accountId,
+      expires: resolveTokenExpiryMs(tokenSet),
+      refresh: tokenSet.refreshToken ?? '',
+    }
+  }
+
   async importCodexAuthSession() {
     const authFilePath = join(homedir(), '.codex', 'auth.json')
     const raw = await readFile(authFilePath, 'utf8').catch(() => null)
@@ -189,32 +212,6 @@ export class OpenAICodexProvider {
       brokerSession: await this.getAuthState(),
       message: 'Imported the local Codex ChatGPT session.',
     }
-  }
-
-  async materializeCodexCliAuth(targetDir: string) {
-    await this.refreshTokenSetIfNeeded(false)
-    const tokenSet = await this.storage.getTokenSet()
-
-    if (!tokenSet?.accessToken) {
-      throw new Error('No OpenAI Codex auth session is currently available.')
-    }
-
-    const authFilePath = join(targetDir, 'auth.json')
-    const authFile = {
-      auth_mode: 'chatgpt',
-      OPENAI_API_KEY: null,
-      tokens: {
-        access_token: tokenSet.accessToken,
-        account_id: tokenSet.accountId ?? null,
-        id_token: tokenSet.idToken ?? null,
-        refresh_token: tokenSet.refreshToken ?? null,
-      },
-      last_refresh: new Date().toISOString(),
-    }
-
-    await mkdir(targetDir, { recursive: true })
-    await writeFile(authFilePath, JSON.stringify(authFile, null, 2), 'utf8')
-    return authFilePath
   }
 
   private async refreshTokenSetIfNeeded(notifyAuthStateChanged: boolean) {
@@ -320,6 +317,25 @@ function extractOpenAiAccountLabel(tokenSet: {
   }
 
   return extractOpenAiAccountId(tokenSet) ?? 'OpenAI account'
+}
+
+function resolveTokenExpiryMs(tokenSet: { accessToken: string; expiresAt?: string }) {
+  if (tokenSet.expiresAt) {
+    const expiresAtMs = Date.parse(tokenSet.expiresAt)
+
+    if (Number.isFinite(expiresAtMs)) {
+      return expiresAtMs
+    }
+  }
+
+  const payload = parseJwtPayload(tokenSet.accessToken)
+  const jwtExpiresAt = payload?.exp
+
+  if (typeof jwtExpiresAt === 'number') {
+    return jwtExpiresAt * 1000
+  }
+
+  return Date.now() + 60 * 60 * 1000
 }
 
 function parseJwtPayload(token: string | undefined) {

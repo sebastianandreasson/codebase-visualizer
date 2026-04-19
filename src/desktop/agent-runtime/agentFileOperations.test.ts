@@ -14,7 +14,7 @@ describe('agent file operation normalization', () => {
         toolName: 'read_file',
       }),
       sessionId: 'session-1',
-      source: 'codex-cli',
+      source: 'pi-sdk',
       workspaceRootDir: '/workspace',
     })
 
@@ -24,7 +24,7 @@ describe('agent file operation normalization', () => {
         kind: 'file_read',
         path: 'src/App.tsx',
         paths: ['src/App.tsx'],
-        source: 'codex-cli',
+        source: 'pi-sdk',
         status: 'running',
         toolName: 'read_file',
       },

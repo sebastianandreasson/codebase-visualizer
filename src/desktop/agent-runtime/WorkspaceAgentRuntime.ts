@@ -42,16 +42,6 @@ export const PI_SDK_AGENT_CAPABILITIES: WorkspaceAgentCapabilities = {
   steer: true,
 }
 
-export const CODEX_SUBSCRIPTION_AGENT_CAPABILITIES: WorkspaceAgentCapabilities = {
-  compact: false,
-  followUp: false,
-  newSession: true,
-  prompt: true,
-  resumeSession: false,
-  setThinkingLevel: false,
-  steer: false,
-}
-
 export const DISABLED_AGENT_CAPABILITIES: WorkspaceAgentCapabilities = {
   compact: false,
   followUp: false,

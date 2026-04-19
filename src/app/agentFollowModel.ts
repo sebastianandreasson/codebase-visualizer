@@ -1188,7 +1188,6 @@ function getFileOperationSourcePriority(operation: AgentFileOperation) {
     case 'git-dirty':
       return 2
     case 'agent-tool':
-    case 'codex-cli':
     case 'pi-sdk':
       return 3
   }

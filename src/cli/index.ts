@@ -146,7 +146,7 @@ async function runLayoutHelper(parsedArguments: ParsedArguments) {
     listSavedLayouts(rootDir),
   ])
   const session = createLayoutQuerySession('layout-helper', {
-    executionPath: 'codex_cli_bridge',
+    executionPath: 'native_tools',
     existingLayouts,
     nodeScope: 'symbols',
     prompt: 'CLI layout helper request',

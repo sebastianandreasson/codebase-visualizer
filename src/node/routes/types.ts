@@ -67,9 +67,6 @@ export interface AgentRuntimeRequestBridge {
   suggestLayout: (
     workspaceRootDir: string,
     input: LayoutSuggestionPayload,
-    options: {
-      helperBaseUrl: string
-    },
   ) => Promise<LayoutSuggestionResponse>
   runOneOffPrompt: (
     workspaceRootDir: string,

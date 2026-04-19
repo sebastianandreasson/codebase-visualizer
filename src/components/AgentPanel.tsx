@@ -355,8 +355,8 @@ export function AgentPanel({
   }, [authModeValue, modelValue, providerValue, settings])
 
   useEffect(() => {
-    if (authModeValue === 'brokered_oauth' && providerValue && providerValue !== 'openai') {
-      setProviderValue('openai')
+    if (authModeValue === 'brokered_oauth' && providerValue && providerValue !== 'openai-codex') {
+      setProviderValue('openai-codex')
     }
   }, [authModeValue, providerValue])
 
@@ -976,18 +976,18 @@ export function AgentPanel({
   }
 
   async function handleStartBrokeredLogin() {
-    const effectiveProvider = 'openai'
-    const availableOpenAiModels = settings
+    const effectiveProvider = 'openai-codex'
+    const availableCodexModels = settings
       ? getSelectableModels(settings, 'brokered_oauth', effectiveProvider)
       : []
     const effectiveModelId =
       modelValue ||
       settings?.modelId ||
-      availableOpenAiModels[0]?.id ||
+      availableCodexModels[0]?.id ||
       ''
 
     if (!effectiveModelId) {
-      setErrorMessage('No OpenAI model is available yet for sign-in.')
+      setErrorMessage('No OpenAI Codex model is available yet for sign-in.')
       return
     }
 
@@ -2595,7 +2595,7 @@ function getSelectableModels(
 ) {
   const availableModels = settings.availableModelsByProvider[provider] ?? []
 
-  if (authMode !== 'brokered_oauth' || provider !== 'openai') {
+  if (authMode !== 'brokered_oauth' || provider !== 'openai-codex') {
     return availableModels
   }
 

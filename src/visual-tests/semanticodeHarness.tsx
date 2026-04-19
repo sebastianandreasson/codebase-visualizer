@@ -660,9 +660,10 @@ const agentSession: AgentSessionSummary = {
     steering: 0,
   },
   runState: 'ready',
+  runtimeKind: 'pi-sdk',
   sessionName: 'visual-fixture',
   thinkingLevel: 'medium',
-  transport: 'codex_cli',
+  transport: 'provider',
   updatedAt: generatedAt,
   workspaceRootDir: rootDir,
 }

@@ -8,9 +8,9 @@ export type AgentRunState =
 
 export type AgentAuthMode = 'api_key' | 'brokered_oauth'
 
-export type AgentTransportMode = 'provider' | 'app' | 'codex_cli'
+export type AgentTransportMode = 'provider' | 'app'
 
-export type AgentRuntimeKind = 'pi-sdk' | 'codex-subscription'
+export type AgentRuntimeKind = 'pi-sdk'
 
 export interface AgentCapabilitySet {
   compact: boolean
@@ -137,7 +137,6 @@ export type AgentFileOperationConfidence = 'exact' | 'inferred' | 'fallback'
 export type AgentFileOperationSource =
   | 'agent-tool'
   | 'assistant-message'
-  | 'codex-cli'
   | 'git-dirty'
   | 'pi-sdk'
   | 'request-telemetry'

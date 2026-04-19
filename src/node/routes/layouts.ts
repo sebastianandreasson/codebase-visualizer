@@ -14,7 +14,7 @@ import type {
   LayoutSuggestionPayload,
 } from '../../types'
 import type { SemanticodeRequestHandlerOptions } from './types'
-import { buildRequestUrl, readJsonBody, sendJson } from './utils'
+import { readJsonBody, sendJson } from './utils'
 
 export async function handleLayoutMutationRoute(
   request: IncomingMessage,
@@ -69,15 +69,11 @@ export async function handleLayoutMutationRoute(
       return true
     }
 
-    const requestUrl = new URL(buildRequestUrl(request))
     const result = await options.agentRuntime.suggestLayout(
       options.rootDir,
       {
         ...payload,
         prompt,
-      },
-      {
-        helperBaseUrl: `${requestUrl.origin}${SEMANTICODE_LAYOUT_QUERY_ROUTE}`,
       },
     )
 

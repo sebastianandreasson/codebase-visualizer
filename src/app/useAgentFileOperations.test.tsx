@@ -115,7 +115,7 @@ function createFileOperation(input: {
     path: input.path,
     paths: [input.path],
     sessionId: 'session-1',
-    source: 'codex-cli',
+    source: 'pi-sdk',
     status: 'completed',
     timestamp: input.timestamp,
     toolCallId: 'call-1',

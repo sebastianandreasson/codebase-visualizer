@@ -8,7 +8,7 @@ import type {
 import type { LayoutAnnotation, LayoutNodeScope } from './layout'
 import type { LayoutDraft } from './planner'
 
-export type LayoutSuggestionExecutionPath = 'native_tools' | 'codex_cli_bridge'
+export type LayoutSuggestionExecutionPath = 'native_tools'
 export type LayoutArrangementMode = 'lanes' | 'grid' | 'dependency_flow' | 'radial'
 export type LayoutArrangementSortKey = 'loc' | 'degree' | 'path' | 'name' | 'kind'
 export type LayoutArrangementSpacing = 'compact' | 'normal' | 'wide'
