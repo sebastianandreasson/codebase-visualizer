@@ -5,6 +5,7 @@ import type {
   FollowDomainEvent,
   FollowInspectorCommand,
   FollowIntent,
+  FollowRefreshStatus,
   FollowRefreshCommand,
   FollowTarget,
 } from './types'
@@ -16,26 +17,20 @@ export function buildCameraCommand(input: {
   acknowledgedCommandIds: string[]
   activityTargets: FollowTarget[]
   cameraLockUntilMs: number
-  currentCommand: FollowCameraCommand | null
   editTargets: FollowTarget[]
-  lastAcknowledgedCommandId: string | null
   nowMs: number
 }) {
   const acknowledgedCommandIds = new Set(input.acknowledgedCommandIds)
 
   const candidateTargets = input.editTargets.length > 0
     ? input.editTargets
-    : input.currentCommand?.target.intent === 'activity' &&
-        !acknowledgedCommandIds.has(input.currentCommand.id) &&
-        input.currentCommand.id !== input.lastAcknowledgedCommandId
-      ? [input.currentCommand.target]
-      : input.cameraLockUntilMs <= input.nowMs
-        ? input.activityTargets
-        : []
+    : input.cameraLockUntilMs <= input.nowMs
+      ? input.activityTargets
+      : []
 
   const target = candidateTargets.find((candidateTarget) => {
     const commandId = createCameraCommandId(candidateTarget)
-    return commandId !== input.lastAcknowledgedCommandId && !acknowledgedCommandIds.has(commandId)
+    return !acknowledgedCommandIds.has(commandId)
   }) ?? null
 
   if (!target) {
@@ -52,7 +47,6 @@ export function buildInspectorCommand(input: {
   acknowledgedCommandIds: string[]
   pendingPath: string | null
   target: FollowTarget | null
-  lastAcknowledgedCommandId: string | null
 }) {
   if (!input.target?.shouldOpenInspector) {
     return null
@@ -60,10 +54,7 @@ export function buildInspectorCommand(input: {
 
   const commandId = createInspectorCommandId(input.target)
 
-  if (
-    commandId === input.lastAcknowledgedCommandId ||
-    input.acknowledgedCommandIds.includes(commandId)
-  ) {
+  if (input.acknowledgedCommandIds.includes(commandId)) {
     return null
   }
 
@@ -77,24 +68,22 @@ export function buildInspectorCommand(input: {
 }
 
 export function buildRefreshCommand(input: {
+  acknowledgedCommandIds: string[]
   editTarget: FollowTarget | null
-  lastAcknowledgedCommandId: string | null
-  refreshInFlight: boolean
-  refreshPending: boolean
+  refreshStatus: FollowRefreshStatus
   viewMode: VisualizerViewMode
 }) {
   if (
     !input.editTarget?.requiresSnapshotRefresh ||
     input.viewMode !== 'symbols' ||
-    input.refreshPending ||
-    input.refreshInFlight
+    input.refreshStatus !== 'idle'
   ) {
     return null
   }
 
   const commandId = `refresh:${input.editTarget.path}:${input.editTarget.eventKey}`
 
-  if (commandId === input.lastAcknowledgedCommandId) {
+  if (input.acknowledgedCommandIds.includes(commandId)) {
     return null
   }
 
@@ -140,28 +129,6 @@ export function appendAcknowledgedCommandId(
   ].slice(-MAX_ACKNOWLEDGED_COMMAND_IDS)
 }
 
-export function pruneAcknowledgedInspectorCommandIds(input: {
-  acknowledgedCommandIds: string[]
-  candidateTargets: FollowTarget[]
-  currentCommand: FollowInspectorCommand | null
-}) {
-  return pruneAcknowledgedCommandIds({
-    ...input,
-    createCommandId: createInspectorCommandId,
-  })
-}
-
-export function pruneAcknowledgedCameraCommandIds(input: {
-  acknowledgedCommandIds: string[]
-  candidateTargets: FollowTarget[]
-  currentCommand: FollowCameraCommand | null
-}) {
-  return pruneAcknowledgedCommandIds({
-    ...input,
-    createCommandId: createCameraCommandId,
-  })
-}
-
 export function countQueuedCameraTargets(input: {
   acknowledgedCommandIds: string[]
   currentCommand: FollowCameraCommand | null
@@ -178,23 +145,4 @@ export function countQueuedCameraTargets(input: {
 
 function createInspectorCommandId(target: FollowTarget) {
   return `inspector:${target.intent}:${target.path}:${target.eventKey}`
-}
-
-function pruneAcknowledgedCommandIds(input: {
-  acknowledgedCommandIds: string[]
-  candidateTargets: FollowTarget[]
-  createCommandId: (target: FollowTarget) => string
-  currentCommand: { id: string } | null
-}) {
-  const candidateCommandIds = new Set(
-    input.candidateTargets.map(input.createCommandId),
-  )
-
-  if (input.currentCommand) {
-    candidateCommandIds.add(input.currentCommand.id)
-  }
-
-  return input.acknowledgedCommandIds
-    .filter((commandId) => candidateCommandIds.has(commandId))
-    .slice(-MAX_ACKNOWLEDGED_COMMAND_IDS)
 }

@@ -3,10 +3,31 @@ import { describe, expect, it } from 'vitest'
 import {
   computePendingEditedPaths,
   createInitialFollowControllerState,
+  deriveFollowControllerView,
   followControllerReducer,
 } from './model'
-import { getPreferredFollowSymbolIdsForFile } from './snapshot'
-import type { AgentFileOperation, ProjectSnapshot, TelemetryActivityEvent } from '../../types'
+import {
+  createViewChangedFollowEvent,
+  getChangedDirtySignalPaths,
+  getChangedFileOperationPaths,
+} from './events'
+import {
+  buildSnapshotSignature,
+  countSnapshotSymbols,
+  getPreferredFollowSymbolIdsForFile,
+} from './snapshot'
+import type {
+  AgentFileOperation,
+  DirtyFileEditSignal,
+  FollowControllerAction,
+  FollowControllerContext,
+  FollowControllerState,
+  FollowControllerView,
+  ProjectSnapshot,
+  TelemetryActivityEvent,
+  TelemetryMode,
+  VisualizerViewMode,
+} from '../../types'
 
 describe('follow model', () => {
   it('prefers edit targets over generic activity targets', () => {
@@ -166,26 +187,30 @@ describe('follow model', () => {
     expect(state.currentInspectorCommand?.scrollToDiffRequestKey).toBeNull()
     expect(state.debug.queueLength).toBe(1)
 
-    state = followControllerReducer(state, {
-      type: 'COMMAND_ACKNOWLEDGED',
-      commandId: state.currentCameraCommand!.id,
-      commandType: 'camera',
-      intent: 'activity',
-      nowMs: 1_680,
-    })
+    state = reduceFollowState([
+      {
+        type: 'COMMAND_ACKNOWLEDGED',
+        commandId: state.currentCameraCommand!.id,
+        commandType: 'camera',
+        intent: 'activity',
+        nowMs: 1_680,
+      },
+    ], state)
 
     expect(state.currentCameraCommand?.target.path).toBe('game.js')
     expect(state.currentInspectorCommand?.target.path).toBe('game.js')
     expect(state.currentInspectorCommand?.scrollToDiffRequestKey).toBeNull()
     expect(state.debug.queueLength).toBe(0)
 
-    state = followControllerReducer(state, {
-      type: 'COMMAND_ACKNOWLEDGED',
-      commandId: state.currentCameraCommand!.id,
-      commandType: 'camera',
-      intent: 'activity',
-      nowMs: 1_690,
-    })
+    state = reduceFollowState([
+      {
+        type: 'COMMAND_ACKNOWLEDGED',
+        commandId: state.currentCameraCommand!.id,
+        commandType: 'camera',
+        intent: 'activity',
+        nowMs: 1_690,
+      },
+    ], state)
 
     expect(state.currentCameraCommand).toBeNull()
   })
@@ -474,12 +499,14 @@ describe('follow model', () => {
 
     expect(initialState.latestResolvedEditTarget?.kind).toBe('file')
 
-    const upgradedState = followControllerReducer(initialState, {
-      type: 'SNAPSHOT_CONTEXT_UPDATED',
-      nowMs: 3_040,
-      snapshot: upgradedSnapshot,
-      visibleNodeIds: ['symbol:createPRNG', 'symbol:getSpawnCell'],
-    })
+    const upgradedState = reduceFollowState([
+      {
+        type: 'SNAPSHOT_CONTEXT_UPDATED',
+        nowMs: 3_040,
+        snapshot: upgradedSnapshot,
+        visibleNodeIds: ['symbol:createPRNG', 'symbol:getSpawnCell'],
+      },
+    ], initialState)
 
     expect(upgradedState.latestResolvedEditTarget).toEqual(
       expect.objectContaining({
@@ -535,45 +562,51 @@ describe('follow model', () => {
     const firstCommandId = initialState.currentCameraCommand?.id
     expect(firstCommandId).toBeTruthy()
 
-    const acknowledgedState = followControllerReducer(initialState, {
-      type: 'COMMAND_ACKNOWLEDGED',
-      commandId: firstCommandId!,
-      commandType: 'camera',
-      intent: 'activity',
-      nowMs: 4_040,
-    })
+    const acknowledgedState = reduceFollowState([
+      {
+        type: 'COMMAND_ACKNOWLEDGED',
+        commandId: firstCommandId!,
+        commandType: 'camera',
+        intent: 'activity',
+        nowMs: 4_040,
+      },
+    ], initialState)
 
     expect(acknowledgedState.currentCameraCommand).toBeNull()
 
-    const unchangedState = followControllerReducer(acknowledgedState, {
-      type: 'TELEMETRY_BATCH_UPDATED',
-      nowMs: 4_050,
-      telemetryEnabled: true,
-      telemetryActivityEvents: [
-        createTelemetryEvent({
-          key: 'activity:debug:1',
-          path: 'debug_brute.js',
-          timestamp: '2026-04-18T10:00:01.000Z',
-          toolNames: ['read_file'],
-        }),
-      ],
-    })
+    const unchangedState = reduceFollowState([
+      {
+        type: 'TELEMETRY_BATCH_UPDATED',
+        nowMs: 4_050,
+        telemetryEnabled: true,
+        telemetryActivityEvents: [
+          createTelemetryEvent({
+            key: 'activity:debug:1',
+            path: 'debug_brute.js',
+            timestamp: '2026-04-18T10:00:01.000Z',
+            toolNames: ['read_file'],
+          }),
+        ],
+      },
+    ], acknowledgedState)
 
     expect(unchangedState.currentCameraCommand).toBeNull()
 
-    const updatedState = followControllerReducer(unchangedState, {
-      type: 'TELEMETRY_BATCH_UPDATED',
-      nowMs: 4_060,
-      telemetryEnabled: true,
-      telemetryActivityEvents: [
-        createTelemetryEvent({
-          key: 'activity:debug:2',
-          path: 'debug_brute.js',
-          timestamp: '2026-04-18T10:00:02.000Z',
-          toolNames: ['read_file'],
-        }),
-      ],
-    })
+    const updatedState = reduceFollowState([
+      {
+        type: 'TELEMETRY_BATCH_UPDATED',
+        nowMs: 4_060,
+        telemetryEnabled: true,
+        telemetryActivityEvents: [
+          createTelemetryEvent({
+            key: 'activity:debug:2',
+            path: 'debug_brute.js',
+            timestamp: '2026-04-18T10:00:02.000Z',
+            toolNames: ['read_file'],
+          }),
+        ],
+      },
+    ], unchangedState)
 
     expect(updatedState.currentCameraCommand?.id).not.toBe(firstCommandId)
     expect(updatedState.currentCameraCommand?.target.eventKey).toBe('activity:debug:2')
@@ -634,18 +667,20 @@ describe('follow model', () => {
 
     expect(acknowledgedState.currentInspectorCommand).toBeNull()
 
-    const updatedState = followControllerReducer(acknowledgedState, {
-      type: 'DIRTY_FILE_SIGNALS_UPDATED',
-      nowMs: 4_570,
-      signals: [
-        {
-          changedAt: '2026-04-18T10:00:04.000Z',
-          changedAtMs: 2_000,
-          fingerprint: 'diff:2',
-          path: 'debug_brute.js',
-        },
-      ],
-    })
+    const updatedState = reduceFollowState([
+      {
+        type: 'DIRTY_FILE_SIGNALS_UPDATED',
+        nowMs: 4_570,
+        signals: [
+          {
+            changedAt: '2026-04-18T10:00:04.000Z',
+            changedAtMs: 2_000,
+            fingerprint: 'diff:2',
+            path: 'debug_brute.js',
+          },
+        ],
+      },
+    ], acknowledgedState)
 
     expect(updatedState.pendingDirtyPaths[0]).toBe('debug_brute.js')
     expect(updatedState.currentInspectorCommand?.id).not.toBe(firstInspectorCommandId)
@@ -775,13 +810,15 @@ describe('follow model', () => {
 
     expect(editState.currentCameraCommand?.target.intent).toBe('edit')
 
-    const lockedState = followControllerReducer(editState, {
-      type: 'COMMAND_ACKNOWLEDGED',
-      commandId: editState.currentCameraCommand!.id,
-      commandType: 'camera',
-      intent: 'edit',
-      nowMs: 5_040,
-    })
+    const lockedState = reduceFollowState([
+      {
+        type: 'COMMAND_ACKNOWLEDGED',
+        commandId: editState.currentCameraCommand!.id,
+        commandType: 'camera',
+        intent: 'edit',
+        nowMs: 5_040,
+      },
+    ], editState)
 
     const activityDuringLockState = reduceFollowState(
       [
@@ -809,10 +846,12 @@ describe('follow model', () => {
 
     expect(activityDuringLockState.currentCameraCommand).toBeNull()
 
-    const unlockedState = followControllerReducer(activityDuringLockState, {
-      type: 'CLOCK_TICKED',
-      nowMs: lockedState.cameraLockUntilMs + 1,
-    })
+    const unlockedState = reduceFollowState([
+      {
+        type: 'CLOCK_TICKED',
+        nowMs: lockedState.cameraLockUntilMs + 1,
+      },
+    ], activityDuringLockState)
 
     expect(unlockedState.currentCameraCommand?.target.path).toBe('game.js')
     expect(unlockedState.currentCameraCommand?.target.intent).toBe('activity')
@@ -836,11 +875,13 @@ describe('follow model', () => {
       },
     ])
 
-    const disabledState = followControllerReducer(activeState, {
-      type: 'FOLLOW_TOGGLED',
-      enabled: false,
-      nowMs: 6_040,
-    })
+    const disabledState = reduceFollowState([
+      {
+        type: 'FOLLOW_TOGGLED',
+        enabled: false,
+        nowMs: 6_040,
+      },
+    ], activeState)
 
     expect(disabledState.currentCameraCommand).toBeNull()
     expect(disabledState.currentInspectorCommand).toBeNull()
@@ -850,14 +891,234 @@ describe('follow model', () => {
   })
 })
 
+type LegacyFollowControllerAction =
+  | FollowControllerAction
+  | {
+      type: 'TELEMETRY_BATCH_UPDATED'
+      nowMs: number
+      telemetryActivityEvents: TelemetryActivityEvent[]
+      telemetryEnabled: boolean
+    }
+  | {
+      type: 'FILE_OPERATIONS_UPDATED'
+      fileOperations: AgentFileOperation[]
+      nowMs: number
+    }
+  | {
+      type: 'DIRTY_FILES_UPDATED'
+      liveChangedFiles: string[]
+      nowMs: number
+    }
+  | {
+      type: 'DIRTY_FILE_SIGNALS_UPDATED'
+      signals: DirtyFileEditSignal[]
+      nowMs: number
+    }
+  | {
+      type: 'SNAPSHOT_CONTEXT_UPDATED'
+      nowMs: number
+      snapshot: ProjectSnapshot | null
+      visibleNodeIds: string[]
+    }
+  | {
+      type: 'VIEW_MODE_CHANGED'
+      mode: TelemetryMode
+      nowMs: number
+      viewMode: VisualizerViewMode
+    }
+
+type FollowTestState = FollowControllerState &
+  FollowControllerView & {
+    context: FollowControllerContext
+    currentCameraCommand: FollowControllerView['cameraCommand']
+    currentInspectorCommand: FollowControllerView['inspectorCommand']
+    currentRefreshCommand: FollowControllerView['refreshCommand']
+  }
+
 function reduceFollowState(
-  actions: Parameters<typeof followControllerReducer>[1][],
-  initialState = createInitialFollowControllerState(),
+  actions: LegacyFollowControllerAction[],
+  initialState = createFollowTestState(),
 ) {
-  return actions.reduce(
-    (state, action) => followControllerReducer(state, action),
-    initialState,
-  )
+  return actions.reduce(applyFollowAction, initialState)
+}
+
+function createFollowTestState(
+  state = createInitialFollowControllerState(),
+  context = createInitialFollowContext(),
+): FollowTestState {
+  const view = deriveFollowControllerView(state, context)
+
+  return {
+    ...state,
+    ...view,
+    context,
+    currentCameraCommand: view.cameraCommand,
+    currentInspectorCommand: view.inspectorCommand,
+    currentRefreshCommand: view.refreshCommand,
+  }
+}
+
+function createInitialFollowContext(): FollowControllerContext {
+  return {
+    dirtyFileEditSignals: [],
+    enabled: false,
+    fileOperations: [],
+    liveChangedFiles: [],
+    snapshot: null,
+    telemetryActivityEvents: [],
+    telemetryEnabled: false,
+    telemetryMode: 'files',
+    viewMode: 'filesystem',
+    visibleNodeIds: [],
+  }
+}
+
+function applyFollowAction(
+  current: FollowTestState,
+  action: LegacyFollowControllerAction,
+): FollowTestState {
+  let context = current.context
+  let state: FollowControllerState = current
+
+  switch (action.type) {
+    case 'FOLLOW_TOGGLED':
+      context = {
+        ...context,
+        enabled: action.enabled,
+      }
+      state = followControllerReducer(state, action)
+      break
+    case 'TELEMETRY_BATCH_UPDATED':
+      context = {
+        ...context,
+        telemetryActivityEvents: action.telemetryActivityEvents,
+        telemetryEnabled: action.telemetryEnabled,
+      }
+      state = tickFollowState(state, action.nowMs)
+      break
+    case 'FILE_OPERATIONS_UPDATED': {
+      const reprioritizedPaths = getChangedFileOperationPaths({
+        nextOperations: action.fileOperations,
+        previousOperations: context.fileOperations,
+      })
+      context = {
+        ...context,
+        fileOperations: action.fileOperations,
+      }
+      state = reprioritizedPaths.length > 0
+        ? reconcileDirtyPaths({
+            context,
+            nowMs: action.nowMs,
+            previousChangedPaths: context.liveChangedFiles,
+            reprioritizedPaths,
+            state,
+          })
+        : tickFollowState(state, action.nowMs)
+      break
+    }
+    case 'DIRTY_FILES_UPDATED': {
+      const previousChangedPaths = context.liveChangedFiles
+      context = {
+        ...context,
+        liveChangedFiles: action.liveChangedFiles,
+      }
+      state = reconcileDirtyPaths({
+        context,
+        nowMs: action.nowMs,
+        previousChangedPaths,
+        reprioritizedPaths: [],
+        state,
+      })
+      break
+    }
+    case 'DIRTY_FILE_SIGNALS_UPDATED': {
+      const reprioritizedPaths = getChangedDirtySignalPaths({
+        nextSignals: action.signals,
+        previousSignals: context.dirtyFileEditSignals,
+      })
+      context = {
+        ...context,
+        dirtyFileEditSignals: action.signals,
+      }
+      state = reprioritizedPaths.length > 0
+        ? reconcileDirtyPaths({
+            context,
+            nowMs: action.nowMs,
+            previousChangedPaths: context.liveChangedFiles,
+            reprioritizedPaths,
+            state,
+          })
+        : tickFollowState(state, action.nowMs)
+      break
+    }
+    case 'SNAPSHOT_CONTEXT_UPDATED': {
+      const previousSnapshotSignature = buildSnapshotSignature(context.snapshot)
+      const previousSymbolCount = countSnapshotSymbols(context.snapshot)
+      const nextSnapshotSignature = buildSnapshotSignature(action.snapshot)
+      const nextSymbolCount = countSnapshotSymbols(action.snapshot)
+      context = {
+        ...context,
+        snapshot: action.snapshot,
+        visibleNodeIds: action.visibleNodeIds,
+      }
+      state = nextSnapshotSignature !== previousSnapshotSignature
+        ? followControllerReducer(state, {
+            type: 'FOLLOW_EVENT_RECORDED',
+            event: {
+              key: `${nextSymbolCount > previousSymbolCount ? 'symbols_available' : 'snapshot_refreshed'}:${action.nowMs}`,
+              timestamp: new Date(action.nowMs).toISOString(),
+              timestampMs: action.nowMs,
+              type: nextSymbolCount > previousSymbolCount
+                ? 'symbols_available'
+                : 'snapshot_refreshed',
+            },
+            nowMs: action.nowMs,
+          })
+        : tickFollowState(state, action.nowMs)
+      break
+    }
+    case 'VIEW_MODE_CHANGED':
+      context = {
+        ...context,
+        telemetryMode: action.mode,
+        viewMode: action.viewMode,
+      }
+      state = followControllerReducer(state, {
+        type: 'FOLLOW_EVENT_RECORDED',
+        event: createViewChangedFollowEvent(action.mode, action.nowMs),
+        nowMs: action.nowMs,
+      })
+      break
+    default:
+      state = followControllerReducer(state, action)
+      break
+  }
+
+  return createFollowTestState(state, context)
+}
+
+function reconcileDirtyPaths(input: {
+  context: FollowControllerContext
+  nowMs: number
+  previousChangedPaths: string[]
+  reprioritizedPaths: string[]
+  state: FollowControllerState
+}) {
+  return followControllerReducer(input.state, {
+    type: 'DIRTY_PATHS_RECONCILED',
+    liveChangedFiles: input.context.liveChangedFiles,
+    nowMs: input.nowMs,
+    previousChangedPaths: input.previousChangedPaths,
+    reprioritizedPaths: input.reprioritizedPaths,
+    telemetryActivityEvents: input.context.telemetryActivityEvents,
+  })
+}
+
+function tickFollowState(state: FollowControllerState, nowMs: number) {
+  return followControllerReducer(state, {
+    type: 'CLOCK_TICKED',
+    nowMs,
+  })
 }
 
 function createTelemetryEvent(
@@ -913,7 +1174,7 @@ function createDirtySignal(input: {
 }
 
 function applyDirtyEditStep(
-  state: ReturnType<typeof createInitialFollowControllerState>,
+  state: FollowTestState,
   input: {
     liveChangedFiles: string[]
     nowMs: number
@@ -938,10 +1199,10 @@ function applyDirtyEditStep(
 }
 
 function acknowledgeCurrentEditCommands(
-  state: ReturnType<typeof createInitialFollowControllerState>,
+  state: FollowTestState,
   nowMs: number,
 ) {
-  const actions: Parameters<typeof followControllerReducer>[1][] = []
+  const actions: FollowControllerAction[] = []
 
   if (state.currentCameraCommand) {
     actions.push({

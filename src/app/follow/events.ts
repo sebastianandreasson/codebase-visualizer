@@ -1,6 +1,6 @@
 import type { AgentFileOperation } from '../../schema/agent'
-import type { TelemetryActivityEvent } from '../../schema/telemetry'
-import type { DirtyFileEditSignal, FollowFileEvent } from './types'
+import type { TelemetryActivityEvent, TelemetryMode } from '../../schema/telemetry'
+import type { DirtyFileEditSignal, FollowDomainEvent, FollowFileEvent } from './types'
 
 const FOLLOW_AGENT_EVENT_PRIORITY_WINDOW_MS = 30_000
 
@@ -16,6 +16,31 @@ export function isEditTelemetryEvent(toolNames: string[]) {
       normalizedToolName.includes('replace')
     )
   })
+}
+
+export function createLifecycleFollowEvent(
+  type: Extract<
+    FollowDomainEvent['type'],
+    'follow_enabled' | 'follow_disabled' | 'snapshot_refreshed' | 'symbols_available'
+  >,
+  nowMs: number,
+): FollowDomainEvent {
+  return {
+    key: `${type}:${nowMs}`,
+    timestamp: new Date(nowMs).toISOString(),
+    timestampMs: nowMs,
+    type,
+  }
+}
+
+export function createViewChangedFollowEvent(mode: TelemetryMode, nowMs: number): FollowDomainEvent {
+  return {
+    key: `view:${mode}:${nowMs}`,
+    mode,
+    timestamp: new Date(nowMs).toISOString(),
+    timestampMs: nowMs,
+    type: 'view_changed',
+  }
 }
 
 export function createTelemetryFollowEvent(

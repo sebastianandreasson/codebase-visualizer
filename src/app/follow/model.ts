@@ -10,8 +10,6 @@ import {
   countQueuedCameraTargets,
   createCameraCommandId,
   FOLLOW_AGENT_EDIT_CAMERA_LOCK_MS,
-  pruneAcknowledgedCameraCommandIds,
-  pruneAcknowledgedInspectorCommandIds,
 } from './commands'
 import {
   compareFollowEventsDescending,
@@ -19,21 +17,19 @@ import {
   createDirtyFileFollowEvent,
   createDirtySignalFollowEvent,
   createFileOperationFollowEvent,
+  createLifecycleFollowEvent,
   createTelemetryFollowEvent,
-  getChangedDirtySignalPaths,
-  getChangedFileOperationPaths,
   shouldUseTelemetryEventForFollow,
 } from './events'
 import {
   buildFollowIndexes,
-  buildSnapshotSignature,
-  countSnapshotSymbols,
   getPreferredFollowSymbolIdsForFile,
 } from './snapshot'
 import type {
   FollowControllerAction,
+  FollowControllerContext,
   FollowControllerState,
-  FollowDomainEvent,
+  FollowControllerView,
   FollowFileEvent,
   FollowIndexes,
   FollowIntent,
@@ -46,45 +42,11 @@ export function createInitialFollowControllerState(): FollowControllerState {
 
   return {
     cameraLockUntilMs: 0,
-    currentCameraCommand: null,
-    currentInspectorCommand: null,
-    currentRefreshCommand: null,
-    debug: {
-      cameraLockActive: false,
-      cameraLockUntilMs: 0,
-      currentMode: 'idle',
-      currentTarget: null,
-      latestEvent: null,
-      queueLength: 0,
-      refreshInFlight: false,
-      refreshPending: false,
-    },
-    enabled: false,
-    fileOperations: [],
-    knownChangedPaths: [],
-    acknowledgedCameraCommandIds: [],
-    acknowledgedInspectorCommandIds: [],
-    lastAcknowledgedCameraCommandId: null,
-    lastAcknowledgedInspectorCommandId: null,
-    lastAcknowledgedRefreshCommandId: null,
-    latestNormalizedEvent: null,
-    latestResolvedActivityTarget: null,
-    latestResolvedEditTarget: null,
-    liveChangedFiles: [],
-    dirtyFileEditSignals: [],
+    acknowledgedCommandIds: [],
+    latestEvent: null,
     nowMs,
     pendingDirtyPaths: [],
-    refreshInFlight: false,
-    refreshPending: false,
-    refreshRequestedAtMs: null,
-    snapshot: null,
-    snapshotSignature: null,
-    symbolCount: 0,
-    telemetryActivityEvents: [],
-    telemetryEnabled: false,
-    telemetryMode: 'files',
-    viewMode: 'filesystem',
-    visibleNodeIds: [],
+    refreshStatus: 'idle',
   }
 }
 
@@ -93,174 +55,50 @@ export function followControllerReducer(
   action: FollowControllerAction,
 ): FollowControllerState {
   switch (action.type) {
-    case 'FOLLOW_TOGGLED': {
-      if (!action.enabled) {
-        return deriveFollowControllerState({
-          ...state,
-          cameraLockUntilMs: 0,
-          currentCameraCommand: null,
-          currentInspectorCommand: null,
-          currentRefreshCommand: null,
-          enabled: false,
-          fileOperations: [],
-          knownChangedPaths: [],
-          acknowledgedCameraCommandIds: [],
-          acknowledgedInspectorCommandIds: [],
-          lastAcknowledgedCameraCommandId: null,
-          lastAcknowledgedInspectorCommandId: null,
-          lastAcknowledgedRefreshCommandId: null,
-          liveChangedFiles: [],
-          nowMs: action.nowMs,
-          pendingDirtyPaths: [],
-          refreshInFlight: false,
-          refreshPending: false,
-          refreshRequestedAtMs: null,
-          latestNormalizedEvent: createLifecycleEvent('follow_disabled', action.nowMs),
-        })
+    case 'FOLLOW_TOGGLED':
+      return {
+        ...createInitialFollowControllerState(),
+        latestEvent: createLifecycleFollowEvent(
+          action.enabled ? 'follow_enabled' : 'follow_disabled',
+          action.nowMs,
+        ),
+        nowMs: action.nowMs,
       }
-
-      return deriveFollowControllerState({
-        ...state,
-        acknowledgedCameraCommandIds: state.enabled
-          ? state.acknowledgedCameraCommandIds
-          : [],
-        acknowledgedInspectorCommandIds: state.enabled
-          ? state.acknowledgedInspectorCommandIds
-          : [],
-        enabled: true,
-        nowMs: action.nowMs,
-        latestNormalizedEvent: createLifecycleEvent('follow_enabled', action.nowMs),
-      })
-    }
-    case 'TELEMETRY_BATCH_UPDATED':
-      return deriveFollowControllerState({
+    case 'DIRTY_PATHS_RECONCILED':
+      return {
         ...state,
         nowMs: action.nowMs,
-        telemetryActivityEvents: action.telemetryActivityEvents,
-        telemetryEnabled: action.telemetryEnabled,
-      })
-    case 'FILE_OPERATIONS_UPDATED': {
-      const reprioritizedPaths = getChangedFileOperationPaths({
-        nextOperations: action.fileOperations,
-        previousOperations: state.fileOperations,
-      })
-
-      return deriveFollowControllerState({
-        ...state,
-        fileOperations: action.fileOperations,
-        nowMs: action.nowMs,
-        pendingDirtyPaths: state.enabled
-          ? computePendingEditedPaths({
-              currentPendingPaths: state.pendingDirtyPaths,
-              liveChangedFiles: state.liveChangedFiles,
-              previousChangedPaths: new Set(state.knownChangedPaths),
-              reprioritizedPaths,
-              telemetryActivityEvents: state.telemetryActivityEvents,
-            })
-          : [],
-      })
-    }
-    case 'DIRTY_FILES_UPDATED': {
-      const previousChangedPaths = new Set(state.knownChangedPaths)
-
-      return deriveFollowControllerState({
-        ...state,
-        knownChangedPaths: [...new Set(action.liveChangedFiles)],
-        liveChangedFiles: action.liveChangedFiles,
-        nowMs: action.nowMs,
-        pendingDirtyPaths: state.enabled
-          ? computePendingEditedPaths({
-              currentPendingPaths: state.pendingDirtyPaths,
-              liveChangedFiles: action.liveChangedFiles,
-              previousChangedPaths,
-              reprioritizedPaths: [],
-              telemetryActivityEvents: state.telemetryActivityEvents,
-            })
-          : [],
-      })
-    }
-    case 'DIRTY_FILE_SIGNALS_UPDATED': {
-      const reprioritizedPaths = getChangedDirtySignalPaths({
-        nextSignals: action.signals,
-        previousSignals: state.dirtyFileEditSignals,
-      })
-
-      return deriveFollowControllerState({
-        ...state,
-        dirtyFileEditSignals: action.signals,
-        nowMs: action.nowMs,
-        pendingDirtyPaths: state.enabled
-          ? computePendingEditedPaths({
-              currentPendingPaths: state.pendingDirtyPaths,
-              liveChangedFiles: state.liveChangedFiles,
-              previousChangedPaths: new Set(state.knownChangedPaths),
-              reprioritizedPaths,
-              telemetryActivityEvents: state.telemetryActivityEvents,
-            })
-          : [],
-      })
-    }
-    case 'SNAPSHOT_CONTEXT_UPDATED': {
-      const nextSnapshotSignature = buildSnapshotSignature(action.snapshot)
-      const nextSymbolCount = countSnapshotSymbols(action.snapshot)
-      let latestNormalizedEvent = state.latestNormalizedEvent
-
-      if (nextSnapshotSignature !== state.snapshotSignature) {
-        latestNormalizedEvent =
-          nextSymbolCount > state.symbolCount
-            ? createLifecycleEvent('symbols_available', action.nowMs)
-            : createLifecycleEvent('snapshot_refreshed', action.nowMs)
+        pendingDirtyPaths: computePendingEditedPaths({
+          currentPendingPaths: state.pendingDirtyPaths,
+          liveChangedFiles: action.liveChangedFiles,
+          previousChangedPaths: new Set(action.previousChangedPaths),
+          reprioritizedPaths: action.reprioritizedPaths,
+          telemetryActivityEvents: action.telemetryActivityEvents,
+        }),
       }
-
-      return deriveFollowControllerState({
+    case 'FOLLOW_EVENT_RECORDED':
+      return {
         ...state,
-        latestNormalizedEvent,
+        latestEvent: action.event,
         nowMs: action.nowMs,
-        snapshot: action.snapshot,
-        snapshotSignature: nextSnapshotSignature,
-        symbolCount: nextSymbolCount,
-        visibleNodeIds: action.visibleNodeIds,
-      })
-    }
-    case 'VIEW_MODE_CHANGED': {
-      const latestNormalizedEvent =
-        action.mode !== state.telemetryMode
-          ? createViewChangedEvent(action.mode, action.nowMs)
-          : state.latestNormalizedEvent
-
-      return deriveFollowControllerState({
-        ...state,
-        latestNormalizedEvent,
-        nowMs: action.nowMs,
-        telemetryMode: action.mode,
-        viewMode: action.viewMode,
-      })
-    }
+      }
     case 'COMMAND_ACKNOWLEDGED': {
       const nextState: FollowControllerState = {
         ...state,
+        acknowledgedCommandIds: appendAcknowledgedCommandId(
+          state.acknowledgedCommandIds,
+          action.commandId,
+        ),
         nowMs: action.nowMs,
       }
 
       if (action.commandType === 'camera') {
-        nextState.acknowledgedCameraCommandIds = appendAcknowledgedCommandId(
-          nextState.acknowledgedCameraCommandIds,
-          action.commandId,
-        )
-        nextState.lastAcknowledgedCameraCommandId = action.commandId
-
         if (action.intent === 'edit') {
           nextState.cameraLockUntilMs = action.nowMs + FOLLOW_AGENT_EDIT_CAMERA_LOCK_MS
         }
       }
 
       if (action.commandType === 'inspector') {
-        nextState.acknowledgedInspectorCommandIds = appendAcknowledgedCommandId(
-          nextState.acknowledgedInspectorCommandIds,
-          action.commandId,
-        )
-        nextState.lastAcknowledgedInspectorCommandId = action.commandId
-
         if (action.pendingPath) {
           nextState.pendingDirtyPaths = nextState.pendingDirtyPaths.filter(
             (path) => path !== action.pendingPath,
@@ -269,27 +107,22 @@ export function followControllerReducer(
       }
 
       if (action.commandType === 'refresh') {
-        nextState.lastAcknowledgedRefreshCommandId = action.commandId
-        nextState.refreshPending = true
-        nextState.refreshRequestedAtMs = action.nowMs
+        nextState.refreshStatus = 'pending'
       }
 
-      return deriveFollowControllerState(nextState)
+      return nextState
     }
     case 'REFRESH_STATUS_CHANGED':
-      return deriveFollowControllerState({
+      return {
         ...state,
         nowMs: action.nowMs,
-        refreshInFlight: action.status === 'in_flight',
-        refreshPending: action.status !== 'idle',
-        refreshRequestedAtMs:
-          action.status === 'idle' ? null : state.refreshRequestedAtMs ?? action.nowMs,
-      })
+        refreshStatus: action.status,
+      }
     case 'CLOCK_TICKED':
-      return deriveFollowControllerState({
+      return {
         ...state,
         nowMs: action.nowMs,
-      })
+      }
   }
 }
 
@@ -350,42 +183,42 @@ export function computePendingEditedPaths(input: {
   return nextPending
 }
 
-function deriveFollowControllerState(
+export function deriveFollowControllerView(
   state: FollowControllerState,
-): FollowControllerState {
-  if (!state.enabled) {
+  context: FollowControllerContext,
+): FollowControllerView {
+  if (!context.enabled) {
     return {
-      ...state,
-      currentCameraCommand: null,
-      currentInspectorCommand: null,
-      currentRefreshCommand: null,
+      cameraCommand: null,
       debug: buildFollowDebugState({
         cameraLockUntilMs: 0,
         currentMode: 'idle',
         currentTarget: null,
-        latestEvent: state.latestNormalizedEvent,
+        latestEvent: state.latestEvent,
         queueLength: 0,
         refreshInFlight: false,
         refreshPending: false,
         nowMs: state.nowMs,
       }),
+      inspectorCommand: null,
       latestResolvedActivityTarget: null,
       latestResolvedEditTarget: null,
+      refreshCommand: null,
     }
   }
 
-  const indexes = buildFollowIndexes(state.snapshot)
-  const normalizedTelemetryEvents = state.telemetryEnabled
-    ? state.telemetryActivityEvents
+  const indexes = buildFollowIndexes(context.snapshot)
+  const normalizedTelemetryEvents = context.telemetryEnabled
+    ? context.telemetryActivityEvents
         .filter(shouldUseTelemetryEventForFollow)
         .map((event) => createTelemetryFollowEvent(event, state.nowMs))
         .sort(compareFollowEventsDescending)
     : []
-  const normalizedFileOperationEvents = state.fileOperations
+  const normalizedFileOperationEvents = context.fileOperations
     .map((operation) => createFileOperationFollowEvent(operation, state.nowMs))
     .filter((event): event is FollowFileEvent => Boolean(event))
     .sort(compareFollowEventsDescending)
-  const normalizedDirtyEditEvents = state.dirtyFileEditSignals
+  const normalizedDirtyEditEvents = context.dirtyFileEditSignals
     .map(createDirtySignalFollowEvent)
     .sort(compareFollowEventsDescending)
   const normalizedActivityEvents = [
@@ -402,47 +235,35 @@ function deriveFollowControllerState(
     .sort(compareFollowEventsDescending)
   const latestResolvedEdit = resolveLatestEditTarget({
     indexes,
-    liveChangedFiles: state.liveChangedFiles,
-    mode: getFollowTargetMode(state.viewMode),
+    liveChangedFiles: context.liveChangedFiles,
+    mode: getFollowTargetMode(context.viewMode),
     normalizedEditEvents,
     pendingDirtyPaths: state.pendingDirtyPaths,
-    snapshot: state.snapshot,
-    viewMode: state.viewMode,
-    visibleNodeIds: state.visibleNodeIds,
+    snapshot: context.snapshot,
+    viewMode: context.viewMode,
+    visibleNodeIds: context.visibleNodeIds,
   })
   const resolvedActivityQueue = resolveActivityTargets({
     indexes,
-    mode: getFollowTargetMode(state.viewMode),
+    mode: getFollowTargetMode(context.viewMode),
     normalizedActivityEvents: [...normalizedActivityEvents].sort(compareFollowEventsForPlayback),
-    snapshot: state.snapshot,
-    viewMode: state.viewMode,
-    visibleNodeIds: state.visibleNodeIds,
+    snapshot: context.snapshot,
+    viewMode: context.viewMode,
+    visibleNodeIds: context.visibleNodeIds,
   })
   const latestResolvedActivity = resolvedActivityQueue[0] ?? null
   const candidateTargets = [
     ...(latestResolvedEdit ? [latestResolvedEdit.target] : []),
     ...resolvedActivityQueue.map((resolvedTarget) => resolvedTarget.target),
   ]
-  const acknowledgedCameraCommandIds = pruneAcknowledgedCameraCommandIds({
-    acknowledgedCommandIds: state.acknowledgedCameraCommandIds,
-    candidateTargets,
-    currentCommand: state.currentCameraCommand,
-  })
-  const acknowledgedInspectorCommandIds = pruneAcknowledgedInspectorCommandIds({
-    acknowledgedCommandIds: state.acknowledgedInspectorCommandIds,
-    candidateTargets,
-    currentCommand: state.currentInspectorCommand,
-  })
-  const latestNormalizedEvent =
+  const latestEvent =
     latestResolvedEdit?.sourceEvent ??
     latestResolvedActivity?.sourceEvent ??
-    state.latestNormalizedEvent
+    state.latestEvent
   const currentCameraCommand = buildCameraCommand({
-    acknowledgedCommandIds: acknowledgedCameraCommandIds,
+    acknowledgedCommandIds: state.acknowledgedCommandIds,
     cameraLockUntilMs: state.cameraLockUntilMs,
-    currentCommand: state.currentCameraCommand,
     editTargets: latestResolvedEdit ? [latestResolvedEdit.target] : [],
-    lastAcknowledgedCommandId: state.lastAcknowledgedCameraCommandId,
     nowMs: state.nowMs,
     activityTargets: resolvedActivityQueue.map((resolvedTarget) => resolvedTarget.target),
   })
@@ -452,48 +273,44 @@ function deriveFollowControllerState(
     null
   const currentMode: FollowIntent | 'idle' = currentTarget?.intent ?? 'idle'
   const currentInspectorCommand = buildInspectorCommand({
-    acknowledgedCommandIds: acknowledgedInspectorCommandIds,
+    acknowledgedCommandIds: state.acknowledgedCommandIds,
     pendingPath:
       currentTarget?.intent === 'edit' &&
       currentTarget.eventKey === latestResolvedEdit?.target.eventKey
         ? latestResolvedEdit.pendingPath
         : null,
     target: currentTarget,
-    lastAcknowledgedCommandId: state.lastAcknowledgedInspectorCommandId,
   })
   const currentRefreshCommand = buildRefreshCommand({
+    acknowledgedCommandIds: state.acknowledgedCommandIds,
     editTarget: latestResolvedEdit?.target ?? null,
-    lastAcknowledgedCommandId: state.lastAcknowledgedRefreshCommandId,
-    refreshInFlight: state.refreshInFlight,
-    refreshPending: state.refreshPending,
-    viewMode: state.viewMode,
+    refreshStatus: state.refreshStatus,
+    viewMode: context.viewMode,
   })
+  const refreshInFlight = state.refreshStatus === 'in_flight'
+  const refreshPending = state.refreshStatus !== 'idle'
 
   return {
-    ...state,
-    acknowledgedCameraCommandIds,
-    acknowledgedInspectorCommandIds,
-    currentCameraCommand,
-    currentInspectorCommand,
-    currentRefreshCommand,
+    cameraCommand: currentCameraCommand,
     debug: buildFollowDebugState({
       cameraLockUntilMs: state.cameraLockUntilMs,
       currentMode,
       currentTarget,
-      latestEvent: latestNormalizedEvent,
+      latestEvent,
       queueLength: state.pendingDirtyPaths.length +
         countQueuedCameraTargets({
-          acknowledgedCommandIds: acknowledgedCameraCommandIds,
+          acknowledgedCommandIds: state.acknowledgedCommandIds,
           currentCommand: currentCameraCommand,
           targets: candidateTargets,
         }),
-      refreshInFlight: state.refreshInFlight,
-      refreshPending: state.refreshPending,
+      refreshInFlight,
+      refreshPending,
       nowMs: state.nowMs,
     }),
-    latestNormalizedEvent,
+    inspectorCommand: currentInspectorCommand,
     latestResolvedActivityTarget: latestResolvedActivity?.target ?? null,
     latestResolvedEditTarget: latestResolvedEdit?.target ?? null,
+    refreshCommand: currentRefreshCommand,
   }
 }
 
@@ -700,29 +517,4 @@ function resolveFollowTargetFromEvent(input: {
 
 function getFollowTargetMode(viewMode: VisualizerViewMode): TelemetryMode {
   return viewMode === 'symbols' ? 'symbols' : 'files'
-}
-
-function createLifecycleEvent(
-  type: Extract<
-    FollowDomainEvent['type'],
-    'follow_enabled' | 'follow_disabled' | 'snapshot_refreshed' | 'symbols_available'
-  >,
-  nowMs: number,
-): FollowDomainEvent {
-  return {
-    key: `${type}:${nowMs}`,
-    timestamp: new Date(nowMs).toISOString(),
-    timestampMs: nowMs,
-    type,
-  }
-}
-
-function createViewChangedEvent(mode: TelemetryMode, nowMs: number): FollowDomainEvent {
-  return {
-    key: `view:${mode}:${nowMs}`,
-    mode,
-    timestamp: new Date(nowMs).toISOString(),
-    timestampMs: nowMs,
-    type: 'view_changed',
-  }
 }

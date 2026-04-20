@@ -93,38 +93,37 @@ export interface FollowDebugState {
   refreshPending: boolean
 }
 
-export interface FollowControllerState {
+export interface FollowControllerContext {
   enabled: boolean
   telemetryEnabled: boolean
   telemetryMode: TelemetryMode
   viewMode: VisualizerViewMode
   snapshot: ProjectSnapshot | null
-  snapshotSignature: string | null
-  symbolCount: number
   visibleNodeIds: string[]
   fileOperations: AgentFileOperation[]
   telemetryActivityEvents: TelemetryActivityEvent[]
   liveChangedFiles: string[]
   dirtyFileEditSignals: DirtyFileEditSignal[]
+}
+
+export type FollowRefreshStatus = 'idle' | 'pending' | 'in_flight'
+
+export interface FollowControllerState {
   pendingDirtyPaths: string[]
-  knownChangedPaths: string[]
-  latestNormalizedEvent: FollowDomainEvent | null
+  cameraLockUntilMs: number
+  refreshStatus: FollowRefreshStatus
+  acknowledgedCommandIds: string[]
+  latestEvent: FollowDomainEvent | null
+  nowMs: number
+}
+
+export interface FollowControllerView {
+  cameraCommand: FollowCameraCommand | null
+  inspectorCommand: FollowInspectorCommand | null
+  refreshCommand: FollowRefreshCommand | null
+  debug: FollowDebugState
   latestResolvedActivityTarget: FollowTarget | null
   latestResolvedEditTarget: FollowTarget | null
-  cameraLockUntilMs: number
-  refreshPending: boolean
-  refreshInFlight: boolean
-  refreshRequestedAtMs: number | null
-  acknowledgedCameraCommandIds: string[]
-  acknowledgedInspectorCommandIds: string[]
-  lastAcknowledgedCameraCommandId: string | null
-  lastAcknowledgedInspectorCommandId: string | null
-  lastAcknowledgedRefreshCommandId: string | null
-  currentCameraCommand: FollowCameraCommand | null
-  currentInspectorCommand: FollowInspectorCommand | null
-  currentRefreshCommand: FollowRefreshCommand | null
-  debug: FollowDebugState
-  nowMs: number
 }
 
 export type FollowControllerAction =
@@ -134,37 +133,17 @@ export type FollowControllerAction =
       nowMs: number
     }
   | {
-      type: 'TELEMETRY_BATCH_UPDATED'
-      nowMs: number
-      telemetryActivityEvents: TelemetryActivityEvent[]
-      telemetryEnabled: boolean
-    }
-  | {
-      type: 'FILE_OPERATIONS_UPDATED'
-      fileOperations: AgentFileOperation[]
-      nowMs: number
-    }
-  | {
-      type: 'DIRTY_FILES_UPDATED'
+      type: 'DIRTY_PATHS_RECONCILED'
       liveChangedFiles: string[]
       nowMs: number
+      previousChangedPaths: string[]
+      reprioritizedPaths: string[]
+      telemetryActivityEvents: TelemetryActivityEvent[]
     }
   | {
-      type: 'DIRTY_FILE_SIGNALS_UPDATED'
-      signals: DirtyFileEditSignal[]
+      type: 'FOLLOW_EVENT_RECORDED'
+      event: FollowDomainEvent
       nowMs: number
-    }
-  | {
-      type: 'SNAPSHOT_CONTEXT_UPDATED'
-      nowMs: number
-      snapshot: ProjectSnapshot | null
-      visibleNodeIds: string[]
-    }
-  | {
-      type: 'VIEW_MODE_CHANGED'
-      mode: TelemetryMode
-      nowMs: number
-      viewMode: VisualizerViewMode
     }
   | {
       type: 'COMMAND_ACKNOWLEDGED'

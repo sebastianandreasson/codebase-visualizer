@@ -1,17 +1,22 @@
 import type { Node } from '@xyflow/react'
-import { useCallback, useEffect, useReducer } from 'react'
+import { useCallback, useEffect, useMemo, useReducer, useRef } from 'react'
 
 import {
+  createLifecycleFollowEvent,
+  createViewChangedFollowEvent,
+  getChangedDirtySignalPaths,
+  getChangedFileOperationPaths,
+} from './events'
+import {
   createInitialFollowControllerState,
+  deriveFollowControllerView,
   followControllerReducer,
 } from './model'
+import { buildSnapshotSignature, countSnapshotSymbols } from './snapshot'
 import type {
   DirtyFileEditSignal,
-  FollowCameraCommand,
-  FollowDebugState,
-  FollowInspectorCommand,
+  FollowControllerContext,
   FollowIntent,
-  FollowRefreshCommand,
 } from './types'
 import type {
   AgentFileOperation,
@@ -37,10 +42,52 @@ interface UseAgentFollowControllerInput {
 export function useAgentFollowController(
   input: UseAgentFollowControllerInput,
 ) {
+  const visibleNodeIds = useMemo(
+    () => input.visibleNodes.map((node) => node.id),
+    [input.visibleNodes],
+  )
+  const context = useMemo<FollowControllerContext>(
+    () => ({
+      dirtyFileEditSignals: input.dirtyFileEditSignals,
+      enabled: input.enabled,
+      fileOperations: input.fileOperations,
+      liveChangedFiles: input.liveChangedFiles,
+      snapshot: input.snapshot,
+      telemetryActivityEvents: input.telemetryActivityEvents,
+      telemetryEnabled: input.telemetryEnabled,
+      telemetryMode: input.telemetryMode,
+      viewMode: input.viewMode,
+      visibleNodeIds,
+    }),
+    [
+      input.dirtyFileEditSignals,
+      input.enabled,
+      input.fileOperations,
+      input.liveChangedFiles,
+      input.snapshot,
+      input.telemetryActivityEvents,
+      input.telemetryEnabled,
+      input.telemetryMode,
+      input.viewMode,
+      visibleNodeIds,
+    ],
+  )
   const [state, dispatch] = useReducer(
     followControllerReducer,
     undefined,
     createInitialFollowControllerState,
+  )
+  const previousDirtyFileSignalsRef = useRef(input.dirtyFileEditSignals)
+  const previousFileOperationsRef = useRef(input.fileOperations)
+  const previousLiveChangedFilesRef = useRef(input.liveChangedFiles)
+  const previousSnapshotMetaRef = useRef({
+    signature: null as string | null,
+    symbolCount: 0,
+  })
+  const previousTelemetryModeRef = useRef<TelemetryMode>('files')
+  const view = useMemo(
+    () => deriveFollowControllerView(state, context),
+    [context, state],
   )
 
   useEffect(() => {
@@ -52,58 +99,130 @@ export function useAgentFollowController(
   }, [input.enabled])
 
   useEffect(() => {
-    dispatch({
-      type: 'TELEMETRY_BATCH_UPDATED',
-      nowMs: Date.now(),
-      telemetryActivityEvents: input.telemetryActivityEvents,
-      telemetryEnabled: input.telemetryEnabled,
-    })
-  }, [input.telemetryActivityEvents, input.telemetryEnabled])
+    const previousOperations = previousFileOperationsRef.current
+    previousFileOperationsRef.current = input.fileOperations
 
-  useEffect(() => {
-    dispatch({
-      type: 'FILE_OPERATIONS_UPDATED',
-      fileOperations: input.fileOperations,
-      nowMs: Date.now(),
-    })
-  }, [input.fileOperations])
+    if (!input.enabled) {
+      return
+    }
 
-  useEffect(() => {
+    const reprioritizedPaths = getChangedFileOperationPaths({
+      nextOperations: input.fileOperations,
+      previousOperations,
+    })
+
+    if (reprioritizedPaths.length === 0) {
+      return
+    }
+
     dispatch({
-      type: 'DIRTY_FILES_UPDATED',
+      type: 'DIRTY_PATHS_RECONCILED',
       liveChangedFiles: input.liveChangedFiles,
       nowMs: Date.now(),
+      previousChangedPaths: input.liveChangedFiles,
+      reprioritizedPaths,
+      telemetryActivityEvents: input.telemetryActivityEvents,
     })
-  }, [input.liveChangedFiles])
+  }, [
+    input.enabled,
+    input.fileOperations,
+    input.liveChangedFiles,
+    input.telemetryActivityEvents,
+  ])
 
   useEffect(() => {
+    const previousChangedPaths = previousLiveChangedFilesRef.current
+    previousLiveChangedFilesRef.current = input.liveChangedFiles
+
+    if (!input.enabled) {
+      return
+    }
+
     dispatch({
-      type: 'DIRTY_FILE_SIGNALS_UPDATED',
+      type: 'DIRTY_PATHS_RECONCILED',
+      liveChangedFiles: input.liveChangedFiles,
       nowMs: Date.now(),
-      signals: input.dirtyFileEditSignals,
+      previousChangedPaths,
+      reprioritizedPaths: [],
+      telemetryActivityEvents: input.telemetryActivityEvents,
     })
-  }, [input.dirtyFileEditSignals])
+  }, [input.enabled, input.liveChangedFiles, input.telemetryActivityEvents])
 
   useEffect(() => {
+    const previousSignals = previousDirtyFileSignalsRef.current
+    previousDirtyFileSignalsRef.current = input.dirtyFileEditSignals
+
+    if (!input.enabled) {
+      return
+    }
+
+    const reprioritizedPaths = getChangedDirtySignalPaths({
+      nextSignals: input.dirtyFileEditSignals,
+      previousSignals,
+    })
+
+    if (reprioritizedPaths.length === 0) {
+      return
+    }
+
     dispatch({
-      type: 'SNAPSHOT_CONTEXT_UPDATED',
+      type: 'DIRTY_PATHS_RECONCILED',
+      liveChangedFiles: input.liveChangedFiles,
       nowMs: Date.now(),
-      snapshot: input.snapshot,
-      visibleNodeIds: input.visibleNodes.map((node) => node.id),
+      previousChangedPaths: input.liveChangedFiles,
+      reprioritizedPaths,
+      telemetryActivityEvents: input.telemetryActivityEvents,
     })
-  }, [input.snapshot, input.visibleNodes])
+  }, [
+    input.dirtyFileEditSignals,
+    input.enabled,
+    input.liveChangedFiles,
+    input.telemetryActivityEvents,
+  ])
 
   useEffect(() => {
+    const previousSnapshotMeta = previousSnapshotMetaRef.current
+    const nextSnapshotMeta = {
+      signature: buildSnapshotSignature(input.snapshot),
+      symbolCount: countSnapshotSymbols(input.snapshot),
+    }
+    previousSnapshotMetaRef.current = nextSnapshotMeta
+
+    if (nextSnapshotMeta.signature === previousSnapshotMeta.signature) {
+      return
+    }
+
+    const nowMs = Date.now()
     dispatch({
-      type: 'VIEW_MODE_CHANGED',
-      mode: input.telemetryMode,
-      nowMs: Date.now(),
-      viewMode: input.viewMode,
+      type: 'FOLLOW_EVENT_RECORDED',
+      event: createLifecycleFollowEvent(
+        nextSnapshotMeta.symbolCount > previousSnapshotMeta.symbolCount
+          ? 'symbols_available'
+          : 'snapshot_refreshed',
+        nowMs,
+      ),
+      nowMs,
     })
-  }, [input.telemetryMode, input.viewMode])
+  }, [input.snapshot])
 
   useEffect(() => {
-    if (!state.enabled || state.cameraLockUntilMs <= state.nowMs) {
+    const previousMode = previousTelemetryModeRef.current
+    previousTelemetryModeRef.current = input.telemetryMode
+
+    if (input.telemetryMode === previousMode) {
+      return
+    }
+
+    const nowMs = Date.now()
+    dispatch({
+      type: 'FOLLOW_EVENT_RECORDED',
+      event: createViewChangedFollowEvent(input.telemetryMode, nowMs),
+      nowMs,
+    })
+  }, [input.telemetryMode])
+
+  useEffect(() => {
+    if (!input.enabled || state.cameraLockUntilMs <= state.nowMs) {
       return
     }
 
@@ -117,7 +236,7 @@ export function useAgentFollowController(
     return () => {
       window.clearTimeout(timeoutId)
     }
-  }, [state.cameraLockUntilMs, state.enabled, state.nowMs])
+  }, [input.enabled, state.cameraLockUntilMs, state.nowMs])
 
   const acknowledgeCameraCommand = useCallback((input: {
     commandId: string
@@ -163,10 +282,10 @@ export function useAgentFollowController(
   }, [])
 
   return {
-    cameraCommand: state.currentCameraCommand as FollowCameraCommand | null,
-    debugState: state.debug as FollowDebugState,
-    inspectorCommand: state.currentInspectorCommand as FollowInspectorCommand | null,
-    refreshCommand: state.currentRefreshCommand as FollowRefreshCommand | null,
+    cameraCommand: view.cameraCommand,
+    debugState: view.debug,
+    inspectorCommand: view.inspectorCommand,
+    refreshCommand: view.refreshCommand,
     acknowledgeCameraCommand,
     acknowledgeInspectorCommand,
     acknowledgeRefreshCommand,
