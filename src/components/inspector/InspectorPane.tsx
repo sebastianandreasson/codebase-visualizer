@@ -37,7 +37,7 @@ import {
   type WorkspaceProfile,
 } from '../../types'
 import { fetchGitFileDiff } from '../../app/apiClient'
-import { type AgentScopeContext } from '../AgentPanel'
+import { type AgentScopeContext } from '../../agent/agentScopeContext'
 import { AgentContextPane } from '../agent/AgentContextPane'
 import type { ThemeMode } from '../../app/themeBootstrap'
 import type { GroupPrototypeRecord } from '../../semantic/groups/groupPrototypes'

@@ -1,9 +1,19 @@
 import { useEffect, useMemo, useState } from 'react'
 
 import { DesktopAgentClient } from '../../agent/DesktopAgentClient'
+import {
+  areScopeContextsEquivalent,
+  describeInspectorContext,
+  describeScopeContextTitle,
+  hasScopeContext,
+  type AgentScopeContext,
+} from '../../agent/agentScopeContext'
 import type { AgentSessionSummary } from '../../schema/agent'
 import type { LayoutDraft, WorkingSetState, WorkspaceProfile } from '../../types'
-import type { AgentScopeContext } from '../AgentPanel'
+import {
+  AgentScopeContextList,
+  AgentScopeContextOverflow,
+} from './AgentScopeContextView'
 
 interface AgentContextPaneProps {
   activeDraft?: LayoutDraft | null
@@ -172,8 +182,8 @@ export function AgentContextPane({
             Agent requests will start from this working set and only leave it when blocked.
             {workingSet?.source === 'selection' ? ' Pinned from selection.' : ''}
           </p>
-          {renderScopeContextList(workingSetContext)}
-          {renderScopeContextOverflow(workingSetContext)}
+          <AgentScopeContextList context={workingSetContext} />
+          <AgentScopeContextOverflow context={workingSetContext} />
           <div className="cbv-agent-context-actions">
             {hasInspectorContext &&
             !workingSetMatchesInspectorContext &&
@@ -194,8 +204,8 @@ export function AgentContextPane({
           <p className="cbv-eyebrow">Current selection</p>
           <strong>{describeScopeContextTitle(inspectorContext)}</strong>
           <p className="cbv-agent-context-copy">{describeInspectorContext(inspectorContext)}</p>
-          {renderScopeContextList(inspectorContext)}
-          {renderScopeContextOverflow(inspectorContext)}
+          <AgentScopeContextList context={inspectorContext} />
+          <AgentScopeContextOverflow context={inspectorContext} />
           {onAdoptInspectorContextAsWorkingSet ? (
             <div className="cbv-agent-context-actions">
               <button onClick={onAdoptInspectorContextAsWorkingSet} type="button">
@@ -207,107 +217,4 @@ export function AgentContextPane({
       ) : null}
     </div>
   )
-}
-
-function hasScopeContext(
-  context: AgentScopeContext | null | undefined,
-): context is AgentScopeContext {
-  return Boolean(
-    context &&
-      (context.file || context.symbol || context.node || context.files.length || context.symbols.length),
-  )
-}
-
-function describeScopeContextTitle(context: AgentScopeContext) {
-  if (context.symbols.length > 1) {
-    return `${context.symbols.length} symbols`
-  }
-
-  if (context.files.length > 1) {
-    return `${context.files.length} files`
-  }
-
-  return context.symbol?.name ?? context.file?.name ?? context.node?.name ?? 'Selection'
-}
-
-function describeInspectorContext(context: AgentScopeContext) {
-  if (context.symbols.length > 1) {
-    return 'Treat the currently selected symbols as the primary edit scope.'
-  }
-
-  if (context.files.length > 1) {
-    return 'Treat the currently selected files as the primary edit scope.'
-  }
-
-  if (context.symbol) {
-    return `Focused symbol in ${context.file?.path ?? context.symbol.path}.`
-  }
-
-  if (context.file) {
-    return `Focused file ${context.file.path}.`
-  }
-
-  return 'The current inspector target will be used as the default context.'
-}
-
-function renderScopeContextList(context: AgentScopeContext) {
-  if (context.symbols.length > 1) {
-    return (
-      <ul className="cbv-agent-context-list">
-        {context.symbols.slice(0, 6).map((symbol) => (
-          <li key={symbol.id}>
-            <strong>{symbol.name}</strong>
-            <span>{symbol.path}</span>
-          </li>
-        ))}
-      </ul>
-    )
-  }
-
-  if (context.files.length > 1) {
-    return (
-      <ul className="cbv-agent-context-list">
-        {context.files.slice(0, 6).map((file) => (
-          <li key={file.id}>
-            <strong>{file.name}</strong>
-            <span>{file.path}</span>
-          </li>
-        ))}
-      </ul>
-    )
-  }
-
-  return null
-}
-
-function renderScopeContextOverflow(context: AgentScopeContext) {
-  if (context.symbols.length > 6) {
-    return (
-      <p className="cbv-agent-context-more">+ {context.symbols.length - 6} more symbols in scope</p>
-    )
-  }
-
-  if (context.files.length > 6) {
-    return (
-      <p className="cbv-agent-context-more">+ {context.files.length - 6} more files in scope</p>
-    )
-  }
-
-  return null
-}
-
-function areScopeContextsEquivalent(left: AgentScopeContext, right: AgentScopeContext) {
-  return JSON.stringify(getScopePaths(left)) === JSON.stringify(getScopePaths(right))
-}
-
-function getScopePaths(context: AgentScopeContext) {
-  const paths = [
-    ...context.symbols.map((symbol) => symbol.path),
-    ...context.files.map((file) => file.path),
-    context.symbol?.path ?? '',
-    context.file?.path ?? '',
-    context.node?.path ?? '',
-  ]
-
-  return [...new Set(paths.filter(Boolean))].sort()
 }

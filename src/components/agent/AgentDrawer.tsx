@@ -15,7 +15,8 @@ import type {
   WorkspaceProfile,
   WorkingSetState,
 } from '../../types'
-import { AgentPanel, type AgentScopeContext } from '../AgentPanel'
+import type { AgentScopeContext } from '../../agent/agentScopeContext'
+import { AgentPanel } from '../AgentPanel'
 import { AutonomousRunsSurface } from '../runs/AutonomousRunsSurface'
 
 type AgentDrawerTab = 'chat' | 'agents' | 'layout'

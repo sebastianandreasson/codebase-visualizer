@@ -13,7 +13,7 @@ export interface AgentSettingsDraft {
   provider: string
 }
 
-type AgentSettingsDraftPatch = Partial<Pick<
+export type AgentSettingsDraftPatch = Partial<Pick<
   AgentSettingsDraft,
   | 'apiKey'
   | 'authMode'
@@ -24,7 +24,7 @@ type AgentSettingsDraftPatch = Partial<Pick<
   | 'provider'
 >>
 
-interface AgentSettingsDraftUpdateOptions {
+export interface AgentSettingsDraftUpdateOptions {
   dirty?: boolean
 }
 
