@@ -1,5 +1,5 @@
 import type { VisualizerViewMode } from '../../schema/layout'
-import type { ProjectSnapshot } from '../../schema/snapshot'
+import { isSymbolNode, type ProjectSnapshot } from '../../schema/snapshot'
 import type { TelemetryActivityEvent, TelemetryMode } from '../../schema/telemetry'
 import {
   appendAcknowledgedCommandId,
@@ -453,6 +453,34 @@ function resolveFollowTargetFromEvent(input: {
     return null
   }
 
+  const explicitSymbolIds = getVisibleExplicitSymbolIds({
+    fileNodeId,
+    snapshot: input.snapshot,
+    symbolNodeIds: input.sourceEvent.symbolNodeIds ?? [],
+    visibleNodeIdSet,
+  })
+
+  if (explicitSymbolIds.length > 0 && input.mode === 'symbols') {
+    return {
+      pendingPath: null,
+      sourceEvent: input.sourceEvent,
+      target: {
+        confidence: 'exact_symbol',
+        eventKey: input.sourceEvent.eventKey,
+        fileNodeId,
+        intent: input.intent,
+        kind: 'symbol',
+        path: input.sourceEvent.path,
+        primaryNodeId: explicitSymbolIds[0],
+        requiresSnapshotRefresh: input.intent === 'edit' && input.viewMode === 'symbols',
+        shouldOpenInspector: true,
+        symbolNodeIds: explicitSymbolIds,
+        timestamp: input.sourceEvent.timestamp,
+        toolNames: input.sourceEvent.toolNames,
+      },
+    }
+  }
+
   const visibleSymbolIds =
     input.mode === 'symbols'
       ? getPreferredFollowSymbolIdsForFile({
@@ -513,6 +541,25 @@ function resolveFollowTargetFromEvent(input: {
       toolNames: input.sourceEvent.toolNames,
     },
   }
+}
+
+function getVisibleExplicitSymbolIds(input: {
+  fileNodeId: string
+  snapshot: ProjectSnapshot
+  symbolNodeIds: string[]
+  visibleNodeIdSet: ReadonlySet<string>
+}) {
+  return [...new Set(input.symbolNodeIds)]
+    .filter((nodeId) => {
+      const node = input.snapshot.nodes[nodeId]
+
+      return Boolean(
+        node &&
+        isSymbolNode(node) &&
+        node.fileId === input.fileNodeId &&
+        input.visibleNodeIdSet.has(nodeId),
+      )
+    })
 }
 
 function getFollowTargetMode(viewMode: VisualizerViewMode): TelemetryMode {

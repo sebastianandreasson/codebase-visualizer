@@ -154,6 +154,63 @@ describe('agent file operation normalization', () => {
       },
     ])
   })
+
+  it('keeps explicit symbol ids and normalizes symbol paths to file paths', () => {
+    const symbolNodeId = 'symbol:src/agent/foo.ts:runAgent:10:0-22:1'
+    const operations = createFileOperationsFromToolInvocation({
+      invocation: createInvocation({
+        args: {
+          path: 'src/agent/foo.ts#runAgent@10:0',
+          symbolNodeId,
+        },
+        toolName: 'readSymbolSlice',
+      }),
+      sessionId: 'session-1',
+      workspaceRootDir: '/workspace',
+    })
+
+    expect(operations).toMatchObject([
+      {
+        kind: 'file_read',
+        nodeIds: [symbolNodeId],
+        path: 'src/agent/foo.ts',
+        paths: ['src/agent/foo.ts'],
+        symbolNodeIds: [symbolNodeId],
+        toolName: 'readSymbolSlice',
+      },
+    ])
+  })
+
+  it('derives symbol ids and file paths from structured tool results', () => {
+    const symbolNodeId = 'symbol:src/planner/layoutQuery.ts:findNodes:100:2-140:3'
+    const operations = createFileOperationsFromToolInvocation({
+      invocation: createInvocation({
+        args: { operation: 'findSymbols' },
+        endedAt: '2026-04-18T10:00:02.000Z',
+        resultPreview: JSON.stringify({
+          nodes: [
+            {
+              id: symbolNodeId,
+              kind: 'symbol',
+              path: 'src/planner/layoutQuery.ts#findNodes@100:2',
+            },
+          ],
+        }),
+        toolName: 'findSymbols',
+      }),
+      sessionId: 'session-1',
+      workspaceRootDir: '/workspace',
+    })
+
+    expect(operations).toMatchObject([
+      {
+        nodeIds: [symbolNodeId],
+        path: 'src/planner/layoutQuery.ts',
+        paths: ['src/planner/layoutQuery.ts'],
+        symbolNodeIds: [symbolNodeId],
+      },
+    ])
+  })
 })
 
 function createInvocation(

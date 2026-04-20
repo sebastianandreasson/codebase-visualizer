@@ -112,6 +112,43 @@ describe('follow model', () => {
     expect(state.currentInspectorCommand?.target.toolNames).toEqual(['apply_patch'])
   })
 
+  it('prefers explicit symbol ids from file operations over file-level symbol fallback', () => {
+    const snapshot = createSnapshot()
+    const state = reduceFollowState([
+      { type: 'FOLLOW_TOGGLED', enabled: true, nowMs: 1_540 },
+      { type: 'VIEW_MODE_CHANGED', mode: 'symbols', nowMs: 1_550, viewMode: 'symbols' },
+      {
+        type: 'SNAPSHOT_CONTEXT_UPDATED',
+        nowMs: 1_560,
+        snapshot,
+        visibleNodeIds: ['symbol:anon', 'symbol:createPRNG'],
+      },
+      {
+        type: 'FILE_OPERATIONS_UPDATED',
+        fileOperations: [
+          createFileOperation({
+            id: 'operation:read:explicit-symbol',
+            kind: 'file_read',
+            path: 'debug_brute.js',
+            symbolNodeIds: ['symbol:anon'],
+            timestamp: '2026-04-18T10:00:01.000Z',
+            toolName: 'readSymbolSlice',
+          }),
+        ],
+        nowMs: 1_570,
+      },
+    ])
+
+    expect(state.latestResolvedActivityTarget).toEqual(
+      expect.objectContaining({
+        confidence: 'exact_symbol',
+        kind: 'symbol',
+        primaryNodeId: 'symbol:anon',
+        symbolNodeIds: ['symbol:anon'],
+      }),
+    )
+  })
+
   it('keeps the primary path first for same-timestamp multi-path operations', () => {
     const snapshot = createSnapshot()
     const state = reduceFollowState([
@@ -1154,6 +1191,7 @@ function createFileOperation(
     sessionId: overrides.sessionId ?? 'session:test',
     source: overrides.source ?? 'pi-sdk',
     status: overrides.status ?? 'completed',
+    symbolNodeIds: overrides.symbolNodeIds,
     timestamp: overrides.timestamp,
     toolCallId: overrides.toolCallId ?? 'call:test',
     toolName: overrides.toolName,

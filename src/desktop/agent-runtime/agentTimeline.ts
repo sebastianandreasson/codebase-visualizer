@@ -5,6 +5,7 @@ import type {
   AgentTimelineItem,
   AgentToolInvocation,
 } from '../../schema/agent'
+import { deriveToolCodeReferences } from './agentCodeReferences'
 
 const MAX_RESULT_PREVIEW_LENGTH = 1200
 const MAX_PATH_COUNT = 8
@@ -75,10 +76,12 @@ export function createToolTimelineItem(
     endedAt: invocation.endedAt,
     id: `agent-timeline:tool:${invocation.toolCallId}`,
     isError,
+    nodeIds: invocation.nodeIds,
     paths: invocation.paths ?? deriveTimelinePaths(invocation.toolName, invocation.args),
     resultPreview: invocation.resultPreview,
     startedAt: invocation.startedAt,
     status: invocation.endedAt ? (isError ? 'error' : 'completed') : 'running',
+    symbolNodeIds: invocation.symbolNodeIds,
     toolCallId: invocation.toolCallId,
     toolName: invocation.toolName,
     type: 'tool',
@@ -94,13 +97,17 @@ export function normalizeToolInvocation(input: {
   toolCallId: string
   toolName: string
 }): AgentToolInvocation {
+  const codeReferences = deriveToolCodeReferences(input.toolName, input.args, input.result)
+
   return {
     args: input.args,
     endedAt: input.endedAt,
     isError: input.isError,
+    nodeIds: codeReferences.nodeIds,
     paths: deriveTimelinePaths(input.toolName, input.args, input.result),
     resultPreview: summarizeTimelineValue(input.result),
     startedAt: input.startedAt ?? new Date().toISOString(),
+    symbolNodeIds: codeReferences.symbolNodeIds,
     toolCallId: input.toolCallId,
     toolName: input.toolName,
   }

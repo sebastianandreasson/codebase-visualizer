@@ -9,6 +9,11 @@ import type {
   AgentMessage,
   AgentToolInvocation,
 } from '../../schema/agent'
+import {
+  deriveToolCodeReferences,
+  mergeToolCodeReferences,
+  stripSymbolPathSuffix,
+} from './agentCodeReferences'
 
 const MAX_OPERATION_PATHS = 12
 
@@ -82,6 +87,14 @@ export function createFileOperationsFromToolInvocation(input: {
   if (parsedResultPreview !== undefined) {
     collectPathLikeValues(parsedResultPreview, pathSet, input.workspaceRootDir)
   }
+  const codeReferences = mergeToolCodeReferences(
+    input.invocation,
+    deriveToolCodeReferences(
+      input.invocation.toolName,
+      input.invocation.args,
+      parsedResultPreview,
+    ),
+  )
 
   if (isShellTool && shellCommand) {
     for (const pathValue of extractShellPathTokens(shellCommand)) {
@@ -101,11 +114,13 @@ export function createFileOperationsFromToolInvocation(input: {
           confidence: classification.confidence,
           invocation: input.invocation,
           kind: 'shell_command',
+          nodeIds: codeReferences.nodeIds,
           path: undefined,
           paths: [],
           sessionId: input.sessionId,
           source,
           status,
+          symbolNodeIds: codeReferences.symbolNodeIds,
           timestamp,
         }),
       ]
@@ -119,12 +134,14 @@ export function createFileOperationsFromToolInvocation(input: {
       confidence: classification.confidence,
       invocation: input.invocation,
       kind: classification.kind,
+      nodeIds: codeReferences.nodeIds,
       path: pathValue,
       pathIndex: index,
       paths,
       sessionId: input.sessionId,
       source,
       status,
+      symbolNodeIds: codeReferences.symbolNodeIds,
       timestamp,
     }),
   )
@@ -191,12 +208,14 @@ function createOperation(input: {
   confidence: AgentFileOperationConfidence
   invocation: AgentToolInvocation
   kind: AgentFileOperationKind
+  nodeIds?: string[]
   path?: string
   pathIndex?: number
   paths: string[]
   sessionId: string
   source: AgentFileOperationSource
   status: AgentFileOperationStatus
+  symbolNodeIds?: string[]
   timestamp: string
 }): AgentFileOperation {
   return {
@@ -209,12 +228,14 @@ function createOperation(input: {
       sessionId: input.sessionId,
     }),
     kind: input.kind,
+    nodeIds: input.nodeIds,
     path: input.path,
     paths: input.paths,
     resultPreview: input.invocation.resultPreview,
     sessionId: input.sessionId,
     source: input.source,
     status: input.status,
+    symbolNodeIds: input.symbolNodeIds,
     timestamp: input.timestamp,
     toolCallId: input.invocation.toolCallId,
     toolName: input.invocation.toolName,
@@ -341,9 +362,7 @@ function collectPathLikeValues(
   }
 
   if (typeof value === 'string') {
-    if (looksPathLike(value, true)) {
-      addNormalizedPath(output, value, workspaceRootDir)
-    }
+    addNormalizedPath(output, value, workspaceRootDir)
     return
   }
 
@@ -431,6 +450,7 @@ function addNormalizedPath(
 function normalizeOperationPath(value: string, workspaceRootDir?: string) {
   let normalized = cleanPathToken(value)
 
+  normalized = stripSymbolPathSuffix(normalized)
   normalized = stripLineSuffix(normalized)
 
   if (!normalized || !looksPathLike(normalized, true)) {
@@ -541,7 +561,11 @@ function getActionTerms(args: unknown) {
 }
 
 function normalizeClassifyingText(value: string) {
-  return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, ' ')
+  return value
+    .trim()
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
 }
 
 function containsAnyMarker(value: string, markers: string[]) {

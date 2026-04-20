@@ -32,6 +32,7 @@ import {
   type ExtensionFactory,
   type SessionInfo,
   type SlashCommandInfo,
+  type ToolDefinition,
   type ToolInfo,
 } from '@mariozechner/pi-coding-agent'
 
@@ -73,6 +74,9 @@ import type {
   LayoutSuggestionPayload,
   LayoutSuggestionResponse,
 } from '../../schema/api'
+import {
+  createSymbolQueryToolDefinitions,
+} from '../agent-runtime/semanticodeSymbolTools'
 import {
   createFileOperationsFromAgentMessage,
   createFileOperationsFromToolInvocation,
@@ -491,6 +495,7 @@ export class PiAgentService {
           sessionManager,
           sessionStartEvent,
           thinkingLevel: 'medium',
+          customTools: createSymbolQueryToolDefinitions(cwd),
           tools: [
             ...createCodingTools(cwd),
             createGrepTool(cwd),
@@ -797,11 +802,11 @@ export class PiAgentService {
     try {
       if (settings.authMode === 'brokered_oauth') {
         await this.runSdkLayoutSuggestion({
-          input,
-          provider,
-          querySession,
-          settings,
-          workspaceRootDir,
+      input,
+      provider,
+      querySession,
+      settings,
+      workspaceRootDir,
         })
       } else {
         await this.runNativeLayoutSuggestion({
@@ -1557,7 +1562,7 @@ export class PiAgentService {
       rootDir: input.workspaceRootDir,
       settings: input.settings,
       systemPrompt: buildLayoutSuggestionSystemPrompt(),
-      tools: createLayoutQueryTools(input.querySession),
+      customTools: createLayoutQueryToolDefinitions(input.querySession),
     })
 
     await this.telemetryService?.recordInteractivePrompt({
@@ -1582,6 +1587,7 @@ export class PiAgentService {
   }
 
   private async runTransientSdkPrompt(input: {
+    customTools?: ToolDefinition[]
     message: string
     provider: string
     requireAssistantText?: boolean
@@ -1649,6 +1655,7 @@ export class PiAgentService {
           services,
           sessionManager,
           sessionStartEvent,
+          customTools: input.customTools,
           thinkingLevel: 'medium',
           tools: (input.tools ?? []) as never,
         })),
@@ -2535,6 +2542,48 @@ function createLayoutQueryTools(
   ]
 }
 
+function createLayoutQueryToolDefinitions(
+  querySession: ReturnType<typeof registerLayoutQuerySession>,
+): ToolDefinition[] {
+  return [
+    createLayoutQueryToolDefinition(
+      'getWorkspaceSummary',
+      'Get compact workspace counts, available facets/tags, top directories, and existing layout summaries.',
+      querySession,
+    ),
+    createLayoutQueryToolDefinition(
+      'findNodes',
+      'Find compact node references using filters like kind, symbolKind, facet, tag, pathPrefix, pathContains, nameContains, nameRegex, LOC range, degree range, and limit.',
+      querySession,
+    ),
+    createLayoutQueryToolDefinition(
+      'getNodes',
+      'Get compact node references for explicit nodeIds.',
+      querySession,
+    ),
+    createLayoutQueryToolDefinition(
+      'getNeighborhood',
+      'Expand a bounded graph neighborhood from seedNodeIds using optional edgeKinds, direction, depth, and limit.',
+      querySession,
+    ),
+    createLayoutQueryToolDefinition(
+      'summarizeScope',
+      'Summarize nodes matched by a selector and return counts plus representative nodes.',
+      querySession,
+    ),
+    createLayoutQueryToolDefinition(
+      'previewHybridLayout',
+      'Validate a hybrid layout proposal without saving it.',
+      querySession,
+    ),
+    createLayoutQueryToolDefinition(
+      'createLayoutDraft',
+      'Create and save the final draft from a hybrid layout proposal. This must be called to complete layout generation.',
+      querySession,
+    ),
+  ]
+}
+
 function createLayoutQueryTool(
   operation: string,
   description: string,
@@ -2558,6 +2607,55 @@ function createLayoutQueryTool(
       },
       type: 'object',
     } as never,
+    execute: async (_toolCallId, params) => {
+      const result = await querySession.execute({
+        args: params && typeof params === 'object' && 'args' in params
+          ? (params.args as Record<string, unknown>)
+          : (params as Record<string, unknown>),
+        operation: operation as never,
+      })
+
+      return {
+        content: [
+          {
+            text: JSON.stringify(result),
+            type: 'text',
+          },
+        ],
+        details: result,
+      }
+    },
+  }
+}
+
+function createLayoutQueryToolDefinition(
+  operation: string,
+  description: string,
+  querySession: ReturnType<typeof registerLayoutQuerySession>,
+): ToolDefinition {
+  return {
+    description,
+    label: operation,
+    name: operation,
+    parameters: {
+      additionalProperties: true,
+      properties: {
+        args: {
+          additionalProperties: true,
+          type: 'object',
+        },
+        proposal: {
+          additionalProperties: true,
+          type: 'object',
+        },
+      },
+      type: 'object',
+    } as never,
+    promptGuidelines: [
+      'For layout work, use the compact Semanticode layout query tools instead of reading or dumping the full snapshot.',
+      'Finish layout generation by calling createLayoutDraft.',
+    ],
+    promptSnippet: description,
     execute: async (_toolCallId, params) => {
       const result = await querySession.execute({
         args: params && typeof params === 'object' && 'args' in params
@@ -3177,6 +3275,8 @@ function buildWorkspaceSystemPrompt(workspaceRootDir: string) {
     'You are embedded inside Semanticode, a desktop code exploration and editing environment.',
     `The active workspace root is: ${workspaceRootDir}`,
     'Prefer reasoning about the active repository and use tools rather than making assumptions about the workspace state.',
+    'When symbol query tools are available, use getSymbolWorkspaceSummary, findSymbols, getSymbolNeighborhood, and readSymbolSlice before broad file reads.',
+    'Use readFileWindow as a bounded fallback for imports, module headers, configs, tests, or other code that cannot be represented as one symbol.',
   ].join('\n')
 }
 

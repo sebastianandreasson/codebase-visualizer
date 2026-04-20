@@ -92,6 +92,7 @@ export function createFileOperationFollowEvent(
     path: operation.path,
     sourcePriority: getFileOperationSourcePriority(operation),
     sourceSequence: getOperationPathSequence(operation),
+    symbolNodeIds: operation.symbolNodeIds,
     timestamp: operation.timestamp,
     timestampMs,
     toolNames: [operation.toolName],

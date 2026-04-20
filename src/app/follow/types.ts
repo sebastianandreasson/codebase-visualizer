@@ -24,6 +24,7 @@ export type FollowDomainEvent =
       key: string
       eventKey: string
       path: string
+      symbolNodeIds?: string[]
       timestamp: string
       timestampMs: number
       toolNames: string[]

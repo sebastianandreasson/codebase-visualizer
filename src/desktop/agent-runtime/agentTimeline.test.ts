@@ -119,6 +119,37 @@ describe('agent timeline normalization', () => {
     })
   })
 
+  it('carries symbol node ids from tool arguments and results', () => {
+    const symbolNodeId = 'symbol:src/app/follow/model.ts:resolveFollowTargetFromEvent:390:0-480:1'
+    const invocation = normalizeToolInvocation({
+      args: {
+        symbolNodeId,
+      },
+      endedAt: '2026-04-15T00:00:00.042Z',
+      result: {
+        nodes: [
+          {
+            id: symbolNodeId,
+            kind: 'symbol',
+          },
+        ],
+      },
+      startedAt: '2026-04-15T00:00:00.000Z',
+      toolCallId: 'call-symbol',
+      toolName: 'readSymbolSlice',
+    })
+
+    expect(invocation).toMatchObject({
+      nodeIds: [symbolNodeId],
+      symbolNodeIds: [symbolNodeId],
+    })
+    expect(createToolTimelineItem(invocation)).toMatchObject({
+      nodeIds: [symbolNodeId],
+      symbolNodeIds: [symbolNodeId],
+      type: 'tool',
+    })
+  })
+
   it('upserts streaming tool updates in place', () => {
     const started = createToolTimelineItem(normalizeToolInvocation({
       args: { command: 'npm test' },

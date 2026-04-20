@@ -120,8 +120,10 @@ export interface AgentToolInvocation {
   startedAt: string
   endedAt?: string
   isError?: boolean
+  nodeIds?: string[]
   paths?: string[]
   resultPreview?: string
+  symbolNodeIds?: string[]
 }
 
 export type AgentFileOperationKind =
@@ -147,12 +149,14 @@ export interface AgentFileOperation {
   confidence: AgentFileOperationConfidence
   id: string
   kind: AgentFileOperationKind
+  nodeIds?: string[]
   path?: string
   paths: string[]
   resultPreview?: string
   sessionId: string
   source: AgentFileOperationSource
   status: AgentFileOperationStatus
+  symbolNodeIds?: string[]
   timestamp: string
   toolCallId?: string
   toolName: string
@@ -180,9 +184,11 @@ export type AgentTimelineItem =
       endedAt?: string
       durationMs?: number
       isError?: boolean
+      nodeIds?: string[]
       paths?: string[]
       resultPreview?: string
       status: 'running' | 'completed' | 'error'
+      symbolNodeIds?: string[]
     }
   | {
       id: string
