@@ -13,13 +13,12 @@ import {
 import { createPortal } from 'react-dom'
 
 import { DesktopAgentClient, type DesktopAgentBridgeInfo } from '../agent/DesktopAgentClient'
+import { useAgentSettingsDraft } from './agentPanel/useAgentSettingsDraft'
 import type {
   AgentAuthMode,
   AgentCommandInfo,
   AgentControlState,
   AgentEvent,
-  AgentMessage,
-  AgentSessionListItem,
   AgentSessionSummary,
   AgentSettingsState,
   AgentTimelineItem,
@@ -98,22 +97,15 @@ export function AgentPanel({
     seedId: null,
     value: '',
   })
-  const [, setMessages] = useState<AgentMessage[]>([])
   const [timeline, setTimeline] = useState<AgentTimelineItem[]>([])
-  const [, setSessions] = useState<AgentSessionListItem[]>([])
   const [session, setSession] = useState<AgentSessionSummary | null>(null)
   const [controls, setControls] = useState<AgentControlState | null>(null)
   const [settings, setSettings] = useState<AgentSettingsState | null>(null)
-  const [authModeValue, setAuthModeValue] = useState<AgentAuthMode>('brokered_oauth')
-  const [providerValue, setProviderValue] = useState('')
-  const [modelValue, setModelValue] = useState('')
-  const [apiKeyValue, setApiKeyValue] = useState('')
-  const [manualRedirectUrlValue, setManualRedirectUrlValue] = useState('')
-  const [openAiOAuthClientIdValue, setOpenAiOAuthClientIdValue] = useState('')
-  const [openAiOAuthClientSecretValue, setOpenAiOAuthClientSecretValue] = useState('')
-  const [settingsDraftDirty, setSettingsDraftDirty] = useState(false)
-  const [openAiOAuthClientIdDirty, setOpenAiOAuthClientIdDirty] = useState(false)
-  const [, setOpenAiOAuthClientSecretDirty] = useState(false)
+  const {
+    applySettingsDraftFromSettings,
+    settingsDraft,
+    updateSettingsDraft,
+  } = useAgentSettingsDraft()
   const [pending, setPending] = useState(false)
   const [settingsPending, setSettingsPending] = useState(false)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
@@ -129,7 +121,15 @@ export function AgentPanel({
     promptSeed && promptSeed.id !== composerState.seedId
       ? promptSeed.value
       : composerState.value
-  const displayTimeline = timeline
+  const authModeValue = settingsDraft.authMode
+  const providerValue = settingsDraft.provider
+  const modelValue = settingsDraft.modelId
+  const apiKeyValue = settingsDraft.apiKey
+  const manualRedirectUrlValue = settingsDraft.manualRedirectUrl
+  const openAiOAuthClientIdValue = settingsDraft.openAiOAuthClientId
+  const openAiOAuthClientSecretValue = settingsDraft.openAiOAuthClientSecret
+  const settingsDraftDirty = settingsDraft.dirty
+  const openAiOAuthClientIdDirty = settingsDraft.openAiOAuthClientIdDirty
 
   useEffect(() => {
     sessionRef.current = session
@@ -197,10 +197,7 @@ export function AgentPanel({
         setSettings(nextSettings)
 
         if (!settingsDraftDirty) {
-          setAuthModeValue(nextSettings.authMode)
-          setProviderValue(nextSettings.provider)
-          setModelValue(nextSettings.modelId)
-          setOpenAiOAuthClientIdValue(nextSettings.openAiOAuthClientId ?? '')
+          applySettingsDraftFromSettings(nextSettings)
         }
 
         const currentSession = sessionRef.current
@@ -239,7 +236,6 @@ export function AgentPanel({
           }
 
           setSession(nextState.session)
-          setMessages(nextState.messages)
           setTimeline(nextState.timeline ?? [])
         }
       } catch (error) {
@@ -262,7 +258,6 @@ export function AgentPanel({
         }
 
         setSession(state.session)
-        setMessages(state.messages)
         setTimeline(state.timeline ?? [])
       } catch (error) {
         if (cancelled) {
@@ -315,7 +310,7 @@ export function AgentPanel({
           return
         }
 
-        handleAgentEvent(event, sessionRef, setMessages, setTimeline, setSession)
+        handleAgentEvent(event, sessionRef, setTimeline, setSession)
 
         if (event.type === 'session_created' || event.type === 'session_updated') {
           void syncControls()
@@ -338,7 +333,13 @@ export function AgentPanel({
         window.clearInterval(intervalId)
       }
     }
-  }, [agentClient, bridgeInfo.hasAgentBridge, openAiOAuthClientIdDirty, settingsDraftDirty])
+  }, [
+    agentClient,
+    applySettingsDraftFromSettings,
+    bridgeInfo.hasAgentBridge,
+    openAiOAuthClientIdDirty,
+    settingsDraftDirty,
+  ])
 
   useEffect(() => {
     if (!settings || !providerValue) {
@@ -351,14 +352,14 @@ export function AgentPanel({
       return
     }
 
-    setModelValue(availableModels[0]?.id ?? '')
-  }, [authModeValue, modelValue, providerValue, settings])
+    updateSettingsDraft({ modelId: availableModels[0]?.id ?? '' })
+  }, [authModeValue, modelValue, providerValue, settings, updateSettingsDraft])
 
   useEffect(() => {
     if (authModeValue === 'brokered_oauth' && providerValue && providerValue !== 'openai-codex') {
-      setProviderValue('openai-codex')
+      updateSettingsDraft({ provider: 'openai-codex' })
     }
-  }, [authModeValue, providerValue])
+  }, [authModeValue, providerValue, updateSettingsDraft])
 
   useEffect(() => {
     const listElement = messageListRef.current
@@ -368,7 +369,7 @@ export function AgentPanel({
     }
 
     listElement.scrollTop = listElement.scrollHeight
-  }, [displayTimeline])
+  }, [timeline])
 
   useEffect(() => {
     if (!promptSeed) {
@@ -513,19 +514,16 @@ export function AgentPanel({
 
     if (nextSettings) {
       setSettings(nextSettings)
-      setAuthModeValue(nextSettings.authMode)
-      setModelValue(nextSettings.modelId)
-      setProviderValue(nextSettings.provider)
+      applySettingsDraftFromSettings(nextSettings)
     } else {
-      if (input.authMode) {
-        setAuthModeValue(input.authMode)
-      }
-      setModelValue(input.modelId)
-      setProviderValue(input.provider)
+      updateSettingsDraft({
+        authMode: input.authMode ?? authModeValue,
+        modelId: input.modelId,
+        provider: input.provider,
+      })
     }
 
     setSession(resolvedSession)
-    setMessages(state.messages)
     setTimeline(state.timeline ?? [])
     appendLocalLifecycle(
       'model changed',
@@ -604,7 +602,6 @@ export function AgentPanel({
         setControls(nextControls)
       }
       setSession(nextSession ?? state.session)
-      setMessages(state.messages)
       setTimeline(state.timeline ?? [])
       return true
     }
@@ -619,8 +616,6 @@ export function AgentPanel({
       const latestSession = commandValue
         ? result.sessions.find((entry) => entry.path === commandValue || entry.id === commandValue)
         : result.sessions[0]
-
-      setSessions(result.sessions)
 
       if (!latestSession) {
         appendLocalLifecycle(
@@ -642,14 +637,12 @@ export function AgentPanel({
         setControls(nextControls)
       }
       setSession(nextSession ?? state.session)
-      setMessages(state.messages)
       setTimeline(state.timeline ?? [])
       return true
     }
 
     if (commandName === 'session') {
       const result = await agentClient.listSessions()
-      setSessions(result.sessions)
       appendLocalLifecycle(
         'session',
         session?.sessionFile
@@ -741,7 +734,6 @@ export function AgentPanel({
         setControls(nextControls)
       }
       setSession(nextSession ?? state.session)
-      setMessages(state.messages)
       setTimeline(state.timeline ?? [])
       return true
     }
@@ -808,14 +800,12 @@ export function AgentPanel({
         setControls(nextControls)
       }
       setSession(state.session)
-      setMessages(state.messages)
       setTimeline(state.timeline ?? [])
       return true
     }
 
     if (commandName === 'clear') {
       setTimeline([])
-      setMessages([])
       return true
     }
 
@@ -848,13 +838,7 @@ export function AgentPanel({
       })
 
       setSettings(nextSettings)
-      setAuthModeValue(nextSettings.authMode)
-      setProviderValue(nextSettings.provider)
-      setModelValue(nextSettings.modelId)
-      setOpenAiOAuthClientIdValue(nextSettings.openAiOAuthClientId ?? '')
-      setSettingsDraftDirty(false)
-      setOpenAiOAuthClientIdDirty(false)
-      setOpenAiOAuthClientSecretDirty(false)
+      applySettingsDraftFromSettings(nextSettings)
     } finally {
       setSettingsPending(false)
     }
@@ -916,21 +900,12 @@ export function AgentPanel({
       })
 
       setSettings(nextSettings)
-      setAuthModeValue(nextSettings.authMode)
-      setProviderValue(nextSettings.provider)
-      setModelValue(nextSettings.modelId)
-      setApiKeyValue('')
-      setOpenAiOAuthClientIdValue(nextSettings.openAiOAuthClientId ?? '')
-      setOpenAiOAuthClientSecretValue('')
-      setSettingsDraftDirty(false)
-      setOpenAiOAuthClientIdDirty(false)
-      setOpenAiOAuthClientSecretDirty(false)
+      applySettingsDraftFromSettings(nextSettings)
 
       const nextSession = await agentClient.createSession()
       setSession(nextSession)
       const state = await agentClient.getHttpState()
       setSession(state.session)
-      setMessages(state.messages)
       setTimeline(state.timeline ?? [])
     } catch (error) {
       setErrorMessage(
@@ -957,14 +932,11 @@ export function AgentPanel({
       })
 
       setSettings(nextSettings)
-      setAuthModeValue(nextSettings.authMode)
-      setSettingsDraftDirty(false)
-      setApiKeyValue('')
+      applySettingsDraftFromSettings(nextSettings)
       const nextSession = await agentClient.createSession()
       setSession(nextSession)
       const state = await agentClient.getHttpState()
       setSession(state.session)
-      setMessages(state.messages)
       setTimeline(state.timeline ?? [])
     } catch (error) {
       setErrorMessage(
@@ -1007,14 +979,7 @@ export function AgentPanel({
       })
 
       setSettings(nextSettings)
-      setAuthModeValue(nextSettings.authMode)
-      setProviderValue(nextSettings.provider)
-      setModelValue(nextSettings.modelId)
-      setOpenAiOAuthClientIdValue(nextSettings.openAiOAuthClientId ?? '')
-      setOpenAiOAuthClientSecretValue('')
-      setSettingsDraftDirty(false)
-      setOpenAiOAuthClientIdDirty(false)
-      setOpenAiOAuthClientSecretDirty(false)
+      applySettingsDraftFromSettings(nextSettings)
 
       const result = await agentClient.beginBrokeredLogin()
       const brokerSession = await agentClient.getBrokerSession()
@@ -1063,7 +1028,6 @@ export function AgentPanel({
       setSession(nextSession)
       const state = await agentClient.getHttpState()
       setSession(state.session)
-      setMessages(state.messages)
       setTimeline(state.timeline ?? [])
     } catch (error) {
       setErrorMessage(
@@ -1083,14 +1047,11 @@ export function AgentPanel({
       const nextSettings = await agentClient.getSettings()
 
       setSettings(nextSettings)
-      setSettingsDraftDirty(false)
-      setOpenAiOAuthClientIdValue(nextSettings.openAiOAuthClientId ?? '')
-      setOpenAiOAuthClientIdDirty(false)
+      applySettingsDraftFromSettings(nextSettings)
       const nextSession = await agentClient.createSession()
       setSession(nextSession)
       const state = await agentClient.getHttpState()
       setSession(state.session)
-      setMessages(state.messages)
       setTimeline(state.timeline ?? [])
       setOauthStatusMessage(result.message)
       setOauthLoginUrl(null)
@@ -1120,16 +1081,11 @@ export function AgentPanel({
       })
 
       setSettings(nextSettings)
-      setSettingsDraftDirty(false)
-      setOpenAiOAuthClientIdValue(nextSettings.openAiOAuthClientId ?? '')
-      setOpenAiOAuthClientSecretValue('')
-      setOpenAiOAuthClientIdDirty(false)
-      setOpenAiOAuthClientSecretDirty(false)
+      applySettingsDraftFromSettings(nextSettings)
       const nextSession = await agentClient.createSession()
       setSession(nextSession)
       const state = await agentClient.getHttpState()
       setSession(state.session)
-      setMessages(state.messages)
       setTimeline(state.timeline ?? [])
     } catch (error) {
       setErrorMessage(
@@ -1156,15 +1112,11 @@ export function AgentPanel({
       const nextSettings = await agentClient.getSettings()
 
       setSettings(nextSettings)
-      setSettingsDraftDirty(false)
-      setOpenAiOAuthClientIdValue(nextSettings.openAiOAuthClientId ?? '')
-      setOpenAiOAuthClientIdDirty(false)
-      setManualRedirectUrlValue('')
+      applySettingsDraftFromSettings(nextSettings)
       const nextSession = await agentClient.createSession()
       setSession(nextSession)
       const state = await agentClient.getHttpState()
       setSession(state.session)
-      setMessages(state.messages)
       setTimeline(state.timeline ?? [])
       setOauthStatusMessage(result.message)
       setOauthLoginUrl(null)
@@ -1258,8 +1210,10 @@ export function AgentPanel({
             <select
               disabled={settingsPending || !settings}
               onChange={(event) => {
-                setAuthModeValue(event.target.value as AgentAuthMode)
-                setSettingsDraftDirty(true)
+                updateSettingsDraft(
+                  { authMode: event.target.value as AgentAuthMode },
+                  { dirty: true },
+                )
               }}
               value={authModeValue}
             >
@@ -1273,8 +1227,7 @@ export function AgentPanel({
             <select
               disabled={settingsPending || !settings || authModeValue === 'brokered_oauth'}
               onChange={(event) => {
-                setProviderValue(event.target.value)
-                setSettingsDraftDirty(true)
+                updateSettingsDraft({ provider: event.target.value }, { dirty: true })
               }}
               value={providerValue}
             >
@@ -1291,8 +1244,7 @@ export function AgentPanel({
             <select
               disabled={settingsPending || availableModels.length === 0}
               onChange={(event) => {
-                setModelValue(event.target.value)
-                setSettingsDraftDirty(true)
+                updateSettingsDraft({ modelId: event.target.value }, { dirty: true })
               }}
               value={modelValue}
             >
@@ -1311,8 +1263,7 @@ export function AgentPanel({
                 autoComplete="off"
                 disabled={settingsPending}
                 onChange={(event) => {
-                  setApiKeyValue(event.target.value)
-                  setSettingsDraftDirty(true)
+                  updateSettingsDraft({ apiKey: event.target.value }, { dirty: true })
                 }}
                 placeholder={settings?.hasApiKey ? 'Stored key present. Enter a new key to replace it.' : 'Enter provider API key'}
                 type="password"
@@ -1345,7 +1296,9 @@ export function AgentPanel({
                 <input
                   autoComplete="off"
                   disabled={settingsPending}
-                  onChange={(event) => setManualRedirectUrlValue(event.target.value)}
+                  onChange={(event) => {
+                    updateSettingsDraft({ manualRedirectUrl: event.target.value })
+                  }}
                   placeholder="Paste the final redirected browser URL"
                   type="url"
                   value={manualRedirectUrlValue}
@@ -1374,9 +1327,10 @@ export function AgentPanel({
                       autoComplete="off"
                       disabled={settingsPending}
                       onChange={(event) => {
-                        setOpenAiOAuthClientIdValue(event.target.value)
-                        setSettingsDraftDirty(true)
-                        setOpenAiOAuthClientIdDirty(true)
+                        updateSettingsDraft(
+                          { openAiOAuthClientId: event.target.value },
+                          { dirty: true, openAiOAuthClientIdDirty: true },
+                        )
                       }}
                       placeholder="app_..."
                       type="text"
@@ -1389,9 +1343,10 @@ export function AgentPanel({
                       autoComplete="off"
                       disabled={settingsPending}
                       onChange={(event) => {
-                        setOpenAiOAuthClientSecretValue(event.target.value)
-                        setSettingsDraftDirty(true)
-                        setOpenAiOAuthClientSecretDirty(true)
+                        updateSettingsDraft(
+                          { openAiOAuthClientSecret: event.target.value },
+                          { dirty: true, openAiOAuthClientSecretDirty: true },
+                        )
                       }}
                       placeholder={
                         settings?.hasOpenAiOAuthClientSecret
@@ -1527,7 +1482,7 @@ export function AgentPanel({
         </div>
 
         <AgentTerminalTimeline
-          items={displayTimeline}
+          items={timeline}
           listRef={messageListRef}
           onScroll={handleTimelineScroll}
         />
@@ -1635,7 +1590,6 @@ export function AgentPanel({
 function handleAgentEvent(
   event: AgentEvent,
   sessionRef: { current: AgentSessionSummary | null },
-  setMessages: Dispatch<SetStateAction<AgentMessage[]>>,
   setTimeline: Dispatch<SetStateAction<AgentTimelineItem[]>>,
   setSession: Dispatch<SetStateAction<AgentSessionSummary | null>>,
 ) {
@@ -1664,13 +1618,10 @@ function handleAgentEvent(
       setSession(event.session)
       break
 
-    case 'message':
-      setMessages((messages) => upsertMessage(messages, event.message))
-      break
-
     case 'tool':
       break
 
+    case 'message':
     case 'file_operation':
       break
 
@@ -2600,18 +2551,6 @@ function getSelectableModels(
   }
 
   return availableModels.filter((model) => model.id !== 'gpt-4.1-nano')
-}
-
-function upsertMessage(messages: AgentMessage[], nextMessage: AgentMessage) {
-  const existingIndex = messages.findIndex((message) => message.id === nextMessage.id)
-
-  if (existingIndex === -1) {
-    return [...messages, nextMessage]
-  }
-
-  return messages.map((message, index) =>
-    index === existingIndex ? nextMessage : message,
-  )
 }
 
 function buildWorkspaceContextInjection(

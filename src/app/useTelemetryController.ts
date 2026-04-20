@@ -11,6 +11,7 @@ import type {
   AgentHeatSample,
   DirtyFileEditSignal,
   TelemetryActivityEvent,
+  TelemetryHeatmapRequest,
   TelemetryMode,
   TelemetryOverview,
   TelemetrySource,
@@ -29,6 +30,14 @@ interface UseTelemetryControllerOptions {
   workspaceSyncStatus: WorkspaceArtifactSyncStatus | null
 }
 
+interface TelemetryData {
+  activityEvents: TelemetryActivityEvent[]
+  heatSamples: AgentHeatSample[]
+  observedAt: number
+  overview: TelemetryOverview | null
+  query: TelemetryHeatmapRequest | null
+}
+
 export function useTelemetryController({
   followActiveAgent,
   hasRunningAutonomousRun,
@@ -41,11 +50,14 @@ export function useTelemetryController({
   const [telemetryWindow, setTelemetryWindow] = useState<TelemetryWindow>(60)
   const [telemetryMode, setTelemetryMode] = useState<TelemetryMode>('symbols')
   const [telemetryEnabled, setTelemetryEnabled] = useState(false)
-  const [telemetryOverview, setTelemetryOverview] = useState<TelemetryOverview | null>(null)
-  const [telemetryHeatSamples, setTelemetryHeatSamples] = useState<AgentHeatSample[]>([])
-  const [telemetryActivityEvents, setTelemetryActivityEvents] = useState<TelemetryActivityEvent[]>([])
+  const [telemetryData, setTelemetryData] = useState<TelemetryData>({
+    activityEvents: [],
+    heatSamples: [],
+    observedAt: 0,
+    overview: null,
+    query: null,
+  })
   const [telemetryError, setTelemetryError] = useState<string | null>(null)
-  const [telemetryObservedAt, setTelemetryObservedAt] = useState(0)
   const [liveChangedFiles, setLiveChangedFiles] = useState<string[]>([])
   const [followDirtyFileSignals, setFollowDirtyFileSignals] = useState<DirtyFileEditSignal[]>([])
 
@@ -58,12 +70,12 @@ export function useTelemetryController({
 
     const refreshTelemetry = async () => {
       try {
-        const telemetryQuery = {
+        const telemetryQuery: TelemetryHeatmapRequest = {
           mode: telemetryMode,
           runId: telemetryWindow === 'run' ? selectedRunId ?? undefined : undefined,
           source: telemetrySource,
           window: telemetryWindow,
-        } as const
+        }
         const [overviewResponse, heatmapResponse, activityResponse] = await Promise.all([
           fetchTelemetryOverview(telemetryQuery),
           fetchTelemetryHeatmap(telemetryQuery),
@@ -74,11 +86,14 @@ export function useTelemetryController({
           return
         }
 
-        setTelemetryOverview(overviewResponse.overview)
-        setTelemetryHeatSamples(heatmapResponse.samples)
-        setTelemetryActivityEvents(activityResponse.events)
+        setTelemetryData({
+          activityEvents: activityResponse.events,
+          heatSamples: heatmapResponse.samples,
+          observedAt: Date.now(),
+          overview: overviewResponse.overview,
+          query: telemetryQuery,
+        })
         setTelemetryError(null)
-        setTelemetryObservedAt(Date.now())
       } catch (error) {
         if (!cancelled) {
           setTelemetryError(
@@ -283,13 +298,13 @@ export function useTelemetryController({
     handleTelemetrySourceChange,
     handleTelemetryWindowChange,
     liveChangedFiles,
-    telemetryActivityEvents,
+    telemetryActivityEvents: telemetryData.activityEvents,
     telemetryEnabled,
     telemetryError,
-    telemetryHeatSamples,
+    telemetryHeatSamples: telemetryData.heatSamples,
     telemetryMode,
-    telemetryObservedAt,
-    telemetryOverview,
+    telemetryObservedAt: telemetryData.observedAt,
+    telemetryOverview: telemetryData.overview,
     telemetrySource,
     telemetryWindow,
   }

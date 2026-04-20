@@ -20,11 +20,11 @@ import {
   UI_PREFERENCES_STORAGE_KEY,
 } from './themeBootstrap'
 import type { ThemeMode } from './themeBootstrap'
+import { useWorkspaceViewState } from './useWorkspaceViewState'
 import type {
   GraphLayerVisibility,
   UiPreferences,
   VisualizerViewMode,
-  WorkspaceUiState,
 } from '../types'
 import { clampNumber } from '../visualizer/flowModel'
 
@@ -104,12 +104,18 @@ export function useWorkspaceChromeController({
   const [workspaceActionError, setWorkspaceActionError] = useState<string | null>(null)
   const [desktopHostAvailable, setDesktopHostAvailable] = useState(false)
   const [uiPreferencesHydrated, setUiPreferencesHydrated] = useState(false)
-  const [workspaceViewResolvedRootDir, setWorkspaceViewResolvedRootDir] = useState<
-    string | null
-  >(null)
-  const [workspaceStateByRootDir, setWorkspaceStateByRootDir] = useState<
-    Record<string, WorkspaceUiState>
-  >(storedUiPreferences.workspaceStateByRootDir ?? {})
+  const {
+    setWorkspaceStateByRootDir,
+    setWorkspaceViewResolvedRootDir,
+    workspaceStateByRootDir,
+    workspaceViewResolvedRootDir,
+  } = useWorkspaceViewState({
+    activeDraftId,
+    activeLayoutId,
+    initialWorkspaceStateByRootDir: storedUiPreferences.workspaceStateByRootDir ?? {},
+    rootDir,
+    uiPreferencesHydrated,
+  })
   const workspaceRef = useRef<HTMLDivElement | null>(null)
   const desktopBridge = getDesktopBridge()
   const isDesktopHost = desktopHostAvailable || isElectronHost()
@@ -208,7 +214,7 @@ export function useWorkspaceChromeController({
     return () => {
       cancelled = true
     }
-  }, [setGraphLayerVisibility, setViewMode])
+  }, [setGraphLayerVisibility, setViewMode, setWorkspaceStateByRootDir])
 
   useEffect(() => {
     if (storedUiPreferences.viewMode) {
@@ -309,42 +315,6 @@ export function useWorkspaceChromeController({
 
     setRecentProjects((currentProjects) => rememberRecentProject(currentProjects, rootDir))
   }, [rootDir])
-
-  useEffect(() => {
-    if (!rootDir) {
-      return
-    }
-
-    if (!uiPreferencesHydrated || workspaceViewResolvedRootDir !== rootDir) {
-      return
-    }
-
-    setWorkspaceStateByRootDir((currentState) => {
-      const currentEntry = currentState[rootDir]
-      const nextEntry: WorkspaceUiState = {
-        activeDraftId: activeDraftId ?? undefined,
-        activeLayoutId: activeDraftId ? undefined : activeLayoutId ?? undefined,
-      }
-
-      if (
-        currentEntry?.activeDraftId === nextEntry.activeDraftId &&
-        currentEntry?.activeLayoutId === nextEntry.activeLayoutId
-      ) {
-        return currentState
-      }
-
-      return {
-        ...currentState,
-        [rootDir]: nextEntry,
-      }
-    })
-  }, [
-    activeDraftId,
-    activeLayoutId,
-    rootDir,
-    uiPreferencesHydrated,
-    workspaceViewResolvedRootDir,
-  ])
 
   useEffect(() => {
     if (activeResizePointerId == null) {

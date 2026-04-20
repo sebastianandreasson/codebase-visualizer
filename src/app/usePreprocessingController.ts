@@ -1,4 +1,11 @@
-import { startTransition, useEffect, useRef, useState } from 'react'
+import {
+  startTransition,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type SetStateAction,
+} from 'react'
 
 import {
   SEMANTIC_EMBEDDING_MODEL_ID,
@@ -34,29 +41,56 @@ interface UsePreprocessingControllerInput {
   onWorkspaceSyncStatusChange: (status: WorkspaceArtifactSyncStatus) => void
 }
 
+interface PreprocessingContextValues {
+  purposeSummaryCount: number
+  semanticEmbeddingCount: number
+  snapshotId: string | null
+  updatedAt: string | null
+}
+
+interface PreprocessingRuntimeState {
+  activity: PreprocessingStatus['activity']
+  currentItemPath: string | null
+  lastError: string | null
+  processedSymbols: number
+  purposeSummaryCountOverride?: number
+  runState: PreprocessingStatus['runState']
+  semanticEmbeddingCountOverride?: number
+  snapshotIdOverride?: string | null
+  totalSymbols: number
+  updatedAtOverride?: string | null
+}
+
 export function usePreprocessingController(
   input: UsePreprocessingControllerInput,
 ) {
   const [preprocessedWorkspaceContext, setPreprocessedWorkspaceContext] =
     useState<PreprocessedWorkspaceContext | null>(null)
-  const [preprocessingStatus, setPreprocessingStatus] = useState<PreprocessingStatus>({
-    activity: null,
-    runState: 'idle',
-    updatedAt: null,
-    purposeSummaryCount: 0,
-    semanticEmbeddingCount: 0,
-    lastError: null,
-    currentItemPath: null,
-    processedSymbols: 0,
-    snapshotId: null,
-    totalSymbols: 0,
-  })
+  const [preprocessingRuntime, setPreprocessingRuntime] =
+    useState<PreprocessingRuntimeState>(() => createInitialPreprocessingRuntimeState())
   const preprocessingRunIdRef = useRef(0)
   const preprocessedWorkspaceContextRef = useRef<PreprocessedWorkspaceContext | null>(null)
+  const preprocessingStatus = useMemo(
+    () => derivePreprocessingStatus(preprocessingRuntime, preprocessedWorkspaceContext),
+    [preprocessingRuntime, preprocessedWorkspaceContext],
+  )
 
   useEffect(() => {
     preprocessedWorkspaceContextRef.current = preprocessedWorkspaceContext
   }, [preprocessedWorkspaceContext])
+
+  function setPreprocessingStatus(update: SetStateAction<PreprocessingStatus>) {
+    setPreprocessingRuntime((currentRuntime) => {
+      const context = preprocessedWorkspaceContextRef.current
+      const currentStatus = derivePreprocessingStatus(currentRuntime, context)
+      const nextStatus =
+        typeof update === 'function'
+          ? update(currentStatus)
+          : update
+
+      return createPreprocessingRuntimeStateFromStatus(nextStatus, context)
+    })
+  }
 
   function applyLoadedWorkspaceState(
     snapshot: CodebaseSnapshot,
@@ -540,6 +574,89 @@ export function usePreprocessingController(
     startBackgroundPreprocessing,
     handleStartPreprocessing,
     handleBuildSemanticEmbeddings,
+  }
+}
+
+function createInitialPreprocessingRuntimeState(): PreprocessingRuntimeState {
+  return {
+    activity: null,
+    currentItemPath: null,
+    lastError: null,
+    processedSymbols: 0,
+    runState: 'idle',
+    totalSymbols: 0,
+  }
+}
+
+function derivePreprocessingStatus(
+  runtime: PreprocessingRuntimeState,
+  context: PreprocessedWorkspaceContext | null,
+): PreprocessingStatus {
+  const contextValues = getPreprocessingContextValues(context)
+
+  return {
+    activity: runtime.activity,
+    currentItemPath: runtime.currentItemPath,
+    lastError: runtime.lastError,
+    processedSymbols: runtime.processedSymbols,
+    purposeSummaryCount:
+      runtime.purposeSummaryCountOverride ?? contextValues.purposeSummaryCount,
+    runState: runtime.runState,
+    semanticEmbeddingCount:
+      runtime.semanticEmbeddingCountOverride ??
+      contextValues.semanticEmbeddingCount,
+    snapshotId:
+      runtime.snapshotIdOverride !== undefined
+        ? runtime.snapshotIdOverride
+        : contextValues.snapshotId,
+    totalSymbols: runtime.totalSymbols,
+    updatedAt:
+      runtime.updatedAtOverride !== undefined
+        ? runtime.updatedAtOverride
+        : contextValues.updatedAt,
+  }
+}
+
+function createPreprocessingRuntimeStateFromStatus(
+  status: PreprocessingStatus,
+  context: PreprocessedWorkspaceContext | null,
+): PreprocessingRuntimeState {
+  const contextValues = getPreprocessingContextValues(context)
+
+  return {
+    activity: status.activity,
+    currentItemPath: status.currentItemPath,
+    lastError: status.lastError,
+    processedSymbols: status.processedSymbols,
+    purposeSummaryCountOverride:
+      status.purposeSummaryCount === contextValues.purposeSummaryCount
+        ? undefined
+        : status.purposeSummaryCount,
+    runState: status.runState,
+    semanticEmbeddingCountOverride:
+      status.semanticEmbeddingCount === contextValues.semanticEmbeddingCount
+        ? undefined
+        : status.semanticEmbeddingCount,
+    snapshotIdOverride:
+      status.snapshotId === contextValues.snapshotId
+        ? undefined
+        : status.snapshotId,
+    totalSymbols: status.totalSymbols,
+    updatedAtOverride:
+      status.updatedAt === contextValues.updatedAt
+        ? undefined
+        : status.updatedAt,
+  }
+}
+
+function getPreprocessingContextValues(
+  context: PreprocessedWorkspaceContext | null,
+): PreprocessingContextValues {
+  return {
+    purposeSummaryCount: context?.purposeSummaries.length ?? 0,
+    semanticEmbeddingCount: context?.semanticEmbeddings.length ?? 0,
+    snapshotId: context?.snapshotId ?? null,
+    updatedAt: context?.workspaceProfile.generatedAt ?? null,
   }
 }
 

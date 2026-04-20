@@ -7,16 +7,9 @@ const MAX_LIVE_FILE_OPERATIONS = 250
 const POLLED_FILE_OPERATIONS_INTERVAL_MS = 1000
 const GENERATION_LOOKBACK_MS = 5000
 
-interface OperationEntry {
-  generation: number
-  operation: AgentFileOperation
-}
-
 interface OperationState {
-  activeGeneration: number | null
-  activeGenerationStartedAtMs: number | null
-  entries: OperationEntry[]
-  generationSequence: number
+  enabledSinceMs: number | null
+  operations: AgentFileOperation[]
 }
 
 type OperationAction =
@@ -39,10 +32,8 @@ export function useAgentFileOperations(input: {
 }) {
   const agentClient = useMemo(() => new DesktopAgentClient(), [])
   const [state, dispatch] = useReducer(operationReducer, {
-    activeGeneration: null,
-    activeGenerationStartedAtMs: null,
-    entries: [],
-    generationSequence: 0,
+    enabledSinceMs: null,
+    operations: [],
   })
 
   useEffect(() => {
@@ -110,16 +101,12 @@ export function useAgentFileOperations(input: {
       return []
     }
 
-    const activeGeneration = state.activeGeneration
-
-    if (activeGeneration === null) {
+    if (state.enabledSinceMs === null) {
       return []
     }
 
-    return state.entries
-      .filter((entry) => entry.generation === activeGeneration)
-      .map((entry) => entry.operation)
-  }, [input.enabled, state.activeGeneration, state.entries])
+    return state.operations
+  }, [input.enabled, state.enabledSinceMs, state.operations])
 }
 
 function operationReducer(
@@ -130,69 +117,54 @@ function operationReducer(
     case 'ENABLED_CHANGED': {
       if (!action.enabled) {
         return {
-          ...state,
-          activeGeneration: null,
-          activeGenerationStartedAtMs: null,
+          enabledSinceMs: null,
+          operations: [],
         }
       }
 
-      if (state.activeGeneration !== null) {
+      if (state.enabledSinceMs !== null) {
         return state
       }
 
-      const nextGeneration = state.generationSequence + 1
-
       return {
-        ...state,
-        activeGeneration: nextGeneration,
-        activeGenerationStartedAtMs: action.nowMs,
-        generationSequence: nextGeneration,
+        enabledSinceMs: action.nowMs,
+        operations: [],
       }
     }
 
     case 'OPERATION_RECEIVED': {
-      if (state.activeGeneration === null) {
+      if (state.enabledSinceMs === null) {
         return state
       }
 
       return {
         ...state,
-        entries: upsertOperationEntry(state.entries, {
-          generation: state.activeGeneration,
-          operation: action.operation,
-        }),
+        operations: upsertOperation(state.operations, action.operation),
       }
     }
 
     case 'OPERATIONS_RECEIVED': {
-      if (state.activeGeneration === null) {
+      if (state.enabledSinceMs === null) {
         return state
       }
 
-      const nextEntries = action.operations
-        .filter((operation) => isOperationInActiveGeneration(state, operation))
-        .reduce(
-          (entries, operation) =>
-            upsertOperationEntry(entries, {
-              generation: state.activeGeneration!,
-              operation,
-            }),
-          state.entries,
-        )
+      const nextOperations = action.operations
+        .filter((operation) => isOperationInActiveWindow(state, operation))
+        .reduce(upsertOperation, state.operations)
 
       return {
         ...state,
-        entries: nextEntries,
+        operations: nextOperations,
       }
     }
   }
 }
 
-function isOperationInActiveGeneration(
+function isOperationInActiveWindow(
   state: OperationState,
   operation: AgentFileOperation,
 ) {
-  if (state.activeGenerationStartedAtMs === null) {
+  if (state.enabledSinceMs === null) {
     return true
   }
 
@@ -201,41 +173,38 @@ function isOperationInActiveGeneration(
     return true
   }
 
-  return timestampMs >= state.activeGenerationStartedAtMs - GENERATION_LOOKBACK_MS
+  return timestampMs >= state.enabledSinceMs - GENERATION_LOOKBACK_MS
 }
 
-function upsertOperationEntry(
-  previousEntries: OperationEntry[],
-  entry: OperationEntry,
+function upsertOperation(
+  previousOperations: AgentFileOperation[],
+  operation: AgentFileOperation,
 ) {
-  const existingIndex = previousEntries.findIndex(
-    (previousEntry) =>
-      previousEntry.generation === entry.generation &&
-      previousEntry.operation.id === entry.operation.id,
+  const existingIndex = previousOperations.findIndex(
+    (previousOperation) => previousOperation.id === operation.id,
   )
-  const nextEntries =
+  const nextOperations =
     existingIndex === -1
-      ? [entry, ...previousEntries]
-      : previousEntries.map((previousEntry, index) =>
-          index === existingIndex ? entry : previousEntry,
+      ? [operation, ...previousOperations]
+      : previousOperations.map((previousOperation, index) =>
+          index === existingIndex ? operation : previousOperation,
         )
 
-  return nextEntries
-    .sort(compareEntriesDescending)
+  return nextOperations
+    .sort(compareOperationsDescending)
     .slice(0, MAX_LIVE_FILE_OPERATIONS)
 }
 
-function compareEntriesDescending(left: OperationEntry, right: OperationEntry) {
-  if (left.generation !== right.generation) {
-    return right.generation - left.generation
-  }
-
-  const leftTimestampMs = new Date(left.operation.timestamp).getTime()
-  const rightTimestampMs = new Date(right.operation.timestamp).getTime()
+function compareOperationsDescending(
+  left: AgentFileOperation,
+  right: AgentFileOperation,
+) {
+  const leftTimestampMs = new Date(left.timestamp).getTime()
+  const rightTimestampMs = new Date(right.timestamp).getTime()
 
   if (Number.isFinite(leftTimestampMs) && Number.isFinite(rightTimestampMs)) {
     return rightTimestampMs - leftTimestampMs
   }
 
-  return right.operation.id.localeCompare(left.operation.id)
+  return right.id.localeCompare(left.id)
 }
