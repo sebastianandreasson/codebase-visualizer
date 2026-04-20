@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useReducer } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 
 import { DesktopAgentClient } from '../agent/DesktopAgentClient'
 import type {
@@ -35,35 +35,23 @@ export interface AgentDebugFeedEntry {
   type: string
 }
 
-interface AgentEventFeedState {
-  entries: AgentDebugFeedEntry[]
-  sequence: number
-}
-
-type AgentEventFeedAction = {
-  event: AgentEvent
-  nowMs: number
-  type: 'AGENT_EVENT_RECEIVED'
-}
-
 export function useAgentEventFeed() {
   const agentClient = useMemo(() => new DesktopAgentClient(), [])
-  const [state, dispatch] = useReducer(agentEventFeedReducer, {
-    entries: [],
-    sequence: 0,
-  })
+  const [entries, setEntries] = useState<AgentDebugFeedEntry[]>([])
+  const sequenceRef = useRef(0)
 
   useEffect(() => {
     return agentClient.subscribe((event) => {
-      dispatch({
-        event,
-        nowMs: Date.now(),
-        type: 'AGENT_EVENT_RECEIVED',
+      sequenceRef.current += 1
+      const entry = createAgentFeedEntry(event, Date.now(), sequenceRef.current)
+
+      setEntries((currentEntries) => {
+        return [entry, ...currentEntries].slice(0, MAX_LIVE_AGENT_EVENTS)
       })
     })
   }, [agentClient])
 
-  return state.entries
+  return entries
 }
 
 export function buildAgentDebugFeedEntries(input: {
@@ -82,23 +70,6 @@ export function buildAgentDebugFeedEntries(input: {
   ]
     .sort(compareFeedEntriesDescending)
     .slice(0, MAX_COMBINED_AGENT_EVENTS)
-}
-
-function agentEventFeedReducer(
-  state: AgentEventFeedState,
-  action: AgentEventFeedAction,
-): AgentEventFeedState {
-  switch (action.type) {
-    case 'AGENT_EVENT_RECEIVED': {
-      const nextSequence = state.sequence + 1
-      const entry = createAgentFeedEntry(action.event, action.nowMs, nextSequence)
-
-      return {
-        entries: [entry, ...state.entries].slice(0, MAX_LIVE_AGENT_EVENTS),
-        sequence: nextSequence,
-      }
-    }
-  }
 }
 
 function createAgentFeedEntry(

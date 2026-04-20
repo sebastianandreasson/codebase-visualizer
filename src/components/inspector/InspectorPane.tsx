@@ -55,7 +55,6 @@ interface InspectorPaneProps {
   activeDraft: LayoutDraft | null
   agentEventFeedEntries: AgentDebugFeedEntry[]
   compareOverlayActive: boolean
-  desktopHostAvailable: boolean
   detectedPlugins: ProjectPluginDetection[]
   draftActionError?: string | null
   facetDefinitions: ProjectFacetDefinition[]
@@ -114,7 +113,6 @@ export function InspectorPane({
   activeDraft,
   agentEventFeedEntries,
   compareOverlayActive,
-  desktopHostAvailable,
   detectedPlugins,
   draftActionError = null,
   facetDefinitions,
@@ -212,7 +210,6 @@ export function InspectorPane({
         {inspectorTab === 'agent' ? (
           <AgentContextPane
             activeDraft={activeDraft}
-            desktopHostAvailable={desktopHostAvailable}
             draftActionError={draftActionError}
             inspectorContext={{
               file: selectedFile,
@@ -986,32 +983,16 @@ function CodePreview({
 
   useEffect(() => {
     let cancelled = false
-
-    void fetchGitFileDiff(file.path)
-      .then((diff) => {
-        if (!cancelled) {
-          setFileDiff(diff)
-        }
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setFileDiff(null)
-        }
-      })
-
-    return () => {
-      cancelled = true
-    }
-  }, [file.path])
-
-  useEffect(() => {
-    if (!scrollToDiffRequestKey) {
-      return
-    }
-
-    let cancelled = false
     let attemptCount = 0
     let intervalId: number | null = null
+    const retryUntilDiff = Boolean(scrollToDiffRequestKey)
+
+    const stopRetrying = () => {
+      if (intervalId != null) {
+        window.clearInterval(intervalId)
+        intervalId = null
+      }
+    }
 
     const refreshDiff = async () => {
       attemptCount += 1
@@ -1025,33 +1006,35 @@ function CodePreview({
 
         setFileDiff(diff)
 
-        if (diff?.hasDiff || attemptCount >= 8) {
-          if (intervalId != null) {
-            window.clearInterval(intervalId)
-          }
+        if (!retryUntilDiff || diff?.hasDiff || attemptCount >= 8) {
+          stopRetrying()
         }
       } catch {
         if (cancelled) {
           return
         }
 
-        if (attemptCount >= 8 && intervalId != null) {
-          window.clearInterval(intervalId)
+        if (!retryUntilDiff) {
+          setFileDiff(null)
+        }
+
+        if (!retryUntilDiff || attemptCount >= 8) {
+          stopRetrying()
         }
       }
     }
 
     void refreshDiff()
-    intervalId = window.setInterval(() => {
-      void refreshDiff()
-    }, 700)
+
+    if (retryUntilDiff) {
+      intervalId = window.setInterval(() => {
+        void refreshDiff()
+      }, 700)
+    }
 
     return () => {
       cancelled = true
-
-      if (intervalId != null) {
-        window.clearInterval(intervalId)
-      }
+      stopRetrying()
     }
   }, [file.path, scrollToDiffRequestKey])
 

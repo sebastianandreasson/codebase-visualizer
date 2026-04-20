@@ -881,7 +881,6 @@ export function Semanticode({
                     activeDraft={activeDraft}
                     agentEventFeedEntries={agentEventFeedEntries}
                     compareOverlayActive={compareOverlayActive}
-                    desktopHostAvailable={isDesktopHost}
                     draftActionError={draftActionError}
                     detectedPlugins={effectiveSnapshot?.detectedPlugins ?? []}
                     facetDefinitions={effectiveSnapshot?.facetDefinitions ?? []}

@@ -1,13 +1,12 @@
 import { useEffect, useMemo, useState } from 'react'
 
-import { DesktopAgentClient, type DesktopAgentBridgeInfo } from '../../agent/DesktopAgentClient'
+import { DesktopAgentClient } from '../../agent/DesktopAgentClient'
 import type { AgentSessionSummary } from '../../schema/agent'
 import type { LayoutDraft, WorkingSetState, WorkspaceProfile } from '../../types'
 import type { AgentScopeContext } from '../AgentPanel'
 
 interface AgentContextPaneProps {
   activeDraft?: LayoutDraft | null
-  desktopHostAvailable?: boolean
   draftActionError?: string | null
   inspectorContext?: AgentScopeContext
   layoutActionsPending?: boolean
@@ -28,7 +27,6 @@ interface AgentContextPaneProps {
 
 export function AgentContextPane({
   activeDraft = null,
-  desktopHostAvailable = false,
   draftActionError = null,
   inspectorContext,
   layoutActionsPending = false,
@@ -44,24 +42,8 @@ export function AgentContextPane({
   workspaceProfile = null,
 }: AgentContextPaneProps) {
   const agentClient = useMemo(() => new DesktopAgentClient(), [])
-  const [bridgeInfo, setBridgeInfo] = useState<DesktopAgentBridgeInfo>(() =>
-    normalizeBridgeInfo(agentClient.getBridgeInfo(), desktopHostAvailable),
-  )
   const [session, setSession] = useState<AgentSessionSummary | null>(null)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
-
-  useEffect(() => {
-    const updateBridgeInfo = () => {
-      setBridgeInfo(normalizeBridgeInfo(agentClient.getBridgeInfo(), desktopHostAvailable))
-    }
-
-    updateBridgeInfo()
-    const timeoutId = window.setTimeout(updateBridgeInfo, 0)
-
-    return () => {
-      window.clearTimeout(timeoutId)
-    }
-  }, [agentClient, desktopHostAvailable])
 
   useEffect(() => {
     let cancelled = false
@@ -93,7 +75,7 @@ export function AgentContextPane({
       cancelled = true
       window.clearInterval(intervalId)
     }
-  }, [agentClient, bridgeInfo.hasAgentBridge])
+  }, [agentClient])
 
   const hasInspectorContext = hasScopeContext(inspectorContext)
   const hasWorkingSetContext = hasScopeContext(workingSetContext)
@@ -225,16 +207,6 @@ export function AgentContextPane({
       ) : null}
     </div>
   )
-}
-
-function normalizeBridgeInfo(
-  bridgeInfo: DesktopAgentBridgeInfo,
-  desktopHostAvailable: boolean,
-): DesktopAgentBridgeInfo {
-  return {
-    hasDesktopHost: bridgeInfo.hasDesktopHost || desktopHostAvailable,
-    hasAgentBridge: bridgeInfo.hasAgentBridge,
-  }
 }
 
 function hasScopeContext(

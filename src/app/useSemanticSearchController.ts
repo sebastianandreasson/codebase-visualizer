@@ -43,6 +43,18 @@ interface UseSemanticSearchControllerOptions {
   viewMode: VisualizerViewMode
 }
 
+interface SemanticSearchResultState {
+  error: string | null
+  pending: boolean
+  rankedMatches: SemanticSearchResult[]
+}
+
+const EMPTY_SEMANTIC_SEARCH_RESULT: SemanticSearchResultState = {
+  error: null,
+  pending: false,
+  rankedMatches: [],
+}
+
 export function useSemanticSearchController({
   preprocessedWorkspaceContext,
   resolvedScene,
@@ -51,15 +63,11 @@ export function useSemanticSearchController({
 }: UseSemanticSearchControllerOptions) {
   const [semanticSearchQuery, setSemanticSearchQuery] = useState('')
   const [semanticSearchMode, setSemanticSearchMode] = useState<SemanticSearchMode>('symbols')
-  const [semanticSearchPending, setSemanticSearchPending] = useState(false)
-  const [semanticSearchError, setSemanticSearchError] = useState<string | null>(null)
-  const [semanticSearchRankedMatches, setSemanticSearchRankedMatches] = useState<SemanticSearchResult[]>(
-    [],
+  const [semanticSearchResult, setSemanticSearchResult] = useState<SemanticSearchResultState>(
+    EMPTY_SEMANTIC_SEARCH_RESULT,
   )
-  const [groupPrototypeCache, setGroupPrototypeCache] = useState<GroupPrototypeCacheSnapshot | null>(
-    null,
-  )
-  const [groupPrototypeCacheLoaded, setGroupPrototypeCacheLoaded] = useState(false)
+  const [groupPrototypeCache, setGroupPrototypeCache] =
+    useState<GroupPrototypeCacheSnapshot | null>()
   const [semanticSearchMatchLimit, setSemanticSearchMatchLimit] = useState(
     SEMANTIC_SEARCH_RESULT_LIMIT,
   )
@@ -67,15 +75,17 @@ export function useSemanticSearchController({
     SEMANTIC_SEARCH_DEFAULT_STRICTNESS,
   )
   const semanticSearchCacheRef = useRef(new Map<string, SemanticSearchResult[]>())
+  const semanticSearchPending = semanticSearchResult.pending
+  const semanticSearchError = semanticSearchResult.error
+  const semanticSearchRankedMatches = semanticSearchResult.rankedMatches
 
   useEffect(() => {
     let cancelled = false
 
-    setGroupPrototypeCacheLoaded(false)
+    setGroupPrototypeCache(undefined)
 
     if (!rootDir) {
       setGroupPrototypeCache(null)
-      setGroupPrototypeCacheLoaded(true)
       return
     }
 
@@ -83,13 +93,11 @@ export function useSemanticSearchController({
       .then((cache) => {
         if (!cancelled) {
           setGroupPrototypeCache(cache)
-          setGroupPrototypeCacheLoaded(true)
         }
       })
       .catch(() => {
         if (!cancelled) {
           setGroupPrototypeCache(null)
-          setGroupPrototypeCacheLoaded(true)
         }
       })
 
@@ -182,15 +190,11 @@ export function useSemanticSearchController({
   )
   const handleSemanticSearchModeChange = useCallback((mode: SemanticSearchMode) => {
     setSemanticSearchMode(mode)
-    setSemanticSearchRankedMatches([])
-    setSemanticSearchError(null)
-    setSemanticSearchPending(false)
+    setSemanticSearchResult(EMPTY_SEMANTIC_SEARCH_RESULT)
   }, [])
   const clearSemanticSearch = useCallback(() => {
     setSemanticSearchQuery('')
-    setSemanticSearchRankedMatches([])
-    setSemanticSearchError(null)
-    setSemanticSearchPending(false)
+    setSemanticSearchResult(EMPTY_SEMANTIC_SEARCH_RESULT)
   }, [])
   const semanticSearchHighlightActive =
     semanticSearchAvailable &&
@@ -207,7 +211,7 @@ export function useSemanticSearchController({
   ])
 
   useEffect(() => {
-    if (!semanticSearchGroupSourceLayout || !groupPrototypeCacheLoaded) {
+    if (!semanticSearchGroupSourceLayout || groupPrototypeCache === undefined) {
       return
     }
 
@@ -230,7 +234,6 @@ export function useSemanticSearchController({
     })
   }, [
     groupPrototypeCache,
-    groupPrototypeCacheLoaded,
     semanticSearchGroupPrototypes,
     semanticSearchGroupSourceLayout,
   ])
@@ -243,22 +246,14 @@ export function useSemanticSearchController({
 
   useEffect(() => {
     if (!semanticSearchAvailable) {
-      setSemanticSearchPending((pending) => (pending ? false : pending))
-      setSemanticSearchError((error) => (error !== null ? null : error))
-      setSemanticSearchRankedMatches((matches) =>
-        matches.length > 0 ? [] : matches,
-      )
+      setSemanticSearchResult(EMPTY_SEMANTIC_SEARCH_RESULT)
       return
     }
 
     const trimmedQuery = semanticSearchQuery.trim()
 
     if (trimmedQuery.length < SEMANTIC_SEARCH_MIN_QUERY_LENGTH) {
-      setSemanticSearchPending((pending) => (pending ? false : pending))
-      setSemanticSearchError((error) => (error !== null ? null : error))
-      setSemanticSearchRankedMatches((matches) =>
-        matches.length > 0 ? [] : matches,
-      )
+      setSemanticSearchResult(EMPTY_SEMANTIC_SEARCH_RESULT)
       return
     }
 
@@ -266,9 +261,11 @@ export function useSemanticSearchController({
     const cachedMatches = semanticSearchCacheRef.current.get(cacheKey)
 
     if (cachedMatches) {
-      setSemanticSearchPending(false)
-      setSemanticSearchError(null)
-      setSemanticSearchRankedMatches(cachedMatches)
+      setSemanticSearchResult({
+        error: null,
+        pending: false,
+        rankedMatches: cachedMatches,
+      })
       return
     }
 
@@ -276,8 +273,11 @@ export function useSemanticSearchController({
     const timeoutId = window.setTimeout(() => {
       void (async () => {
         try {
-          setSemanticSearchPending(true)
-          setSemanticSearchError(null)
+          setSemanticSearchResult((current) => ({
+            ...current,
+            error: null,
+            pending: true,
+          }))
           const [queryEmbedding] = await requestSemanticEmbeddings([
             {
               id: '__semantic_search_query__',
@@ -310,21 +310,26 @@ export function useSemanticSearchController({
                 })
 
           semanticSearchCacheRef.current.set(cacheKey, nextMatches)
-          setSemanticSearchRankedMatches(nextMatches)
+          setSemanticSearchResult({
+            error: null,
+            pending: false,
+            rankedMatches: nextMatches,
+          })
         } catch (error) {
           if (cancelled) {
             return
           }
 
-          setSemanticSearchRankedMatches((matches) =>
-            matches.length > 0 ? [] : matches,
-          )
-          setSemanticSearchError(
-            error instanceof Error ? error.message : 'Semantic search failed.',
-          )
+          setSemanticSearchResult({
+            error: error instanceof Error ? error.message : 'Semantic search failed.',
+            pending: false,
+            rankedMatches: [],
+          })
         } finally {
           if (!cancelled) {
-            setSemanticSearchPending(false)
+            setSemanticSearchResult((current) =>
+              current.pending ? { ...current, pending: false } : current,
+            )
           }
         }
       })()

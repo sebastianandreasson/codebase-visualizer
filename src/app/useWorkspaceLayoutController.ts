@@ -101,15 +101,6 @@ export function useWorkspaceLayoutController({
       return
     }
 
-    if (!snapshot) {
-      setDraftLayouts([])
-      setLayouts([])
-      setActiveDraftId(null)
-      setActiveLayoutId(null)
-      setWorkspaceViewResolvedRootDir(null)
-      return
-    }
-
     const structuralLayout = buildStructuralLayout(snapshot)
     const symbolLayout = buildSymbolLayout(snapshot)
     const semanticScaffold = buildSemanticLayoutScaffold(snapshot)
@@ -132,15 +123,19 @@ export function useWorkspaceLayoutController({
     const rememberedWorkspaceState = workspaceStateByRootDir[snapshot.rootDir]
     const rememberedDraftId = rememberedWorkspaceState?.activeDraftId
     const rememberedLayoutId = rememberedWorkspaceState?.activeLayoutId
+    const defaultLayoutId = viewMode === 'symbols' ? symbolLayout.id : structuralLayout.id
+    const hasAvailableDraft = (draftId: string | null | undefined): draftId is string =>
+      Boolean(
+        draftId &&
+          draftLayouts.some(
+            (draft) => draft.id === draftId && draft.layout && draft.status === 'draft',
+          ),
+      )
+    const hasLayout = (layoutId: string | null | undefined): layoutId is string =>
+      Boolean(layoutId && nextLayouts.some((layout) => layout.id === layoutId))
 
     if (isResolvingWorkspaceView) {
-      if (
-        rememberedDraftId &&
-        draftLayouts.some(
-          (draft) =>
-            draft.id === rememberedDraftId && draft.layout && draft.status === 'draft',
-        )
-      ) {
+      if (hasAvailableDraft(rememberedDraftId)) {
         if (activeDraftId !== rememberedDraftId) {
           setActiveLayoutId(null)
           setActiveDraftId(rememberedDraftId)
@@ -151,10 +146,7 @@ export function useWorkspaceLayoutController({
         return
       }
 
-      if (
-        rememberedLayoutId &&
-        nextLayouts.some((layout) => layout.id === rememberedLayoutId)
-      ) {
+      if (hasLayout(rememberedLayoutId)) {
         if (activeLayoutId !== rememberedLayoutId || activeDraftId) {
           setActiveDraftId(null)
           setActiveLayoutId(rememberedLayoutId)
@@ -164,9 +156,6 @@ export function useWorkspaceLayoutController({
         setWorkspaceViewResolvedRootDir(snapshot.rootDir)
         return
       }
-
-      const defaultLayoutId =
-        viewMode === 'symbols' ? symbolLayout.id : structuralLayout.id
 
       if (activeLayoutId !== defaultLayoutId || activeDraftId) {
         setActiveDraftId(null)
@@ -180,9 +169,7 @@ export function useWorkspaceLayoutController({
 
     if (
       activeDraftId &&
-      !draftLayouts.some(
-        (draft) => draft.id === activeDraftId && draft.layout && draft.status === 'draft',
-      )
+      !hasAvailableDraft(activeDraftId)
     ) {
       setActiveDraftId(null)
       return
@@ -191,9 +178,9 @@ export function useWorkspaceLayoutController({
     if (
       !activeDraftId &&
       activeLayoutId &&
-      !nextLayouts.some((layout) => layout.id === activeLayoutId)
+      !hasLayout(activeLayoutId)
     ) {
-      setActiveLayoutId(viewMode === 'symbols' ? symbolLayout.id : structuralLayout.id)
+      setActiveLayoutId(defaultLayoutId)
     }
   }, [
     activeDraftId,
@@ -423,33 +410,35 @@ export function useWorkspaceLayoutController({
       return
     }
 
+    const isDraftSelection = value.startsWith('draft:')
+    const selectedId = value.slice(isDraftSelection ? 'draft:'.length : 'layout:'.length)
+
     if (snapshot?.rootDir) {
       const workspaceRootDir = snapshot.rootDir
       setWorkspaceStateByRootDir((currentState) => ({
         ...currentState,
-        [workspaceRootDir]: value.startsWith('draft:')
+        [workspaceRootDir]: isDraftSelection
           ? {
-              activeDraftId: value.slice('draft:'.length),
+              activeDraftId: selectedId,
               activeLayoutId: undefined,
             }
           : {
               activeDraftId: undefined,
-              activeLayoutId: value.slice('layout:'.length),
+              activeLayoutId: selectedId,
             },
       }))
       setWorkspaceViewResolvedRootDir(workspaceRootDir)
     }
 
-    if (value.startsWith('draft:')) {
-      const nextDraftId = value.slice('draft:'.length)
+    if (isDraftSelection) {
       const nextDraft =
-        availableDraftLayouts.find((draft) => draft.id === nextDraftId) ?? null
+        availableDraftLayouts.find((draft) => draft.id === selectedId) ?? null
 
       setBaseScene({
         kind: 'active_layout',
       })
       clearCompareOverlay()
-      setActiveDraftId(nextDraftId)
+      setActiveDraftId(selectedId)
       onClearDraftActionError()
 
       if (nextDraft?.layout) {
@@ -459,15 +448,14 @@ export function useWorkspaceLayoutController({
       return
     }
 
-    const nextLayoutId = value.slice('layout:'.length)
-    const nextLayout = layouts.find((layout) => layout.id === nextLayoutId) ?? null
+    const nextLayout = layouts.find((layout) => layout.id === selectedId) ?? null
 
     setBaseScene({
       kind: 'active_layout',
     })
     clearCompareOverlay()
     setActiveDraftId(null)
-    setActiveLayoutId(nextLayoutId)
+    setActiveLayoutId(selectedId)
     onClearDraftActionError()
 
     if (nextLayout) {

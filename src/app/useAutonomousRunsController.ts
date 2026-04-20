@@ -19,17 +19,41 @@ interface UseAutonomousRunsControllerOptions {
   runsSurfaceOpen: boolean
 }
 
+interface AutonomousRunListState {
+  detectedTaskFile: string | null
+  runs: AutonomousRunSummary[]
+}
+
+interface SelectedRunState {
+  detail: AutonomousRunDetail | null
+  runId: string | null
+  timeline: AutonomousRunTimelinePoint[]
+}
+
+const EMPTY_RUN_LIST: AutonomousRunListState = {
+  detectedTaskFile: null,
+  runs: [],
+}
+const EMPTY_SELECTED_RUN: SelectedRunState = {
+  detail: null,
+  runId: null,
+  timeline: [],
+}
+
 export function useAutonomousRunsController({
   rootDir,
   runsSurfaceOpen,
 }: UseAutonomousRunsControllerOptions) {
-  const [autonomousRuns, setAutonomousRuns] = useState<AutonomousRunSummary[]>([])
-  const [detectedTaskFile, setDetectedTaskFile] = useState<string | null>(null)
+  const [runList, setRunList] = useState<AutonomousRunListState>(EMPTY_RUN_LIST)
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null)
-  const [selectedRunDetail, setSelectedRunDetail] = useState<AutonomousRunDetail | null>(null)
-  const [selectedRunTimeline, setSelectedRunTimeline] = useState<AutonomousRunTimelinePoint[]>([])
+  const [selectedRun, setSelectedRun] = useState<SelectedRunState>(EMPTY_SELECTED_RUN)
   const [runActionPending, setRunActionPending] = useState(false)
   const [runActionError, setRunActionError] = useState<string | null>(null)
+  const autonomousRuns = runList.runs
+  const detectedTaskFile = runList.detectedTaskFile
+  const selectedRunMatchesSelection = selectedRun.runId === selectedRunId
+  const selectedRunDetail = selectedRunMatchesSelection ? selectedRun.detail : null
+  const selectedRunTimeline = selectedRunMatchesSelection ? selectedRun.timeline : []
 
   const hasRunningAutonomousRun = useMemo(
     () => autonomousRuns.some((run) => run.status === 'running'),
@@ -55,8 +79,10 @@ export function useAutonomousRunsController({
           return
         }
 
-        setAutonomousRuns(runsResponse.runs)
-        setDetectedTaskFile(runsResponse.detectedTaskFile)
+        setRunList({
+          detectedTaskFile: runsResponse.detectedTaskFile,
+          runs: runsResponse.runs,
+        })
         setRunActionError(null)
         setSelectedRunId((currentRunId) => {
           if (currentRunId && runsResponse.runs.some((run) => run.runId === currentRunId)) {
@@ -93,8 +119,7 @@ export function useAutonomousRunsController({
     let cancelled = false
 
     if (!runsSurfaceOpen || !rootDir || !selectedRunId) {
-      setSelectedRunDetail(null)
-      setSelectedRunTimeline([])
+      setSelectedRun(EMPTY_SELECTED_RUN)
       return
     }
 
@@ -109,8 +134,11 @@ export function useAutonomousRunsController({
           return
         }
 
-        setSelectedRunDetail(detailResponse.run)
-        setSelectedRunTimeline(timelineResponse.timeline)
+        setSelectedRun({
+          detail: detailResponse.run,
+          runId: selectedRunId,
+          timeline: timelineResponse.timeline,
+        })
         setRunActionError(null)
       } catch (error) {
         if (!cancelled) {
@@ -146,8 +174,15 @@ export function useAutonomousRunsController({
       })
 
       setSelectedRunId(response.run.runId)
-      setSelectedRunDetail(response.run)
-      setDetectedTaskFile(response.detectedTaskFile)
+      setSelectedRun({
+        detail: response.run,
+        runId: response.run.runId,
+        timeline: [],
+      })
+      setRunList((currentList) => ({
+        ...currentList,
+        detectedTaskFile: response.detectedTaskFile,
+      }))
       return response.run.runId
     } catch (error) {
       setRunActionError(
