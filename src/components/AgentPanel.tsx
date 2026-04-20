@@ -129,7 +129,6 @@ export function AgentPanel({
   const openAiOAuthClientIdValue = settingsDraft.openAiOAuthClientId
   const openAiOAuthClientSecretValue = settingsDraft.openAiOAuthClientSecret
   const settingsDraftDirty = settingsDraft.dirty
-  const openAiOAuthClientIdDirty = settingsDraft.openAiOAuthClientIdDirty
 
   useEffect(() => {
     sessionRef.current = session
@@ -337,7 +336,6 @@ export function AgentPanel({
     agentClient,
     applySettingsDraftFromSettings,
     bridgeInfo.hasAgentBridge,
-    openAiOAuthClientIdDirty,
     settingsDraftDirty,
   ])
 
@@ -1329,7 +1327,7 @@ export function AgentPanel({
                       onChange={(event) => {
                         updateSettingsDraft(
                           { openAiOAuthClientId: event.target.value },
-                          { dirty: true, openAiOAuthClientIdDirty: true },
+                          { dirty: true },
                         )
                       }}
                       placeholder="app_..."
@@ -1345,7 +1343,7 @@ export function AgentPanel({
                       onChange={(event) => {
                         updateSettingsDraft(
                           { openAiOAuthClientSecret: event.target.value },
-                          { dirty: true, openAiOAuthClientSecretDirty: true },
+                          { dirty: true },
                         )
                       }}
                       placeholder={

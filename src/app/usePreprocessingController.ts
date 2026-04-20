@@ -4,7 +4,6 @@ import {
   useMemo,
   useRef,
   useState,
-  type SetStateAction,
 } from 'react'
 
 import {
@@ -41,24 +40,27 @@ interface UsePreprocessingControllerInput {
   onWorkspaceSyncStatusChange: (status: WorkspaceArtifactSyncStatus) => void
 }
 
-interface PreprocessingContextValues {
-  purposeSummaryCount: number
-  semanticEmbeddingCount: number
-  snapshotId: string | null
-  updatedAt: string | null
-}
+type DerivedPreprocessingFields = Pick<
+  PreprocessingStatus,
+  'purposeSummaryCount' | 'semanticEmbeddingCount' | 'snapshotId' | 'updatedAt'
+>
+type PreprocessingRuntimeState =
+  Omit<PreprocessingStatus, keyof DerivedPreprocessingFields> &
+  Partial<DerivedPreprocessingFields>
 
-interface PreprocessingRuntimeState {
-  activity: PreprocessingStatus['activity']
-  currentItemPath: string | null
-  lastError: string | null
-  processedSymbols: number
-  purposeSummaryCountOverride?: number
-  runState: PreprocessingStatus['runState']
-  semanticEmbeddingCountOverride?: number
-  snapshotIdOverride?: string | null
-  totalSymbols: number
-  updatedAtOverride?: string | null
+const CLEARED_PREPROCESSING_FIELDS: DerivedPreprocessingFields = {
+  purposeSummaryCount: 0,
+  semanticEmbeddingCount: 0,
+  snapshotId: null,
+  updatedAt: null,
+}
+const EMPTY_PREPROCESSING_RUNTIME_STATE: PreprocessingRuntimeState = {
+  activity: null,
+  currentItemPath: null,
+  lastError: null,
+  processedSymbols: 0,
+  runState: 'idle',
+  totalSymbols: 0,
 }
 
 export function usePreprocessingController(
@@ -67,7 +69,7 @@ export function usePreprocessingController(
   const [preprocessedWorkspaceContext, setPreprocessedWorkspaceContext] =
     useState<PreprocessedWorkspaceContext | null>(null)
   const [preprocessingRuntime, setPreprocessingRuntime] =
-    useState<PreprocessingRuntimeState>(() => createInitialPreprocessingRuntimeState())
+    useState<PreprocessingRuntimeState>(EMPTY_PREPROCESSING_RUNTIME_STATE)
   const preprocessingRunIdRef = useRef(0)
   const preprocessedWorkspaceContextRef = useRef<PreprocessedWorkspaceContext | null>(null)
   const preprocessingStatus = useMemo(
@@ -78,19 +80,6 @@ export function usePreprocessingController(
   useEffect(() => {
     preprocessedWorkspaceContextRef.current = preprocessedWorkspaceContext
   }, [preprocessedWorkspaceContext])
-
-  function setPreprocessingStatus(update: SetStateAction<PreprocessingStatus>) {
-    setPreprocessingRuntime((currentRuntime) => {
-      const context = preprocessedWorkspaceContextRef.current
-      const currentStatus = derivePreprocessingStatus(currentRuntime, context)
-      const nextStatus =
-        typeof update === 'function'
-          ? update(currentStatus)
-          : update
-
-      return createPreprocessingRuntimeStateFromStatus(nextStatus, context)
-    })
-  }
 
   function applyLoadedWorkspaceState(
     snapshot: CodebaseSnapshot,
@@ -108,30 +97,17 @@ export function usePreprocessingController(
         )
 
       setPreprocessedWorkspaceContext(persistedContext)
-      setPreprocessingStatus(
+      setPreprocessingRuntime(
         persistedContext
           ? {
-              runState: isPersistedContextReady ? 'ready' : 'stale',
-              activity: null,
-              updatedAt: persistedContext.workspaceProfile.generatedAt,
-              purposeSummaryCount: persistedContext.purposeSummaries.length,
-              semanticEmbeddingCount: persistedContext.semanticEmbeddings.length,
-              lastError: null,
-              currentItemPath: null,
+              ...EMPTY_PREPROCESSING_RUNTIME_STATE,
               processedSymbols: persistedContext.purposeSummaries.length,
-              snapshotId: persistedContext.snapshotId,
+              runState: isPersistedContextReady ? 'ready' : 'stale',
               totalSymbols,
             }
           : {
-              runState: 'idle',
-              activity: null,
-              updatedAt: null,
-              purposeSummaryCount: 0,
-              semanticEmbeddingCount: 0,
-              lastError: null,
-              currentItemPath: null,
-              processedSymbols: 0,
-              snapshotId: null,
+              ...EMPTY_PREPROCESSING_RUNTIME_STATE,
+              ...CLEARED_PREPROCESSING_FIELDS,
               totalSymbols,
             },
       )
@@ -140,16 +116,9 @@ export function usePreprocessingController(
 
   function resetForSnapshot(snapshot: CodebaseSnapshot) {
     startTransition(() => {
-      setPreprocessingStatus({
-        runState: 'idle',
-        activity: null,
-        updatedAt: null,
-        purposeSummaryCount: 0,
-        semanticEmbeddingCount: 0,
-        lastError: null,
-        currentItemPath: null,
-        processedSymbols: 0,
-        snapshotId: null,
+      setPreprocessingRuntime({
+        ...EMPTY_PREPROCESSING_RUNTIME_STATE,
+        ...CLEARED_PREPROCESSING_FIELDS,
         totalSymbols: countPreprocessableSymbols(snapshot),
       })
     })
@@ -161,16 +130,11 @@ export function usePreprocessingController(
     automatic: boolean,
   ) {
     if (!automatic && !existingContext) {
-      setPreprocessingStatus({
+      setPreprocessingRuntime({
+        ...EMPTY_PREPROCESSING_RUNTIME_STATE,
+        ...CLEARED_PREPROCESSING_FIELDS,
         runState: 'building',
         activity: 'summaries',
-        updatedAt: null,
-        purposeSummaryCount: 0,
-        semanticEmbeddingCount: 0,
-        lastError: null,
-        currentItemPath: null,
-        processedSymbols: 0,
-        snapshotId: null,
         totalSymbols: countPreprocessableSymbols(nextSnapshot),
       })
     }
@@ -179,16 +143,13 @@ export function usePreprocessingController(
     preprocessingRunIdRef.current = runId
 
     startTransition(() => {
-      setPreprocessingStatus((current) => ({
+      setPreprocessingRuntime((current) => ({
+        ...current,
         runState: existingContext ? 'stale' : 'building',
         activity: 'summaries',
-        updatedAt: current.updatedAt,
-        purposeSummaryCount: current.purposeSummaryCount,
-        semanticEmbeddingCount: current.semanticEmbeddingCount,
         lastError: null,
         currentItemPath: null,
         processedSymbols: 0,
-        snapshotId: current.snapshotId,
         totalSymbols: countPreprocessableSymbols(nextSnapshot),
       }))
     })
@@ -202,7 +163,7 @@ export function usePreprocessingController(
                 return
               }
 
-              setPreprocessingStatus((current) => ({
+              setPreprocessingRuntime((current) => ({
                 ...current,
                 activity: 'summaries',
                 currentItemPath: null,
@@ -221,16 +182,10 @@ export function usePreprocessingController(
 
           startTransition(() => {
             setPreprocessedWorkspaceContext(context)
-            setPreprocessingStatus({
-              runState: 'ready',
-              activity: null,
-              updatedAt: new Date().toISOString(),
-              purposeSummaryCount: context.purposeSummaries.length,
-              semanticEmbeddingCount: context.semanticEmbeddings.length,
-              lastError: null,
-              currentItemPath: null,
+            setPreprocessingRuntime({
+              ...EMPTY_PREPROCESSING_RUNTIME_STATE,
               processedSymbols: context.purposeSummaries.length,
-              snapshotId: context.snapshotId,
+              runState: 'ready',
               totalSymbols: countPreprocessableSymbols(nextSnapshot),
             })
           })
@@ -240,7 +195,7 @@ export function usePreprocessingController(
               return
             }
 
-            setPreprocessingStatus((current) => ({
+            setPreprocessingRuntime((current) => ({
               ...current,
               lastError:
                 error instanceof Error
@@ -255,20 +210,13 @@ export function usePreprocessingController(
           }
 
           startTransition(() => {
-            setPreprocessingStatus((current) => ({
-              runState: 'error',
-              activity: current.activity,
-              updatedAt: current.updatedAt,
-              purposeSummaryCount: current.purposeSummaryCount,
-              semanticEmbeddingCount: current.semanticEmbeddingCount,
+            setPreprocessingRuntime((current) => ({
+              ...current,
               lastError:
                 error instanceof Error
                   ? error.message
                   : 'Failed to preprocess workspace context.',
-              currentItemPath: current.currentItemPath,
-              processedSymbols: current.processedSymbols,
-              snapshotId: current.snapshotId,
-              totalSymbols: current.totalSymbols,
+              runState: 'error',
             }))
           })
         })
@@ -280,7 +228,7 @@ export function usePreprocessingController(
 
     if (!nextSnapshot) {
       startTransition(() => {
-        setPreprocessingStatus((current) => ({
+        setPreprocessingRuntime((current) => ({
           ...current,
           runState: 'error',
           activity: current.activity,
@@ -291,17 +239,10 @@ export function usePreprocessingController(
       return
     }
 
-    setPreprocessingStatus({
+    setPreprocessingRuntime({
+      ...EMPTY_PREPROCESSING_RUNTIME_STATE,
       runState: 'building',
       activity: 'summaries',
-      updatedAt: preprocessedWorkspaceContextRef.current?.workspaceProfile.generatedAt ?? null,
-      purposeSummaryCount: preprocessedWorkspaceContextRef.current?.purposeSummaries.length ?? 0,
-      semanticEmbeddingCount:
-        preprocessedWorkspaceContextRef.current?.semanticEmbeddings.length ?? 0,
-      lastError: null,
-      currentItemPath: null,
-      processedSymbols: 0,
-      snapshotId: preprocessedWorkspaceContextRef.current?.snapshotId ?? null,
       totalSymbols: countPreprocessableSymbols(nextSnapshot),
     })
 
@@ -324,16 +265,10 @@ export function usePreprocessingController(
     let activeSymbolPath: string | null = null
 
     startTransition(() => {
-      setPreprocessingStatus({
+      setPreprocessingRuntime({
+        ...EMPTY_PREPROCESSING_RUNTIME_STATE,
         runState: 'building',
         activity: 'summaries',
-        updatedAt: existingContext?.workspaceProfile.generatedAt ?? null,
-        purposeSummaryCount: 0,
-        semanticEmbeddingCount: existingContext?.semanticEmbeddings.length ?? 0,
-        lastError: null,
-        currentItemPath: null,
-        processedSymbols: 0,
-        snapshotId: existingContext?.snapshotId ?? null,
         totalSymbols: countPreprocessableSymbols(nextSnapshot),
       })
     })
@@ -345,7 +280,7 @@ export function usePreprocessingController(
         }
 
         activeSymbolPath = symbol.path
-        setPreprocessingStatus((current) => ({
+        setPreprocessingRuntime((current) => ({
           ...current,
           activity: 'summaries',
           currentItemPath: symbol.path,
@@ -389,7 +324,7 @@ export function usePreprocessingController(
         setPreprocessedWorkspaceContext(partialContext)
         await persistPreprocessedWorkspaceContext(partialContext)
 
-        setPreprocessingStatus((current) => ({
+        setPreprocessingRuntime((current) => ({
           ...current,
           activity: 'summaries',
           currentItemPath: symbol.path,
@@ -410,16 +345,10 @@ export function usePreprocessingController(
       hydratePreprocessedWorkspaceContext(context)
       startTransition(() => {
         setPreprocessedWorkspaceContext(context)
-        setPreprocessingStatus({
-          runState: 'ready',
-          activity: null,
-          updatedAt: generatedAt,
-          purposeSummaryCount: context.purposeSummaries.length,
-          semanticEmbeddingCount: context.semanticEmbeddings.length,
-          lastError: null,
-          currentItemPath: null,
+        setPreprocessingRuntime({
+          ...EMPTY_PREPROCESSING_RUNTIME_STATE,
           processedSymbols: context.purposeSummaries.length,
-          snapshotId: context.snapshotId,
+          runState: 'ready',
           totalSymbols: context.purposeSummaries.length,
         })
       })
@@ -432,7 +361,7 @@ export function usePreprocessingController(
       }
 
       startTransition(() => {
-        setPreprocessingStatus((current) => ({
+        setPreprocessingRuntime((current) => ({
           ...current,
           runState: 'error',
           activity: 'summaries',
@@ -453,7 +382,7 @@ export function usePreprocessingController(
     const existingContext = preprocessedWorkspaceContextRef.current
 
     if (!nextSnapshot || !existingContext?.purposeSummaries.length) {
-      setPreprocessingStatus((current) => ({
+      setPreprocessingRuntime((current) => ({
         ...current,
         runState: 'error',
         activity: 'embeddings',
@@ -464,19 +393,12 @@ export function usePreprocessingController(
     }
 
     const totalSymbols = existingContext.purposeSummaries.length
-    setPreprocessingStatus((current) => ({
-      ...current,
+    setPreprocessingRuntime({
+      ...EMPTY_PREPROCESSING_RUNTIME_STATE,
       runState: 'building',
       activity: 'embeddings',
-      updatedAt: existingContext.workspaceProfile.generatedAt,
-      purposeSummaryCount: existingContext.purposeSummaries.length,
-      semanticEmbeddingCount: existingContext.semanticEmbeddings.length,
-      lastError: null,
-      currentItemPath: null,
-      processedSymbols: 0,
-      snapshotId: existingContext.snapshotId,
       totalSymbols,
-    }))
+    })
 
     const previousEmbeddingBySymbolId = new Map(
       existingContext.semanticEmbeddings.map((embedding) => [embedding.symbolId, embedding]),
@@ -487,7 +409,7 @@ export function usePreprocessingController(
     try {
       for (const [index, summary] of existingContext.purposeSummaries.entries()) {
         activeSymbolPath = summary.path
-        setPreprocessingStatus((current) => ({
+        setPreprocessingRuntime((current) => ({
           ...current,
           activity: 'embeddings',
           currentItemPath: summary.path,
@@ -521,7 +443,7 @@ export function usePreprocessingController(
         setPreprocessedWorkspaceContext(partialContext)
         await persistPreprocessedWorkspaceContext(partialContext)
 
-        setPreprocessingStatus((current) => ({
+        setPreprocessingRuntime((current) => ({
           ...current,
           activity: 'embeddings',
           currentItemPath: summary.path,
@@ -538,19 +460,16 @@ export function usePreprocessingController(
 
       hydratePreprocessedWorkspaceContext(context)
       setPreprocessedWorkspaceContext(context)
-      setPreprocessingStatus((current) => ({
-        ...current,
+      setPreprocessingRuntime({
+        ...EMPTY_PREPROCESSING_RUNTIME_STATE,
         runState: 'ready',
-        activity: null,
-        updatedAt: new Date().toISOString(),
-        currentItemPath: null,
-        semanticEmbeddingCount: nextEmbeddings.length,
         processedSymbols: nextEmbeddings.length,
-      }))
+        totalSymbols,
+      })
       await persistPreprocessedWorkspaceContext(context)
       input.onWorkspaceSyncStatusChange(await fetchWorkspaceSyncStatus())
     } catch (error) {
-      setPreprocessingStatus((current) => ({
+      setPreprocessingRuntime((current) => ({
         ...current,
         runState: 'error',
         activity: 'embeddings',
@@ -577,17 +496,6 @@ export function usePreprocessingController(
   }
 }
 
-function createInitialPreprocessingRuntimeState(): PreprocessingRuntimeState {
-  return {
-    activity: null,
-    currentItemPath: null,
-    lastError: null,
-    processedSymbols: 0,
-    runState: 'idle',
-    totalSymbols: 0,
-  }
-}
-
 function derivePreprocessingStatus(
   runtime: PreprocessingRuntimeState,
   context: PreprocessedWorkspaceContext | null,
@@ -599,59 +507,24 @@ function derivePreprocessingStatus(
     currentItemPath: runtime.currentItemPath,
     lastError: runtime.lastError,
     processedSymbols: runtime.processedSymbols,
-    purposeSummaryCount:
-      runtime.purposeSummaryCountOverride ?? contextValues.purposeSummaryCount,
+    purposeSummaryCount: runtime.purposeSummaryCount ?? contextValues.purposeSummaryCount,
     runState: runtime.runState,
-    semanticEmbeddingCount:
-      runtime.semanticEmbeddingCountOverride ??
-      contextValues.semanticEmbeddingCount,
+    semanticEmbeddingCount: runtime.semanticEmbeddingCount ?? contextValues.semanticEmbeddingCount,
     snapshotId:
-      runtime.snapshotIdOverride !== undefined
-        ? runtime.snapshotIdOverride
+      runtime.snapshotId !== undefined
+        ? runtime.snapshotId
         : contextValues.snapshotId,
     totalSymbols: runtime.totalSymbols,
     updatedAt:
-      runtime.updatedAtOverride !== undefined
-        ? runtime.updatedAtOverride
+      runtime.updatedAt !== undefined
+        ? runtime.updatedAt
         : contextValues.updatedAt,
-  }
-}
-
-function createPreprocessingRuntimeStateFromStatus(
-  status: PreprocessingStatus,
-  context: PreprocessedWorkspaceContext | null,
-): PreprocessingRuntimeState {
-  const contextValues = getPreprocessingContextValues(context)
-
-  return {
-    activity: status.activity,
-    currentItemPath: status.currentItemPath,
-    lastError: status.lastError,
-    processedSymbols: status.processedSymbols,
-    purposeSummaryCountOverride:
-      status.purposeSummaryCount === contextValues.purposeSummaryCount
-        ? undefined
-        : status.purposeSummaryCount,
-    runState: status.runState,
-    semanticEmbeddingCountOverride:
-      status.semanticEmbeddingCount === contextValues.semanticEmbeddingCount
-        ? undefined
-        : status.semanticEmbeddingCount,
-    snapshotIdOverride:
-      status.snapshotId === contextValues.snapshotId
-        ? undefined
-        : status.snapshotId,
-    totalSymbols: status.totalSymbols,
-    updatedAtOverride:
-      status.updatedAt === contextValues.updatedAt
-        ? undefined
-        : status.updatedAt,
   }
 }
 
 function getPreprocessingContextValues(
   context: PreprocessedWorkspaceContext | null,
-): PreprocessingContextValues {
+): DerivedPreprocessingFields {
   return {
     purposeSummaryCount: context?.purposeSummaries.length ?? 0,
     semanticEmbeddingCount: context?.semanticEmbeddings.length ?? 0,

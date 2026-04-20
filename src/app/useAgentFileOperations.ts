@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useReducer } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 
 import { DesktopAgentClient } from '../agent/DesktopAgentClient'
 import type { AgentFileOperation } from '../types'
@@ -7,45 +7,26 @@ const MAX_LIVE_FILE_OPERATIONS = 250
 const POLLED_FILE_OPERATIONS_INTERVAL_MS = 1000
 const GENERATION_LOOKBACK_MS = 5000
 
-interface OperationState {
-  enabledSinceMs: number | null
-  operations: AgentFileOperation[]
-}
-
-type OperationAction =
-  | {
-      enabled: boolean
-      nowMs: number
-      type: 'ENABLED_CHANGED'
-    }
-  | {
-      operation: AgentFileOperation
-      type: 'OPERATION_RECEIVED'
-    }
-  | {
-      operations: AgentFileOperation[]
-      type: 'OPERATIONS_RECEIVED'
-    }
-
 export function useAgentFileOperations(input: {
   enabled: boolean
 }) {
   const agentClient = useMemo(() => new DesktopAgentClient(), [])
-  const [state, dispatch] = useReducer(operationReducer, {
-    enabledSinceMs: null,
-    operations: [],
-  })
+  const [enabledSinceMs, setEnabledSinceMs] = useState<number | null>(null)
+  const [operations, setOperations] = useState<AgentFileOperation[]>([])
 
   useEffect(() => {
-    dispatch({
-      enabled: input.enabled,
-      nowMs: Date.now(),
-      type: 'ENABLED_CHANGED',
-    })
+    const timeoutId = window.setTimeout(() => {
+      setOperations([])
+      setEnabledSinceMs(input.enabled ? Date.now() : null)
+    }, 0)
+
+    return () => {
+      window.clearTimeout(timeoutId)
+    }
   }, [input.enabled])
 
   useEffect(() => {
-    if (!input.enabled) {
+    if (!input.enabled || enabledSinceMs === null) {
       return
     }
 
@@ -54,15 +35,14 @@ export function useAgentFileOperations(input: {
         return
       }
 
-      dispatch({
-        operation: event.operation,
-        type: 'OPERATION_RECEIVED',
-      })
+      setOperations((currentOperations) =>
+        upsertOperation(currentOperations, event.operation),
+      )
     })
-  }, [agentClient, input.enabled])
+  }, [agentClient, enabledSinceMs, input.enabled])
 
   useEffect(() => {
-    if (!input.enabled) {
+    if (!input.enabled || enabledSinceMs === null) {
       return
     }
 
@@ -76,10 +56,11 @@ export function useAgentFileOperations(input: {
           return
         }
 
-        dispatch({
-          operations: agentState.fileOperations ?? [],
-          type: 'OPERATIONS_RECEIVED',
-        })
+        setOperations((currentOperations) =>
+          (agentState.fileOperations ?? [])
+            .filter((operation) => isOperationInActiveWindow(enabledSinceMs, operation))
+            .reduce(upsertOperation, currentOperations),
+        )
       } catch {
         // Live bridge events are still the primary source when HTTP polling fails.
       }
@@ -94,86 +75,21 @@ export function useAgentFileOperations(input: {
       cancelled = true
       window.clearInterval(intervalId)
     }
-  }, [agentClient, input.enabled])
+  }, [agentClient, enabledSinceMs, input.enabled])
 
-  return useMemo(() => {
-    if (!input.enabled) {
-      return []
-    }
-
-    if (state.enabledSinceMs === null) {
-      return []
-    }
-
-    return state.operations
-  }, [input.enabled, state.enabledSinceMs, state.operations])
-}
-
-function operationReducer(
-  state: OperationState,
-  action: OperationAction,
-): OperationState {
-  switch (action.type) {
-    case 'ENABLED_CHANGED': {
-      if (!action.enabled) {
-        return {
-          enabledSinceMs: null,
-          operations: [],
-        }
-      }
-
-      if (state.enabledSinceMs !== null) {
-        return state
-      }
-
-      return {
-        enabledSinceMs: action.nowMs,
-        operations: [],
-      }
-    }
-
-    case 'OPERATION_RECEIVED': {
-      if (state.enabledSinceMs === null) {
-        return state
-      }
-
-      return {
-        ...state,
-        operations: upsertOperation(state.operations, action.operation),
-      }
-    }
-
-    case 'OPERATIONS_RECEIVED': {
-      if (state.enabledSinceMs === null) {
-        return state
-      }
-
-      const nextOperations = action.operations
-        .filter((operation) => isOperationInActiveWindow(state, operation))
-        .reduce(upsertOperation, state.operations)
-
-      return {
-        ...state,
-        operations: nextOperations,
-      }
-    }
-  }
+  return input.enabled && enabledSinceMs !== null ? operations : []
 }
 
 function isOperationInActiveWindow(
-  state: OperationState,
+  enabledSinceMs: number,
   operation: AgentFileOperation,
 ) {
-  if (state.enabledSinceMs === null) {
-    return true
-  }
-
   const timestampMs = new Date(operation.timestamp).getTime()
   if (!Number.isFinite(timestampMs)) {
     return true
   }
 
-  return timestampMs >= state.enabledSinceMs - GENERATION_LOOKBACK_MS
+  return timestampMs >= enabledSinceMs - GENERATION_LOOKBACK_MS
 }
 
 function upsertOperation(

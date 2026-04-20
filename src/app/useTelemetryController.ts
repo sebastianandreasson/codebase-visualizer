@@ -11,7 +11,6 @@ import type {
   AgentHeatSample,
   DirtyFileEditSignal,
   TelemetryActivityEvent,
-  TelemetryHeatmapRequest,
   TelemetryMode,
   TelemetryOverview,
   TelemetrySource,
@@ -35,7 +34,6 @@ interface TelemetryData {
   heatSamples: AgentHeatSample[]
   observedAt: number
   overview: TelemetryOverview | null
-  query: TelemetryHeatmapRequest | null
 }
 
 export function useTelemetryController({
@@ -55,7 +53,6 @@ export function useTelemetryController({
     heatSamples: [],
     observedAt: 0,
     overview: null,
-    query: null,
   })
   const [telemetryError, setTelemetryError] = useState<string | null>(null)
   const [liveChangedFiles, setLiveChangedFiles] = useState<string[]>([])
@@ -70,12 +67,12 @@ export function useTelemetryController({
 
     const refreshTelemetry = async () => {
       try {
-        const telemetryQuery: TelemetryHeatmapRequest = {
+        const telemetryQuery = {
           mode: telemetryMode,
           runId: telemetryWindow === 'run' ? selectedRunId ?? undefined : undefined,
           source: telemetrySource,
           window: telemetryWindow,
-        }
+        } as const
         const [overviewResponse, heatmapResponse, activityResponse] = await Promise.all([
           fetchTelemetryOverview(telemetryQuery),
           fetchTelemetryHeatmap(telemetryQuery),
@@ -91,7 +88,6 @@ export function useTelemetryController({
           heatSamples: heatmapResponse.samples,
           observedAt: Date.now(),
           overview: overviewResponse.overview,
-          query: telemetryQuery,
         })
         setTelemetryError(null)
       } catch (error) {

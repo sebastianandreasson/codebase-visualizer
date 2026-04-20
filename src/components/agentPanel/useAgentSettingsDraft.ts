@@ -9,9 +9,7 @@ export interface AgentSettingsDraft {
   manualRedirectUrl: string
   modelId: string
   openAiOAuthClientId: string
-  openAiOAuthClientIdDirty: boolean
   openAiOAuthClientSecret: string
-  openAiOAuthClientSecretDirty: boolean
   provider: string
 }
 
@@ -28,13 +26,22 @@ type AgentSettingsDraftPatch = Partial<Pick<
 
 interface AgentSettingsDraftUpdateOptions {
   dirty?: boolean
-  openAiOAuthClientIdDirty?: boolean
-  openAiOAuthClientSecretDirty?: boolean
+}
+
+const INITIAL_AGENT_SETTINGS_DRAFT: AgentSettingsDraft = {
+  apiKey: '',
+  authMode: 'brokered_oauth',
+  dirty: false,
+  manualRedirectUrl: '',
+  modelId: '',
+  openAiOAuthClientId: '',
+  openAiOAuthClientSecret: '',
+  provider: '',
 }
 
 export function useAgentSettingsDraft() {
   const [settingsDraft, setSettingsDraft] = useState<AgentSettingsDraft>(
-    () => createInitialAgentSettingsDraft(),
+    INITIAL_AGENT_SETTINGS_DRAFT,
   )
 
   const updateSettingsDraft = useCallback((
@@ -46,16 +53,9 @@ export function useAgentSettingsDraft() {
         ...currentDraft,
         ...patch,
         dirty: options.dirty ?? currentDraft.dirty,
-        openAiOAuthClientIdDirty:
-          options.openAiOAuthClientIdDirty ?? currentDraft.openAiOAuthClientIdDirty,
-        openAiOAuthClientSecretDirty:
-          options.openAiOAuthClientSecretDirty ??
-          currentDraft.openAiOAuthClientSecretDirty,
       }
 
-      return areAgentSettingsDraftsEqual(currentDraft, nextDraft)
-        ? currentDraft
-        : nextDraft
+      return nextDraft
     })
   }, [])
 
@@ -64,9 +64,7 @@ export function useAgentSettingsDraft() {
   ) => {
     const nextDraft = createAgentSettingsDraftFromSettings(nextSettings)
 
-    setSettingsDraft((currentDraft) =>
-      areAgentSettingsDraftsEqual(currentDraft, nextDraft) ? currentDraft : nextDraft,
-    )
+    setSettingsDraft(nextDraft)
   }, [])
 
   return {
@@ -76,52 +74,14 @@ export function useAgentSettingsDraft() {
   }
 }
 
-function createInitialAgentSettingsDraft(): AgentSettingsDraft {
-  return {
-    apiKey: '',
-    authMode: 'brokered_oauth',
-    dirty: false,
-    manualRedirectUrl: '',
-    modelId: '',
-    openAiOAuthClientId: '',
-    openAiOAuthClientIdDirty: false,
-    openAiOAuthClientSecret: '',
-    openAiOAuthClientSecretDirty: false,
-    provider: '',
-  }
-}
-
 function createAgentSettingsDraftFromSettings(
   settings: AgentSettingsState,
 ): AgentSettingsDraft {
   return {
-    apiKey: '',
+    ...INITIAL_AGENT_SETTINGS_DRAFT,
     authMode: settings.authMode,
-    dirty: false,
-    manualRedirectUrl: '',
     modelId: settings.modelId,
     openAiOAuthClientId: settings.openAiOAuthClientId ?? '',
-    openAiOAuthClientIdDirty: false,
-    openAiOAuthClientSecret: '',
-    openAiOAuthClientSecretDirty: false,
     provider: settings.provider,
   }
-}
-
-function areAgentSettingsDraftsEqual(
-  left: AgentSettingsDraft,
-  right: AgentSettingsDraft,
-) {
-  return (
-    left.apiKey === right.apiKey &&
-    left.authMode === right.authMode &&
-    left.dirty === right.dirty &&
-    left.manualRedirectUrl === right.manualRedirectUrl &&
-    left.modelId === right.modelId &&
-    left.openAiOAuthClientId === right.openAiOAuthClientId &&
-    left.openAiOAuthClientIdDirty === right.openAiOAuthClientIdDirty &&
-    left.openAiOAuthClientSecret === right.openAiOAuthClientSecret &&
-    left.openAiOAuthClientSecretDirty === right.openAiOAuthClientSecretDirty &&
-    left.provider === right.provider
-  )
 }
