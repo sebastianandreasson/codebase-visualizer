@@ -50,6 +50,10 @@ interface InteractiveTelemetryInput {
   toolProfile?: AgentToolProfile
   toolInvocations: {
     args: unknown
+    nodeIds?: string[]
+    paths?: string[]
+    resultPreview?: string
+    symbolNodeIds?: string[]
     toolCallId: string
     toolName: string
   }[]
@@ -83,6 +87,7 @@ interface RequestRecord {
   sessionId?: string
   source?: string
   spanSource?: string
+  symbolNodeIds?: string[]
   task?: string
   timestamp?: string
   toolNames?: string[]
@@ -99,9 +104,15 @@ interface SpanRecord {
   primaryPath?: string
   requestId?: string
   spanKind?: string
+  symbolNodeIds?: string[]
   timestamp?: string
   toolCallId?: string
   toolName?: string
+}
+
+interface RequestTelemetryTarget {
+  path: string
+  symbolNodeIds: string[]
 }
 
 const require = createRequire(import.meta.url)
@@ -182,6 +193,7 @@ export class AgentTelemetryService {
       requestId,
       sessionId: input.sessionId,
     })
+    const persistedSpanRecords = buildPersistedInteractiveSpanRecords(spanRecords)
     const spanSummary = summarizeRequestSpans(spanRecords)
     const toolProfileSummary = summarizeInteractiveToolProfile(input.toolInvocations)
 
@@ -221,7 +233,10 @@ export class AgentTelemetryService {
         totalTokens: 0,
         usageSource: 'unavailable',
       },
-      spans: spanRecords,
+      spans: persistedSpanRecords,
+    }, {
+      includeSpanPreview: true,
+      includeSpanText: true,
     })
   }
 
@@ -293,21 +308,25 @@ export class AgentTelemetryService {
         continue
       }
 
-      const requestPaths = collectRequestPaths(request, spansByRequestId.get(String(request.requestId ?? '')) ?? [])
+      const requestTargets = collectRequestTargets(
+        request,
+        spansByRequestId.get(String(request.requestId ?? '')) ?? [],
+      )
 
-      if (requestPaths.length === 0) {
+      if (requestTargets.length === 0) {
         continue
       }
 
-      for (const pathValue of requestPaths) {
+      for (const target of requestTargets) {
         events.push({
           confidence,
-          key: `${String(request.requestId ?? '')}:${pathValue}`,
-          path: pathValue,
+          key: `${String(request.requestId ?? '')}:${target.path}`,
+          path: target.path,
           requestCount: 1,
           runId: String(request.runId ?? ''),
           sessionId: String(request.sessionId ?? ''),
           source,
+          symbolNodeIds: target.symbolNodeIds,
           timestamp: String(request.timestamp ?? ''),
           toolNames: Array.isArray(request.toolNames)
             ? request.toolNames
@@ -338,6 +357,7 @@ export class AgentTelemetryService {
       lastSeenAt: string
       requestCount: number
       source: TelemetrySource
+      symbolNodeIds: Set<string>
       totalTokens: number
     }>()
 
@@ -350,18 +370,19 @@ export class AgentTelemetryService {
         continue
       }
 
-      const requestPaths = collectRequestPaths(
+      const requestTargets = collectRequestTargets(
         request,
         spansByRequestId.get(String(request.requestId ?? '')) ?? [],
       )
-      const perPathBudget = requestPaths.length > 0 ? attributionBudget / requestPaths.length : 0
+      const perPathBudget = requestTargets.length > 0 ? attributionBudget / requestTargets.length : 0
 
-      for (const pathValue of requestPaths) {
-        const current = byPath.get(pathValue) ?? {
+      for (const target of requestTargets) {
+        const current = byPath.get(target.path) ?? {
           confidence,
           lastSeenAt: String(request.timestamp ?? ''),
           requestCount: 0,
           source,
+          symbolNodeIds: new Set<string>(),
           totalTokens: 0,
         }
 
@@ -374,24 +395,29 @@ export class AgentTelemetryService {
         current.confidence = mergeConfidence(current.confidence, confidence)
         current.source =
           current.source === source ? source : 'all'
-        byPath.set(pathValue, current)
+        for (const symbolNodeId of target.symbolNodeIds) {
+          current.symbolNodeIds.add(symbolNodeId)
+        }
+        byPath.set(target.path, current)
       }
     }
 
     const samples = [...byPath.entries()]
       .map(([pathValue, value]) => {
+        const symbolNodeIds = [...value.symbolNodeIds]
+
         return {
           confidence: value.confidence,
           lastSeenAt: value.lastSeenAt,
-          nodeIds: [] as string[],
+          nodeIds: input.mode === 'symbols' ? symbolNodeIds : [],
           path: pathValue,
           requestCount: value.requestCount,
           source: value.source,
+          symbolNodeIds,
           totalTokens: roundMetric(value.totalTokens),
           weight: 0,
         } satisfies AgentHeatSample
       })
-      .filter((sample): sample is AgentHeatSample => sample !== null)
 
     const maxScore = samples.reduce((maxValue, sample) => {
       return Math.max(maxValue, sample.totalTokens > 0 ? sample.totalTokens : sample.requestCount)
@@ -524,8 +550,18 @@ function buildInteractiveSpanRecords(input: {
   ]
 
   input.input.toolInvocations.forEach((invocation, index) => {
-    const toolPaths = deriveToolPaths(invocation.toolName, invocation.args)
+    const toolPaths = [
+      ...new Set([
+        ...deriveToolPaths(invocation.toolName, invocation.args),
+        ...(invocation.paths ?? []),
+      ]),
+    ]
     const argsText = safeJson(invocation.args)
+    const codeReferenceText = safeJson({
+      nodeIds: invocation.nodeIds,
+      resultPreview: invocation.resultPreview,
+      symbolNodeIds: invocation.symbolNodeIds,
+    })
 
     spans.push({
       byteCount: byteLength(argsText),
@@ -537,7 +573,7 @@ function buildInteractiveSpanRecords(input: {
       role: 'toolResult',
       sessionId: input.sessionId,
       source: 'tool_hooks',
-      spanIndex: index + 1,
+      spanIndex: (index * 2) + 1,
       spanKind: 'tool_call',
       text: argsText,
       timestamp: input.input.finishedAt,
@@ -545,9 +581,61 @@ function buildInteractiveSpanRecords(input: {
       toolName: invocation.toolName,
       turnIndex: input.input.promptSequence,
     })
+
+    if (
+      invocation.resultPreview ||
+      invocation.nodeIds?.length ||
+      invocation.symbolNodeIds?.length
+    ) {
+      spans.push({
+        byteCount: byteLength(codeReferenceText),
+        charCount: codeReferenceText.length,
+        paths: toolPaths,
+        preview: codeReferenceText.slice(0, 280),
+        primaryPath: toolPaths[0] ?? '',
+        requestId: input.requestId,
+        role: 'toolResult',
+        sessionId: input.sessionId,
+        source: 'tool_hooks',
+        spanIndex: (index * 2) + 2,
+        spanKind: 'tool_result',
+        text: codeReferenceText,
+        timestamp: input.input.finishedAt,
+        toolCallId: invocation.toolCallId,
+        toolName: invocation.toolName,
+        turnIndex: input.input.promptSequence,
+      })
+    }
   })
 
   return spans
+}
+
+function buildPersistedInteractiveSpanRecords(spans: SpanRecord[]) {
+  return spans.map((span) => {
+    const symbolNodeIds = collectSpanSymbolNodeIds(span)
+    const nodeIds = collectSymbolNodeIdsFromValue([
+      span.nodeIds,
+      span.symbolNodeIds,
+      span.text,
+      span.preview,
+    ])
+    const hasCodeReferences = symbolNodeIds.length > 0 || nodeIds.length > 0
+    const text = hasCodeReferences
+      ? safeJson({
+          nodeIds,
+          symbolNodeIds,
+        })
+      : ''
+
+    return {
+      ...span,
+      byteCount: span.byteCount,
+      charCount: span.charCount,
+      preview: text.slice(0, 280),
+      text,
+    }
+  })
 }
 
 const SYMBOL_QUERY_TOOL_NAMES = new Set([
@@ -591,25 +679,63 @@ function summarizeInteractiveToolProfile(
   }
 }
 
-function collectRequestPaths(
+function collectRequestTargets(
   request: RequestRecord,
   spans: SpanRecord[],
-) {
-  const pathSet = new Set<string>()
+): RequestTelemetryTarget[] {
+  const symbolsByPath = new Map<string, Set<string>>()
+  const requestSymbolNodeIds = new Set(collectSymbolNodeIdsFromValue(request.symbolNodeIds))
+
+  const ensurePath = (pathValue: string) => {
+    const normalizedPath = String(pathValue ?? '').trim()
+
+    if (!normalizedPath || isSymbolNodeId(normalizedPath)) {
+      return null
+    }
+
+    const existing = symbolsByPath.get(normalizedPath) ?? new Set<string>()
+    symbolsByPath.set(normalizedPath, existing)
+    return existing
+  }
 
   for (const span of spans) {
+    const spanSymbolNodeIds = collectSpanSymbolNodeIds(span)
+    for (const symbolNodeId of spanSymbolNodeIds) {
+      requestSymbolNodeIds.add(symbolNodeId)
+    }
+
     for (const pathValue of Array.isArray(span.paths) ? span.paths : []) {
-      pathSet.add(String(pathValue))
+      const symbolSet = ensurePath(String(pathValue))
+
+      if (!symbolSet) {
+        continue
+      }
+
+      for (const symbolNodeId of spanSymbolNodeIds) {
+        symbolSet.add(symbolNodeId)
+      }
     }
   }
 
-  if (pathSet.size === 0) {
+  if (symbolsByPath.size === 0) {
     for (const pathValue of Array.isArray(request.files) ? request.files : []) {
-      pathSet.add(String(pathValue))
+      ensurePath(String(pathValue))
     }
   }
 
-  return [...pathSet].filter(Boolean)
+  if (symbolsByPath.size === 1) {
+    const symbolSet = [...symbolsByPath.values()][0]
+    for (const symbolNodeId of requestSymbolNodeIds) {
+      symbolSet.add(symbolNodeId)
+    }
+  }
+
+  return [...symbolsByPath.entries()]
+    .map(([path, symbolSet]) => ({
+      path,
+      symbolNodeIds: [...symbolSet],
+    }))
+    .filter((target) => Boolean(target.path))
 }
 
 function getTelemetrySourceForRequest(request: RequestRecord): TelemetrySource {
@@ -782,13 +908,20 @@ function normalizeTelemetryRequestPaths(
 ): RequestRecord {
   const files = Array.isArray(request.files)
     ? request.files
+        .filter((pathValue) => !isSymbolNodeId(String(pathValue ?? '')))
         .map((pathValue) => normalizeTelemetryPath(rootDir, pathValue))
         .filter(Boolean)
     : []
+  const symbolNodeIds = collectSymbolNodeIdsFromValue([
+    request.symbolNodeIds,
+    request.nodeIds,
+    request.files,
+  ])
 
   return {
     ...request,
     files,
+    symbolNodeIds,
   } as RequestRecord
 }
 
@@ -798,16 +931,130 @@ function normalizeTelemetrySpanPaths(
 ): SpanRecord {
   const paths = Array.isArray(span.paths)
     ? span.paths
+        .filter((pathValue) => !isSymbolNodeId(String(pathValue ?? '')))
         .map((pathValue) => normalizeTelemetryPath(rootDir, pathValue))
         .filter(Boolean)
     : []
-  const primaryPath = normalizeTelemetryPath(rootDir, span.primaryPath)
+  const primaryPath = isSymbolNodeId(String(span.primaryPath ?? ''))
+    ? ''
+    : normalizeTelemetryPath(rootDir, span.primaryPath)
+  const symbolNodeIds = collectSymbolNodeIdsFromValue([
+    span.symbolNodeIds,
+    span.nodeIds,
+    span.paths,
+    span.primaryPath,
+    span.text,
+    span.preview,
+  ])
 
   return {
     ...span,
     paths,
     primaryPath,
+    symbolNodeIds,
   } as SpanRecord
+}
+
+function collectSpanSymbolNodeIds(span: SpanRecord) {
+  return collectSymbolNodeIdsFromValue([
+    span.symbolNodeIds,
+    span.paths,
+    span.primaryPath,
+    span.text,
+  ])
+}
+
+function collectSymbolNodeIdsFromValue(value: unknown): string[] {
+  const symbolNodeIds = new Set<string>()
+  collectSymbolNodeIds(value, symbolNodeIds)
+  return [...symbolNodeIds]
+}
+
+function collectSymbolNodeIds(value: unknown, output: Set<string>) {
+  if (!value || output.size >= 32) {
+    return
+  }
+
+  if (typeof value === 'string') {
+    collectSymbolNodeIdsFromString(value, output)
+    return
+  }
+
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      collectSymbolNodeIds(entry, output)
+    }
+    return
+  }
+
+  if (typeof value !== 'object') {
+    return
+  }
+
+  for (const entry of Object.values(value as Record<string, unknown>)) {
+    collectSymbolNodeIds(entry, output)
+  }
+}
+
+function collectSymbolNodeIdsFromString(value: string, output: Set<string>) {
+  const parsed = parseJsonLikeTelemetryValue(value)
+
+  if (parsed !== value) {
+    collectSymbolNodeIds(parsed, output)
+  }
+
+  const directValue = cleanTelemetryReferenceToken(value)
+
+  if (isSymbolNodeId(directValue)) {
+    output.add(directValue)
+  }
+
+  const matches = value.match(/symbol:[^\s'",)\]}]+/g) ?? []
+  for (const match of matches) {
+    const symbolNodeId = cleanTelemetryReferenceToken(match)
+
+    if (isSymbolNodeId(symbolNodeId)) {
+      output.add(symbolNodeId)
+    }
+  }
+}
+
+function parseJsonLikeTelemetryValue(value: string): unknown {
+  const text = value.trim()
+
+  if (
+    text.length === 0 ||
+    !(
+      (text.startsWith('{') && text.endsWith('}')) ||
+      (text.startsWith('[') && text.endsWith(']')) ||
+      (text.startsWith('"') && text.endsWith('"'))
+    )
+  ) {
+    return value
+  }
+
+  try {
+    const parsed = JSON.parse(text)
+    return typeof parsed === 'string' && parsed !== value
+      ? parseJsonLikeTelemetryValue(parsed)
+      : parsed
+  } catch {
+    return value
+  }
+}
+
+function isSymbolNodeId(value: string) {
+  const normalized = value.trim()
+  return normalized.startsWith('symbol:') && normalized.length > 'symbol:'.length
+}
+
+function cleanTelemetryReferenceToken(value: string) {
+  return value
+    .trim()
+    .replace(/^['"`]+|['"`]+$/g, '')
+    .replace(/^[([{<]+/g, '')
+    .replace(/[)\]},;>]+$/g, '')
+    .trim()
 }
 
 function roundMetric(value: number) {

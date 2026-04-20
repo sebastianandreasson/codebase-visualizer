@@ -489,6 +489,28 @@
   gap: 0.3rem;
 }
 
+.cbv-agent-event-symbols {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.28rem;
+}
+
+.cbv-agent-event-symbols span {
+  min-width: 0;
+  max-width: 100%;
+  border: 1px solid color-mix(in srgb, var(--app-accent) 42%, var(--app-border-soft));
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--app-accent) 12%, var(--app-surface));
+  color: var(--app-text);
+  padding: 0.16rem 0.4rem;
+  font-family: var(--cbv-font-mono);
+  font-size: 0.62rem;
+  line-height: 1.2;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .cbv-agent-event-payload {
   margin-top: 0.1rem;
 }
@@ -665,6 +687,48 @@
   color: var(--app-text-dim);
   font-size: 0.6875rem;
   line-height: 1.4;
+}
+
+.cbv-follow-activity-card {
+  display: grid;
+  gap: 0.35rem;
+  padding: 0.55rem 0.65rem;
+  border: 1px solid var(--app-border);
+  border-left-width: 4px;
+  border-radius: 0.45rem;
+  background: color-mix(in srgb, var(--app-surface-strong) 84%, transparent);
+}
+
+.cbv-follow-activity-card.is-activity {
+  border-left-color: var(--app-accent);
+}
+
+.cbv-follow-activity-card.is-edit {
+  border-left-color: var(--app-warning);
+}
+
+.cbv-follow-activity-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.cbv-follow-activity-card-header span,
+.cbv-follow-activity-card strong {
+  font-family: var(--cbv-font-mono);
+}
+
+.cbv-follow-activity-card-header span {
+  color: var(--app-text-faint);
+  font-size: 0.625rem;
+}
+
+.cbv-follow-activity-card strong {
+  overflow-wrap: anywhere;
+  color: var(--app-text);
+  font-size: 0.75rem;
+  font-weight: 500;
 }
 
 .cbv-preview-meta {

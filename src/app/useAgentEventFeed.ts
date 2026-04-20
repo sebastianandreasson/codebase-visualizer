@@ -29,6 +29,7 @@ export interface AgentDebugFeedEntry {
   payload?: unknown
   source: AgentDebugFeedSource
   status?: string
+  symbolNodeIds?: string[]
   timestamp: string
   timestampMs: number
   title: string
@@ -112,9 +113,13 @@ function createAgentFeedEntry(
     case 'file_operation':
       return {
         ...base,
-        detail: `${event.operation.toolName} · ${event.operation.source}`,
+        detail: formatDetailWithSymbols(
+          `${event.operation.toolName} · ${event.operation.source}`,
+          event.operation.symbolNodeIds,
+        ),
         path: event.operation.path,
         status: event.operation.status,
+        symbolNodeIds: event.operation.symbolNodeIds,
         title: `file operation · ${event.operation.kind}`,
       }
     case 'timeline':
@@ -141,12 +146,16 @@ function createFileOperationFeedEntry(operation: AgentFileOperation): AgentDebug
   const timestampMs = parseTimestampMs(operation.timestamp)
 
   return {
-    detail: `${operation.toolName} · ${operation.source} · ${operation.confidence}`,
+    detail: formatDetailWithSymbols(
+      `${operation.toolName} · ${operation.source} · ${operation.confidence}`,
+      operation.symbolNodeIds,
+    ),
     id: `file-operation:${operation.id}`,
     path: operation.path,
     payload: operation,
     source: 'file-operation',
     status: operation.status,
+    symbolNodeIds: operation.symbolNodeIds,
     timestamp: operation.timestamp,
     timestampMs,
     title: operation.kind.replace('_', ' '),
@@ -158,11 +167,15 @@ function createTelemetryFeedEntry(event: TelemetryActivityEvent): AgentDebugFeed
   const timestampMs = parseTimestampMs(event.timestamp)
 
   return {
-    detail: `${event.toolNames.join(', ') || 'request'} · ${Math.round(event.totalTokens)} tok`,
+    detail: formatDetailWithSymbols(
+      `${event.toolNames.join(', ') || 'request'} · ${Math.round(event.totalTokens)} tok · ${event.confidence}`,
+      event.symbolNodeIds,
+    ),
     id: `telemetry:${event.key}`,
     path: event.path,
     payload: event,
     source: 'telemetry',
+    symbolNodeIds: event.symbolNodeIds,
     timestamp: event.timestamp,
     timestampMs,
     title: 'telemetry activity',
@@ -211,6 +224,7 @@ function createFollowFeedEntries(debugState: FollowDebugState): AgentDebugFeedEn
       payload: debugState.currentTarget,
       source: 'follow',
       status: debugState.currentMode,
+      symbolNodeIds: debugState.currentTarget.symbolNodeIds,
       timestamp: debugState.currentTarget.timestamp,
       timestampMs: parseTimestampMs(debugState.currentTarget.timestamp),
       title: `follow target · ${debugState.currentTarget.intent}`,
@@ -223,13 +237,14 @@ function createFollowFeedEntries(debugState: FollowDebugState): AgentDebugFeedEn
 
 function summarizeToolInvocation(invocation: AgentToolInvocation) {
   return {
-    detail: summarizeValue(invocation.args),
+    detail: formatDetailWithSymbols(summarizeValue(invocation.args), invocation.symbolNodeIds),
     path: invocation.paths?.[0],
     status: invocation.endedAt
       ? invocation.isError
         ? 'error'
         : 'completed'
       : 'running',
+    symbolNodeIds: invocation.symbolNodeIds,
   }
 }
 
@@ -244,9 +259,10 @@ function summarizeTimelineItem(item: AgentTimelineItem) {
 
   if (item.type === 'tool') {
     return {
-      detail: summarizeValue(item.args),
+      detail: formatDetailWithSymbols(summarizeValue(item.args), item.symbolNodeIds),
       path: item.paths?.[0],
       status: item.status,
+      symbolNodeIds: item.symbolNodeIds,
       title: `timeline tool · ${item.toolName}`,
     }
   }
@@ -278,6 +294,22 @@ function summarizeValue(value: unknown) {
   }
 
   return text.length > 180 ? `${text.slice(0, 177)}...` : text
+}
+
+function formatDetailWithSymbols(detail: string | undefined, symbolNodeIds: string[] | undefined) {
+  const symbolText = formatSymbolCount(symbolNodeIds)
+
+  return [detail, symbolText].filter(Boolean).join(' · ') || undefined
+}
+
+function formatSymbolCount(symbolNodeIds: string[] | undefined) {
+  const count = symbolNodeIds?.length ?? 0
+
+  if (count === 0) {
+    return ''
+  }
+
+  return `${count} symbol${count === 1 ? '' : 's'}`
 }
 
 function formatFollowEventDetail(event: FollowDomainEvent) {

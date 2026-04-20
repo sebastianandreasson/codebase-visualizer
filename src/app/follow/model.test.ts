@@ -490,6 +490,68 @@ describe('follow model', () => {
     )
   })
 
+  it('reveals a preferred symbol for file reads in symbol view when no symbol is visible', () => {
+    const snapshot = createSnapshot()
+    const state = reduceFollowState([
+      { type: 'FOLLOW_TOGGLED', enabled: true, nowMs: 1_880 },
+      { type: 'VIEW_MODE_CHANGED', mode: 'files', nowMs: 1_885, viewMode: 'symbols' },
+      {
+        type: 'SNAPSHOT_CONTEXT_UPDATED',
+        nowMs: 1_890,
+        snapshot,
+        visibleNodeIds: [],
+      },
+      {
+        type: 'FILE_OPERATIONS_UPDATED',
+        fileOperations: [
+          createFileOperation({
+            id: 'operation:read:game-window',
+            kind: 'file_read',
+            operationRanges: [
+              {
+                kind: 'read',
+                label: 'Read file window',
+                path: 'game.js',
+                range: {
+                  end: { column: 1, line: 3 },
+                  start: { column: 1, line: 1 },
+                },
+                source: 'result',
+              },
+            ],
+            path: 'game.js',
+            source: 'pi-sdk',
+            timestamp: '2026-04-18T10:00:01.000Z',
+            toolName: 'readFileWindow',
+          }),
+        ],
+        nowMs: 1_895,
+      },
+    ])
+
+    expect(state.debug.currentMode).toBe('activity')
+    expect(state.currentCameraCommand?.target).toEqual(
+      expect.objectContaining({
+        confidence: 'best_named_symbol',
+        kind: 'symbol',
+        operationRanges: [
+          expect.objectContaining({
+            label: 'Read file window',
+            path: 'game.js',
+          }),
+        ],
+        path: 'game.js',
+        primaryNodeId: 'symbol:getSpawnCell',
+      }),
+    )
+    expect(state.currentInspectorCommand?.operationRanges).toEqual([
+      expect.objectContaining({
+        label: 'Read file window',
+        path: 'game.js',
+      }),
+    ])
+  })
+
   it('keeps file activity followable in filesystem view even when the file is currently hidden', () => {
     const snapshot = createSnapshot()
     const state = reduceFollowState([
@@ -1273,6 +1335,7 @@ function createFileOperation(
     confidence: overrides.confidence ?? 'exact',
     id: overrides.id,
     kind: overrides.kind,
+    operationRanges: overrides.operationRanges,
     path: overrides.path,
     paths: overrides.paths ?? (overrides.path ? [overrides.path] : []),
     resultPreview: overrides.resultPreview,

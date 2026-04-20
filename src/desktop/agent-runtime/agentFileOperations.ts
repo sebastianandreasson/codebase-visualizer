@@ -4,6 +4,7 @@ import type {
   AgentFileOperation,
   AgentFileOperationConfidence,
   AgentFileOperationKind,
+  AgentFileOperationRange,
   AgentFileOperationSource,
   AgentFileOperationStatus,
   AgentMessage,
@@ -16,6 +17,15 @@ import {
 } from './agentCodeReferences'
 
 const MAX_OPERATION_PATHS = 12
+
+const DIRECT_READ_TOOL_NAMES = new Set([
+  'findsymbols',
+  'getsymbolneighborhood',
+  'getsymboloutline',
+  'getsymbolworkspacesummary',
+  'readfilewindow',
+  'readsymbolslice',
+])
 
 const DIRECT_READ_MARKERS = [
   'cat',
@@ -95,6 +105,13 @@ export function createFileOperationsFromToolInvocation(input: {
       parsedResultPreview,
     ),
   )
+  const operationRanges = deriveToolOperationRanges({
+    args: input.invocation.args,
+    result: parsedResultPreview,
+    symbolNodeIds: codeReferences.symbolNodeIds,
+    toolName: input.invocation.toolName,
+    workspaceRootDir: input.workspaceRootDir,
+  })
 
   if (isShellTool && shellCommand) {
     for (const pathValue of extractShellPathTokens(shellCommand)) {
@@ -121,6 +138,7 @@ export function createFileOperationsFromToolInvocation(input: {
           source,
           status,
           symbolNodeIds: codeReferences.symbolNodeIds,
+          operationRanges,
           timestamp,
         }),
       ]
@@ -142,6 +160,7 @@ export function createFileOperationsFromToolInvocation(input: {
       source,
       status,
       symbolNodeIds: codeReferences.symbolNodeIds,
+      operationRanges: filterOperationRangesForPath(operationRanges, pathValue),
       timestamp,
     }),
   )
@@ -216,6 +235,7 @@ function createOperation(input: {
   source: AgentFileOperationSource
   status: AgentFileOperationStatus
   symbolNodeIds?: string[]
+  operationRanges?: AgentFileOperationRange[]
   timestamp: string
 }): AgentFileOperation {
   return {
@@ -231,6 +251,7 @@ function createOperation(input: {
     nodeIds: input.nodeIds,
     path: input.path,
     paths: input.paths,
+    operationRanges: input.operationRanges,
     resultPreview: input.invocation.resultPreview,
     sessionId: input.sessionId,
     source: input.source,
@@ -250,6 +271,10 @@ function classifyDirectInvocation(
   confidence: AgentFileOperationConfidence
   kind: AgentFileOperationKind
 } {
+  if (DIRECT_READ_TOOL_NAMES.has(normalizeToolNameKey(toolName))) {
+    return { confidence: 'exact', kind: 'file_read' }
+  }
+
   const normalizedText = [
     normalizeClassifyingText(toolName),
     ...getActionTerms(args).map(normalizeClassifyingText),
@@ -568,8 +593,270 @@ function normalizeClassifyingText(value: string) {
     .replace(/[^a-z0-9]+/g, ' ')
 }
 
+function normalizeToolNameKey(toolName: string) {
+  return toolName.trim().toLowerCase().replace(/[^a-z0-9]+/g, '')
+}
+
 function containsAnyMarker(value: string, markers: string[]) {
   return markers.some((marker) => new RegExp(`(^|\\s)${marker}(\\s|$)`).test(value))
+}
+
+function deriveToolOperationRanges(input: {
+  args: unknown
+  result: unknown
+  symbolNodeIds?: string[]
+  toolName: string
+  workspaceRootDir?: string
+}) {
+  const toolName = normalizeToolNameKey(input.toolName)
+  const result = unwrapToolResult(input.result)
+  const resultObject = asRecord(result)
+  const ranges: AgentFileOperationRange[] = []
+  const symbolNodeIds = uniqueStrings(input.symbolNodeIds ?? [])
+
+  if (toolName === 'readsymbolslice') {
+    const path = getPathFromResultOrArgs(resultObject, input.args, input.workspaceRootDir)
+    addOperationRange(ranges, {
+      kind: 'read',
+      label: 'Read symbol slice',
+      path,
+      range: getSourceRange(resultObject?.contextRange) ?? getSourceRange(resultObject?.exactRange),
+      source: 'result',
+      symbolNodeIds,
+    })
+  } else if (toolName === 'getsymboloutline') {
+    const outlines = Array.isArray(resultObject?.outlines) ? resultObject.outlines : []
+
+    for (const outline of outlines) {
+      const outlineObject = asRecord(outline)
+      const previewObject = asRecord(outlineObject?.sourcePreview)
+      const symbolObject = asRecord(outlineObject?.symbol)
+      const path = getPathFromFileRecord(outlineObject?.file, input.workspaceRootDir)
+      const outlineSymbolIds = uniqueStrings([
+        typeof symbolObject?.id === 'string' ? symbolObject.id : null,
+      ])
+
+      addOperationRange(ranges, {
+        kind: 'preview',
+        label: 'Outline preview',
+        path,
+        range: getSourceRange(previewObject?.range),
+        source: 'result',
+        symbolNodeIds: outlineSymbolIds.length > 0 ? outlineSymbolIds : symbolNodeIds,
+      })
+    }
+  } else if (toolName === 'readfilewindow') {
+    const path = getPathFromResultOrArgs(resultObject, input.args, input.workspaceRootDir)
+    addOperationRange(ranges, {
+      kind: 'read',
+      label: 'Read file window',
+      path,
+      range: getSourceRange(resultObject?.range) ?? getRangeFromLineArgs(input.args),
+      source: resultObject?.range ? 'result' : 'args',
+      symbolNodeIds,
+    })
+  } else if (toolName === 'replacefilewindow') {
+    const path = getPathFromResultOrArgs(resultObject, input.args, input.workspaceRootDir)
+    addOperationRange(ranges, {
+      kind: 'edit',
+      label: 'Edited file window',
+      path,
+      range: getSourceRange(resultObject?.replacedRange) ?? getRangeFromLineArgs(input.args),
+      source: resultObject?.replacedRange ? 'result' : 'args',
+      symbolNodeIds,
+    })
+  } else if (toolName === 'replacesymbolrange') {
+    const path = getPathFromResultOrArgs(resultObject, input.args, input.workspaceRootDir)
+    addOperationRange(ranges, {
+      kind: 'edit',
+      label: 'Edited symbol range',
+      path,
+      range: getSourceRange(resultObject?.replacedRange),
+      source: 'result',
+      symbolNodeIds,
+    })
+  }
+
+  return ranges.length > 0 ? dedupeOperationRanges(ranges) : undefined
+}
+
+function filterOperationRangesForPath(
+  ranges: AgentFileOperationRange[] | undefined,
+  pathValue: string,
+) {
+  const filteredRanges = (ranges ?? [])
+    .filter((range) => !range.path || range.path === pathValue)
+
+  return filteredRanges.length > 0 ? filteredRanges : undefined
+}
+
+function addOperationRange(
+  ranges: AgentFileOperationRange[],
+  input: Omit<AgentFileOperationRange, 'range'> & {
+    range: AgentFileOperationRange['range'] | null
+  },
+) {
+  const range = input.range
+
+  if (!range) {
+    return
+  }
+
+  ranges.push({
+    ...input,
+    range,
+    symbolNodeIds: input.symbolNodeIds?.length ? uniqueStrings(input.symbolNodeIds) : undefined,
+  })
+}
+
+function dedupeOperationRanges(ranges: AgentFileOperationRange[]) {
+  const seenKeys = new Set<string>()
+  const result: AgentFileOperationRange[] = []
+
+  for (const range of ranges) {
+    const key = [
+      range.kind,
+      range.path ?? '',
+      range.range.start.line,
+      range.range.start.column,
+      range.range.end.line,
+      range.range.end.column,
+      range.symbolNodeIds?.join(',') ?? '',
+    ].join(':')
+
+    if (seenKeys.has(key)) {
+      continue
+    }
+
+    seenKeys.add(key)
+    result.push(range)
+  }
+
+  return result
+}
+
+function unwrapToolResult(value: unknown) {
+  const objectValue = asRecord(value)
+
+  if (objectValue && 'result' in objectValue) {
+    return objectValue.result
+  }
+
+  return value
+}
+
+function getPathFromResultOrArgs(
+  result: Record<string, unknown> | null,
+  args: unknown,
+  workspaceRootDir?: string,
+) {
+  return (
+    getPathFromFileRecord(result?.file, workspaceRootDir) ??
+    getPathFromObject(result, workspaceRootDir) ??
+    getPathFromObject(asRecord(args), workspaceRootDir)
+  )
+}
+
+function getPathFromFileRecord(value: unknown, workspaceRootDir?: string) {
+  const file = asRecord(value)
+  return getPathFromObject(file, workspaceRootDir)
+}
+
+function getPathFromObject(value: Record<string, unknown> | null, workspaceRootDir?: string) {
+  if (!value) {
+    return undefined
+  }
+
+  for (const key of ['path', 'filePath', 'file_path', 'filepath']) {
+    const entry = value[key]
+
+    if (typeof entry === 'string') {
+      const pathValue = normalizeOperationPath(entry, workspaceRootDir)
+
+      if (pathValue) {
+        return pathValue
+      }
+    }
+  }
+
+  return undefined
+}
+
+function getRangeFromLineArgs(args: unknown) {
+  const argsObject = asRecord(args)
+
+  if (!argsObject) {
+    return null
+  }
+
+  const startLine = getIntegerArg(argsObject, ['startLine', 'line'])
+  const endLine = getIntegerArg(argsObject, ['endLine', 'toLine'])
+
+  if (!startLine || !endLine) {
+    return null
+  }
+
+  return {
+    end: { column: 1, line: Math.max(startLine, endLine) },
+    start: { column: 1, line: Math.min(startLine, endLine) },
+  }
+}
+
+function getIntegerArg(value: Record<string, unknown>, keys: string[]) {
+  for (const key of keys) {
+    const entry = value[key]
+
+    if (typeof entry === 'number' && Number.isInteger(entry) && entry > 0) {
+      return entry
+    }
+
+    if (typeof entry === 'string') {
+      const parsed = Number(entry)
+
+      if (Number.isInteger(parsed) && parsed > 0) {
+        return parsed
+      }
+    }
+  }
+
+  return null
+}
+
+function getSourceRange(value: unknown) {
+  const range = asRecord(value)
+  const start = asRecord(range?.start)
+  const end = asRecord(range?.end)
+  const startLine = getPositiveNumber(start?.line)
+  const startColumn = getPositiveNumber(start?.column)
+  const endLine = getPositiveNumber(end?.line)
+  const endColumn = getPositiveNumber(end?.column)
+
+  if (!startLine || !startColumn || !endLine || !endColumn) {
+    return null
+  }
+
+  return {
+    end: { column: endColumn, line: endLine },
+    start: { column: startColumn, line: startLine },
+  }
+}
+
+function getPositiveNumber(value: unknown) {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0
+    ? value
+    : null
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null
+}
+
+function uniqueStrings(values: unknown[]) {
+  return [...new Set(
+    values.filter((value): value is string => typeof value === 'string' && value.length > 0),
+  )]
 }
 
 function parseJsonPreview(value: string | undefined) {

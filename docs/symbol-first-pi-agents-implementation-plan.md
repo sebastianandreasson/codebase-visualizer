@@ -13,8 +13,8 @@ slices before falling back to bounded file windows.
   `src/file.ts#symbol@10:0` back to file paths for existing follow behavior.
 - [x] Teach follow-agent to prefer explicit symbol IDs over best-symbol
   fallback when resolving symbol-layout targets.
-- [ ] Add symbol attribution to request telemetry spans.
-- [ ] Add UI affordances for showing exact symbol attribution in the agent
+- [x] Add symbol attribution to request telemetry spans.
+- [x] Add UI affordances for showing exact symbol attribution in the agent
   feed/timeline.
 
 ## Phase 1: Read-only symbol tools

@@ -56,6 +56,7 @@ export function createTelemetryFollowEvent(
     path: event.path,
     sourcePriority: 1,
     sourceSequence: 0,
+    symbolNodeIds: event.symbolNodeIds,
     timestamp: event.timestamp,
     timestampMs,
     toolNames: event.toolNames,
@@ -89,6 +90,7 @@ export function createFileOperationFollowEvent(
   return {
     eventKey: operation.id,
     key: `operation:${type}:${operation.id}`,
+    operationRanges: operation.operationRanges,
     path: operation.path,
     sourcePriority: getFileOperationSourcePriority(operation),
     sourceSequence: getOperationPathSequence(operation),

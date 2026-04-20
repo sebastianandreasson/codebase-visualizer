@@ -299,6 +299,7 @@ describe('AgentPanel OAuth reconciliation', () => {
             id: 'agent-timeline:tool:call-1',
             startedAt: '2026-04-15T00:00:02.000Z',
             status: 'running',
+            symbolNodeIds: ['symbol:src/App.tsx:App'],
             toolCallId: 'call-1',
             toolName: 'read',
             type: 'tool',
@@ -311,6 +312,7 @@ describe('AgentPanel OAuth reconciliation', () => {
     })
 
     expect(screen.getByText('tool read src/App.tsx')).not.toBeNull()
+    expect(screen.getByText('symbols src/App.tsx:App')).not.toBeNull()
   })
 
   it('replaces the empty streaming assistant placeholder with the text row', async () => {

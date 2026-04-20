@@ -132,18 +132,39 @@ export function useCanvasGraphController({
   const [flowInstance, setFlowInstance] = useState<ReactFlowInstance<Node, Edge> | null>(null)
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>([])
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([])
+  const [followRevealState, setFollowRevealState] = useState<{
+    key: string
+    nodeIds: string[]
+  }>({ key: '', nodeIds: [] })
   const containerDragPreviewPositionsRef = useRef(new Map<string, XYPosition>())
   const lastFittedCompareKeyRef = useRef<string | null>(null)
   const snapshotOrNull = snapshot ?? null
   const selectedNodeIdSet = useMemo(() => new Set(selectedNodeIds), [selectedNodeIds])
+  const followRevealKey = [
+    resolvedScene?.layoutSpec.id ?? 'no-layout',
+    snapshotOrNull?.generatedAt ?? 'no-snapshot',
+    viewMode,
+  ].join('::')
+  const followRevealedNodeIds = useMemo(
+    () => followRevealState.key === followRevealKey ? followRevealState.nodeIds : [],
+    [followRevealKey, followRevealState.key, followRevealState.nodeIds],
+  )
+  const followVisibleLayout = useMemo(
+    () => createFollowVisibleLayout(
+      resolvedScene?.layoutSpec ?? null,
+      followRevealedNodeIds,
+    ),
+    [followRevealedNodeIds, resolvedScene],
+  )
+
   const symbolClusterState = useMemo(
     () =>
       deriveSymbolClusterState(
         snapshotOrNull,
-        resolvedScene?.layoutSpec ?? null,
+        followVisibleLayout,
         viewMode,
       ),
-    [snapshotOrNull, resolvedScene, viewMode],
+    [followVisibleLayout, snapshotOrNull, viewMode],
   )
   const expandedClusterIds = useMemo(
     () => new Set(expandedSymbolClusterIds),
@@ -159,48 +180,48 @@ export function useCanvasGraphController({
   )
   const symbolFootprintViewportZoom = useMemo(
     () =>
-      resolvedScene?.layoutSpec.strategy === 'semantic'
+      followVisibleLayout?.strategy === 'semantic'
         ? Math.max(modelViewportZoom, SEMANTIC_LAYOUT_FOOTPRINT_ZOOM)
         : modelViewportZoom,
-    [modelViewportZoom, resolvedScene],
+    [followVisibleLayout, modelViewportZoom],
   )
   const symbolFootprints = useMemo(
     () =>
-      snapshotOrNull && resolvedScene
+      snapshotOrNull && followVisibleLayout
         ? createSymbolFootprintLookup({
-            layout: resolvedScene.layoutSpec,
+            layout: followVisibleLayout,
             snapshot: snapshotOrNull,
             viewportZoom: symbolFootprintViewportZoom,
           })
         : null,
-    [resolvedScene, snapshotOrNull, symbolFootprintViewportZoom],
+    [followVisibleLayout, snapshotOrNull, symbolFootprintViewportZoom],
   )
   const expandedClusterLayouts = useMemo(
     () =>
       buildExpandedClusterLayouts(
         snapshotOrNull,
-        resolvedScene?.layoutSpec ?? null,
+        followVisibleLayout,
         symbolClusterState,
         expandedClusterIds,
         symbolFootprints ?? undefined,
       ),
-    [expandedClusterIds, resolvedScene, snapshotOrNull, symbolClusterState, symbolFootprints],
+    [expandedClusterIds, followVisibleLayout, snapshotOrNull, symbolClusterState, symbolFootprints],
   )
   const filesystemContainerLayouts = useMemo(
     () =>
       buildFilesystemContainerLayouts(
         snapshotOrNull,
-        resolvedScene?.layoutSpec ?? null,
+        followVisibleLayout,
         viewMode,
         collapsedDirectoryIdSet,
       ),
-    [collapsedDirectoryIdSet, resolvedScene, snapshotOrNull, viewMode],
+    [collapsedDirectoryIdSet, followVisibleLayout, snapshotOrNull, viewMode],
   )
   const layoutGroupContainerIndex = useMemo(
     () =>
       buildLayoutGroupContainerIndex(
         snapshotOrNull,
-        resolvedScene?.layoutSpec ?? null,
+        followVisibleLayout,
         viewMode,
         {
           expandedClusterIds,
@@ -213,8 +234,8 @@ export function useCanvasGraphController({
     [
       expandedClusterIds,
       expandedClusterLayouts,
+      followVisibleLayout,
       modelViewportZoom,
-      resolvedScene,
       snapshotOrNull,
       symbolClusterState,
       symbolFootprints,
@@ -223,13 +244,13 @@ export function useCanvasGraphController({
   )
 
   const baseFlowModel = useMemo<FlowModel | null>(() => {
-    if (!snapshotOrNull || !resolvedScene) {
+    if (!snapshotOrNull || !followVisibleLayout) {
       return null
     }
 
     return buildFlowModel(
       snapshotOrNull,
-      resolvedScene.layoutSpec,
+      followVisibleLayout,
       graphLayers,
       viewMode,
       symbolClusterState,
@@ -250,9 +271,9 @@ export function useCanvasGraphController({
     expandedClusterIds,
     expandedClusterLayouts,
     filesystemContainerLayouts,
+    followVisibleLayout,
     graphLayers,
     layoutGroupContainerIndex,
-    resolvedScene,
     selectedNodeIdSet,
     snapshotOrNull,
     symbolFootprints,
@@ -392,16 +413,16 @@ export function useCanvasGraphController({
 
   const visibleNodeCount = useMemo(
     () =>
-      snapshotOrNull && resolvedScene
+      snapshotOrNull && followVisibleLayout
         ? countVisibleLayoutNodes(
             snapshotOrNull,
-            resolvedScene.layoutSpec,
+            followVisibleLayout,
             viewMode,
             symbolClusterState,
             expandedClusterIds,
           )
         : 0,
-    [expandedClusterIds, resolvedScene, snapshotOrNull, symbolClusterState, viewMode],
+    [expandedClusterIds, followVisibleLayout, snapshotOrNull, symbolClusterState, viewMode],
   )
   const denseCanvasMode = viewMode === 'symbols' && visibleNodeCount > 250
 
@@ -437,20 +458,22 @@ export function useCanvasGraphController({
     )
     const revealedHiddenSymbolIds =
       input.mode === 'symbols'
-        ? revealHiddenFollowSymbols({
-            activeDraft: editableDraftLayout,
-            activeLayout: editableLayout,
-            draftLayouts,
-            layout: resolvedScene?.layoutSpec ?? null,
-            layouts,
-            nodeIds: targetNodeIds,
-            setDraftLayouts,
-            setLayouts,
-          })
+        ? getHiddenFollowSymbolIds(followVisibleLayout, targetNodeIds)
         : []
+
+    if (revealedHiddenSymbolIds.length > 0) {
+      setFollowRevealState((currentState) => ({
+        key: followRevealKey,
+        nodeIds:
+          currentState.key === followRevealKey
+            ? mergeUniqueIds(currentState.nodeIds, revealedHiddenSymbolIds)
+            : revealedHiddenSymbolIds,
+      }))
+    }
+
     const followClusterLayout =
-      input.mode === 'symbols' && resolvedScene?.layoutSpec
-        ? createFollowVisibleLayout(resolvedScene.layoutSpec, targetNodeIds)
+      input.mode === 'symbols' && followVisibleLayout
+        ? createFollowVisibleLayout(followVisibleLayout, targetNodeIds)
         : null
     const followSymbolClusterState =
       followClusterLayout
@@ -492,15 +515,10 @@ export function useCanvasGraphController({
     await focusTarget()
   }, [
     collapsedDirectoryIdSet,
-    draftLayouts,
-    editableDraftLayout,
-    editableLayout,
     expandedClusterIds,
+    followRevealKey,
+    followVisibleLayout,
     flowInstance,
-    layouts,
-    resolvedScene,
-    setDraftLayouts,
-    setLayouts,
     snapshotOrNull,
     symbolClusterState,
     toggleCollapsedDirectory,
@@ -849,58 +867,28 @@ function getCollapsedFilesystemAncestorIds(
   return collapsedAncestorIds.reverse()
 }
 
-function revealHiddenFollowSymbols(input: {
-  activeDraft: LayoutDraft | null
-  activeLayout: LayoutSpec | null
-  draftLayouts: LayoutDraft[]
-  layout: LayoutSpec | null
-  layouts: LayoutSpec[]
-  nodeIds: string[]
-  setDraftLayouts: (draftLayouts: LayoutDraft[]) => void
-  setLayouts: (layouts: LayoutSpec[]) => void
-}) {
-  if (!input.layout) {
+export function getHiddenFollowSymbolIds(
+  layout: LayoutSpec | null,
+  nodeIds: string[],
+) {
+  if (!layout) {
     return []
   }
 
-  const hiddenNodeIds = new Set(input.layout.hiddenNodeIds)
-  const revealNodeIds = [...new Set(input.nodeIds)]
-    .filter((nodeId) => hiddenNodeIds.has(nodeId) && Boolean(input.layout?.placements[nodeId]))
+  const hiddenNodeIds = new Set(layout.hiddenNodeIds)
 
-  if (revealNodeIds.length === 0) {
-    return []
-  }
-
-  const revealNodeIdSet = new Set(revealNodeIds)
-  const revealLayout = (layout: LayoutSpec) => ({
-    ...layout,
-    hiddenNodeIds: layout.hiddenNodeIds.filter((nodeId) => !revealNodeIdSet.has(nodeId)),
-    updatedAt: new Date().toISOString(),
-  })
-
-  if (input.activeDraft?.layout) {
-    input.setDraftLayouts(input.draftLayouts.map((draft) =>
-      draft.id === input.activeDraft?.id && draft.layout
-        ? {
-            ...draft,
-            layout: revealLayout(draft.layout),
-            updatedAt: new Date().toISOString(),
-          }
-        : draft,
-    ))
-    return revealNodeIds
-  }
-
-  if (input.activeLayout) {
-    input.setLayouts(input.layouts.map((layout) =>
-      layout.id === input.activeLayout?.id ? revealLayout(layout) : layout,
-    ))
-  }
-
-  return revealNodeIds
+  return [...new Set(nodeIds)]
+    .filter((nodeId) => hiddenNodeIds.has(nodeId) && Boolean(layout.placements[nodeId]))
 }
 
-function createFollowVisibleLayout(layout: LayoutSpec, nodeIds: string[]) {
+export function createFollowVisibleLayout(
+  layout: LayoutSpec | null,
+  nodeIds: string[],
+) {
+  if (!layout) {
+    return null
+  }
+
   const revealNodeIdSet = new Set(nodeIds)
   const hiddenNodeIds = layout.hiddenNodeIds.filter((nodeId) => !revealNodeIdSet.has(nodeId))
 
@@ -912,6 +900,18 @@ function createFollowVisibleLayout(layout: LayoutSpec, nodeIds: string[]) {
     ...layout,
     hiddenNodeIds,
   }
+}
+
+function mergeUniqueIds(left: string[], right: string[]) {
+  const mergedIds = [...left]
+
+  for (const id of right) {
+    if (!mergedIds.includes(id)) {
+      mergedIds.push(id)
+    }
+  }
+
+  return mergedIds
 }
 
 function expandFollowSymbolClusters(input: {

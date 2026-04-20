@@ -24,6 +24,7 @@ import {
   type WorkingSetState,
   type CodebaseFile,
   type FollowDebugState,
+  type FollowInspectorActivity,
   type GitFileDiff,
   type InspectorTab,
   type LayoutGroup,
@@ -59,6 +60,7 @@ interface InspectorPaneProps {
   draftActionError?: string | null
   facetDefinitions: ProjectFacetDefinition[]
   followDebugState: FollowDebugState
+  followedInspectorActivity?: FollowInspectorActivity | null
   graphSummary: GraphSummary
   header: {
     eyebrow: string
@@ -117,6 +119,7 @@ export function InspectorPane({
   draftActionError = null,
   facetDefinitions,
   followDebugState,
+  followedInspectorActivity = null,
   graphSummary,
   header,
   inspectorBodyRef,
@@ -157,6 +160,11 @@ export function InspectorPane({
     !selectedFile &&
     selectedFiles.length === 0 &&
     selectedSymbols.length === 0
+  const selectedFileFollowActivity = getFollowActivityForFile(
+    followedInspectorActivity,
+    selectedFile,
+  )
+  const selectedFileOperationRange = getPrimaryFollowOperationRange(selectedFileFollowActivity)
 
   return (
     <aside className="cbv-inspector">
@@ -263,9 +271,11 @@ export function InspectorPane({
         ) : selectedFile ? (
           <div className="cbv-file-inspector">
             <FileIdentityHeader file={selectedFile} symbol={selectedSymbol} />
+            <FollowInspectorActivityCard activity={selectedFileFollowActivity} />
             <CodePreview
               file={selectedFile}
-              highlightedRange={selectedSymbol?.range}
+              highlightedRange={selectedFileOperationRange?.range ?? selectedSymbol?.range}
+              operationRange={selectedFileOperationRange?.range ?? null}
               scrollToDiffRequestKey={scrollToDiffRequestKey}
               themeMode={themeMode}
             />
@@ -438,6 +448,18 @@ function AgentEventFeedInspector({
               </div>
               {entry.path ? <p className="cbv-agent-event-path">{entry.path}</p> : null}
               {entry.detail ? <p className="cbv-agent-event-detail">{entry.detail}</p> : null}
+              {entry.symbolNodeIds?.length ? (
+                <div className="cbv-agent-event-symbols">
+                  {entry.symbolNodeIds.slice(0, 4).map((symbolNodeId) => (
+                    <span key={symbolNodeId} title={symbolNodeId}>
+                      {formatSymbolNodeId(symbolNodeId)}
+                    </span>
+                  ))}
+                  {entry.symbolNodeIds.length > 4 ? (
+                    <span>+{entry.symbolNodeIds.length - 4}</span>
+                  ) : null}
+                </div>
+              ) : null}
               <div className="cbv-agent-event-meta">
                 <span>{entry.type}</span>
                 {entry.status ? <span>{entry.status}</span> : null}
@@ -474,6 +496,14 @@ function formatEventPayload(payload: unknown) {
   } catch {
     return '[unserializable payload]'
   }
+}
+
+function formatSymbolNodeId(symbolNodeId: string) {
+  const withoutPrefix = symbolNodeId.replace(/^symbol:/, '')
+  const hashIndex = withoutPrefix.indexOf('#')
+  const compactValue = hashIndex >= 0 ? withoutPrefix.slice(hashIndex + 1) : withoutPrefix
+
+  return compactValue.length > 44 ? `${compactValue.slice(0, 41)}...` : compactValue
 }
 
 function TelemetrySummaryCard({
@@ -545,6 +575,43 @@ function FileIdentityHeader({
       <strong>{title}</strong>
       <p className="cbv-file-identity-signature">{signature}</p>
       <p className="cbv-file-identity-meta">Code · {codeMeta}</p>
+    </section>
+  )
+}
+
+function FollowInspectorActivityCard({
+  activity,
+}: {
+  activity: FollowInspectorActivity | null
+}) {
+  if (!activity) {
+    return null
+  }
+
+  const primaryRange = getPrimaryFollowOperationRange(activity)
+  const title = activity.intent === 'edit' ? 'Agent edit' : 'Agent read'
+  const rangeText = primaryRange
+    ? `${primaryRange.label} · L${formatRange(primaryRange.range)}`
+    : activity.symbolNodeIds.length > 0
+      ? `${activity.symbolNodeIds.length} symbol${activity.symbolNodeIds.length === 1 ? '' : 's'}`
+      : 'File-level activity'
+
+  return (
+    <section className={`cbv-follow-activity-card is-${activity.intent}`}>
+      <div className="cbv-follow-activity-card-header">
+        <p className="cbv-eyebrow">{title}</p>
+        <span>{formatFollowActivityTime(activity.timestamp)}</span>
+      </div>
+      <strong>{rangeText}</strong>
+      {activity.toolNames.length > 0 ? (
+        <div className="cbv-purpose-summary-tags">
+          {activity.toolNames.map((toolName) => (
+            <span className="cbv-purpose-summary-tag" key={toolName}>
+              {toolName}
+            </span>
+          ))}
+        </div>
+      ) : null}
     </section>
   )
 }
@@ -960,11 +1027,13 @@ function LayoutGroupInspector({
 function CodePreview({
   file,
   highlightedRange,
+  operationRange,
   scrollToDiffRequestKey,
   themeMode,
 }: {
   file: CodebaseFile
   highlightedRange?: SourceRange
+  operationRange?: SourceRange | null
   scrollToDiffRequestKey?: string | null
   themeMode: ThemeMode
 }) {
@@ -1066,22 +1135,27 @@ function CodePreview({
       return
     }
 
+    diffSummaryRef.current?.scrollIntoView({
+      block: 'nearest',
+      behavior: 'smooth',
+    })
+
+    if (operationRange) {
+      return
+    }
+
     const firstChangedLineNumber = Math.max(
       1,
       Math.min(fileDiff.changes[0].startLine, viewRef.current.state.doc.lines),
     )
     const firstChangedLine = viewRef.current.state.doc.line(firstChangedLineNumber)
 
-    diffSummaryRef.current?.scrollIntoView({
-      block: 'nearest',
-      behavior: 'smooth',
-    })
     viewRef.current.dispatch({
       effects: EditorView.scrollIntoView(firstChangedLine.from, {
         y: 'start',
       }),
     })
-  }, [file.id, fileDiff, scrollToDiffRequestKey])
+  }, [file.id, fileDiff, operationRange, scrollToDiffRequestKey])
 
   if (!file.content) {
     return (
@@ -1548,6 +1622,42 @@ function formatKindTag(symbol: SymbolNode | null) {
     default:
       return 'fn'
   }
+}
+
+function getFollowActivityForFile(
+  activity: FollowInspectorActivity | null,
+  file: CodebaseFile | null,
+) {
+  if (!activity || !file || activity.path !== file.path) {
+    return null
+  }
+
+  return activity
+}
+
+function getPrimaryFollowOperationRange(activity: FollowInspectorActivity | null) {
+  if (!activity?.operationRanges?.length) {
+    return null
+  }
+
+  const matchingRanges = activity.operationRanges
+    .filter((range) => !range.path || range.path === activity.path)
+
+  if (matchingRanges.length === 0) {
+    return activity.operationRanges[0]
+  }
+
+  return matchingRanges.find((range) => range.kind === activity.intent) ??
+    matchingRanges.find((range) => range.kind === 'read') ??
+    matchingRanges[0]
+}
+
+function formatFollowActivityTime(timestamp: string) {
+  const parsed = new Date(timestamp)
+
+  return Number.isFinite(parsed.getTime())
+    ? parsed.toLocaleTimeString()
+    : timestamp
 }
 
 function formatRange(range: SourceRange) {

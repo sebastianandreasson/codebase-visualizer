@@ -128,6 +128,9 @@ function ToolTimelineRow({
         {item.paths?.length ? (
           <p>paths {item.paths.join(' · ')}</p>
         ) : null}
+        {item.symbolNodeIds?.length ? (
+          <p>symbols {formatSymbolRefs(item.symbolNodeIds)}</p>
+        ) : null}
         <pre>args {formatJsonPreview(item.args)}</pre>
         {item.resultPreview ? (
           <pre>result {item.resultPreview}</pre>
@@ -204,6 +207,13 @@ function getArgString(args: unknown, keys: string[]) {
   }
 
   return ''
+}
+
+function formatSymbolRefs(symbolNodeIds: string[]) {
+  return symbolNodeIds
+    .slice(0, 4)
+    .map((symbolNodeId) => compactLine(symbolNodeId.replace(/^symbol:/, ''), 64))
+    .join(' · ')
 }
 
 function formatLifecycleDetail(item: Extract<AgentTimelineItem, { type: 'lifecycle' }>) {

@@ -1,4 +1,5 @@
 import type { VisualizerViewMode } from '../../schema/layout'
+import type { AgentFileOperationRange } from '../../schema/agent'
 import { isSymbolNode, type ProjectSnapshot } from '../../schema/snapshot'
 import type { TelemetryActivityEvent, TelemetryMode } from '../../schema/telemetry'
 import {
@@ -469,6 +470,7 @@ function resolveFollowTargetFromEvent(input: {
         fileNodeId,
         intent: input.intent,
         kind: 'symbol',
+        operationRanges: input.sourceEvent.operationRanges,
         path: input.sourceEvent.path,
         primaryNodeId: explicitSymbolIds[0],
         requiresSnapshotRefresh: input.intent === 'edit' && input.viewMode === 'symbols',
@@ -489,9 +491,34 @@ function resolveFollowTargetFromEvent(input: {
         }).filter((nodeId) => visibleNodeIdSet.has(nodeId))
       : []
 
-  if (visibleSymbolIds.length > 0 && input.mode === 'symbols') {
+  const rangeMatchedSymbolIds =
+    input.mode === 'symbols'
+      ? getPreferredFollowSymbolIdsForOperationRanges({
+          fileId: fileNodeId,
+          operationRanges: input.sourceEvent.operationRanges ?? [],
+          snapshot: input.snapshot,
+          symbolIdsByFileId: input.indexes.symbolIdsByFileId,
+        })
+      : []
+
+  const fallbackSymbolIds =
+    rangeMatchedSymbolIds.length > 0
+      ? rangeMatchedSymbolIds
+      : visibleSymbolIds.length > 0
+        ? visibleSymbolIds
+        : input.mode === 'symbols'
+          ? getPreferredFollowSymbolIdsForFile({
+              fileId: fileNodeId,
+              snapshot: input.snapshot,
+              symbolIdsByFileId: input.indexes.symbolIdsByFileId,
+            })
+          : []
+
+  if (fallbackSymbolIds.length > 0 && input.mode === 'symbols') {
     const confidence: FollowTargetConfidence =
-      visibleSymbolIds.length === 1 ? 'exact_symbol' : 'best_named_symbol'
+      fallbackSymbolIds.length === 1 && rangeMatchedSymbolIds.length === 0
+        ? 'exact_symbol'
+        : 'best_named_symbol'
 
     return {
       pendingPath: null,
@@ -502,11 +529,12 @@ function resolveFollowTargetFromEvent(input: {
         fileNodeId,
         intent: input.intent,
         kind: 'symbol',
+        operationRanges: input.sourceEvent.operationRanges,
         path: input.sourceEvent.path,
-        primaryNodeId: visibleSymbolIds[0],
+        primaryNodeId: fallbackSymbolIds[0],
         requiresSnapshotRefresh: input.intent === 'edit' && input.viewMode === 'symbols',
         shouldOpenInspector: true,
-        symbolNodeIds: visibleSymbolIds,
+        symbolNodeIds: fallbackSymbolIds,
         timestamp: input.sourceEvent.timestamp,
         toolNames: input.sourceEvent.toolNames,
       },
@@ -531,6 +559,7 @@ function resolveFollowTargetFromEvent(input: {
       fileNodeId,
       intent: input.intent,
       kind: 'file',
+      operationRanges: input.sourceEvent.operationRanges,
       path: input.sourceEvent.path,
       primaryNodeId: fileNodeId,
       requiresSnapshotRefresh: input.intent === 'edit' && input.viewMode === 'symbols',
@@ -557,6 +586,71 @@ function getValidExplicitSymbolIds(input: {
         node.fileId === input.fileNodeId,
       )
     })
+}
+
+function getPreferredFollowSymbolIdsForOperationRanges(input: {
+  fileId: string
+  operationRanges: AgentFileOperationRange[]
+  snapshot: ProjectSnapshot
+  symbolIdsByFileId: Map<string, string[]>
+}) {
+  if (input.operationRanges.length === 0) {
+    return []
+  }
+
+  const symbols = (input.symbolIdsByFileId.get(input.fileId) ?? [])
+    .map((symbolId) => input.snapshot.nodes[symbolId])
+    .filter(isSymbolNode)
+  const candidateRanges = input.operationRanges
+    .filter((range) => !range.path || range.path === getFilePath(input.snapshot, input.fileId))
+    .map((range) => range.range)
+
+  if (symbols.length === 0 || candidateRanges.length === 0) {
+    return []
+  }
+
+  return symbols
+    .map((symbol) => ({
+      overlap: Math.max(
+        ...candidateRanges.map((range) => getLineRangeOverlap(symbol.range, range)),
+      ),
+      symbol,
+    }))
+    .filter(({ overlap }) => overlap > 0)
+    .sort((left, right) => {
+      if (left.overlap !== right.overlap) {
+        return right.overlap - left.overlap
+      }
+
+      const leftLine = left.symbol.range?.start.line ?? Number.MAX_SAFE_INTEGER
+      const rightLine = right.symbol.range?.start.line ?? Number.MAX_SAFE_INTEGER
+
+      if (leftLine !== rightLine) {
+        return leftLine - rightLine
+      }
+
+      return left.symbol.id.localeCompare(right.symbol.id)
+    })
+    .map(({ symbol }) => symbol.id)
+}
+
+function getFilePath(snapshot: ProjectSnapshot, fileId: string) {
+  const file = snapshot.nodes[fileId]
+  return file?.path ?? null
+}
+
+function getLineRangeOverlap(
+  left: AgentFileOperationRange['range'] | undefined,
+  right: AgentFileOperationRange['range'],
+) {
+  if (!left) {
+    return 0
+  }
+
+  const startLine = Math.max(left.start.line, right.start.line)
+  const endLine = Math.min(left.end.line, right.end.line)
+
+  return Math.max(0, endLine - startLine + 1)
 }
 
 function getFollowTargetMode(viewMode: VisualizerViewMode): TelemetryMode {

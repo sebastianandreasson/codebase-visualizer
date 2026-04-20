@@ -60,6 +60,7 @@ export function buildInspectorCommand(input: {
 
   return {
     id: commandId,
+    operationRanges: input.target.operationRanges,
     pendingPath: input.target.intent === 'edit' ? input.pendingPath : null,
     scrollToDiffRequestKey:
       input.target.intent === 'edit' ? `edit:${input.target.eventKey}` : null,

@@ -9,6 +9,7 @@ export type TelemetryConfidence = 'exact' | 'attributed' | 'fallback'
 export interface AgentHeatSample {
   path: string
   nodeIds: string[]
+  symbolNodeIds?: string[]
   weight: number
   requestCount: number
   totalTokens: number
@@ -46,6 +47,7 @@ export interface TelemetryActivityEvent {
   runId: string
   sessionId: string
   path: string
+  symbolNodeIds?: string[]
   toolNames: string[]
   requestCount: number
   totalTokens: number

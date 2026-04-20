@@ -181,6 +181,137 @@ describe('agent file operation normalization', () => {
     ])
   })
 
+  it('tracks symbol read ranges from readSymbolSlice results', () => {
+    const symbolNodeId = 'symbol:src/agent/foo.ts:runAgent:10:0-22:1'
+    const operations = createFileOperationsFromToolInvocation({
+      invocation: createInvocation({
+        args: {
+          symbolId: symbolNodeId,
+        },
+        endedAt: '2026-04-18T10:00:02.000Z',
+        resultPreview: JSON.stringify({
+          ok: true,
+          result: {
+            contextRange: {
+              end: { column: 1, line: 18 },
+              start: { column: 1, line: 10 },
+            },
+            file: {
+              path: 'src/agent/foo.ts',
+            },
+            symbolNodeIds: [symbolNodeId],
+          },
+        }),
+        toolName: 'readSymbolSlice',
+      }),
+      sessionId: 'session-1',
+      workspaceRootDir: '/workspace',
+    })
+
+    expect(operations).toMatchObject([
+      {
+        kind: 'file_read',
+        operationRanges: [
+          {
+            kind: 'read',
+            label: 'Read symbol slice',
+            path: 'src/agent/foo.ts',
+            range: {
+              end: { column: 1, line: 18 },
+              start: { column: 1, line: 10 },
+            },
+            source: 'result',
+            symbolNodeIds: [symbolNodeId],
+          },
+        ],
+        path: 'src/agent/foo.ts',
+        symbolNodeIds: [symbolNodeId],
+      },
+    ])
+  })
+
+  it('treats symbol outlines as reads and captures outline preview ranges', () => {
+    const symbolNodeId = 'symbol:src/agent/foo.ts:runAgent:10:0-22:1'
+    const operations = createFileOperationsFromToolInvocation({
+      invocation: createInvocation({
+        args: {
+          path: 'src/agent/foo.ts',
+        },
+        endedAt: '2026-04-18T10:00:02.000Z',
+        resultPreview: JSON.stringify({
+          ok: true,
+          result: {
+            outlines: [
+              {
+                file: {
+                  path: 'src/agent/foo.ts',
+                },
+                sourcePreview: {
+                  range: {
+                    end: { column: 1, line: 14 },
+                    start: { column: 1, line: 10 },
+                  },
+                },
+                symbol: {
+                  id: symbolNodeId,
+                },
+              },
+            ],
+            symbolNodeIds: [symbolNodeId],
+          },
+        }),
+        toolName: 'getSymbolOutline',
+      }),
+      sessionId: 'session-1',
+      workspaceRootDir: '/workspace',
+    })
+
+    expect(operations).toMatchObject([
+      {
+        confidence: 'exact',
+        kind: 'file_read',
+        operationRanges: [
+          {
+            kind: 'preview',
+            label: 'Outline preview',
+            path: 'src/agent/foo.ts',
+            range: {
+              end: { column: 1, line: 14 },
+              start: { column: 1, line: 10 },
+            },
+            source: 'result',
+            symbolNodeIds: [symbolNodeId],
+          },
+        ],
+        path: 'src/agent/foo.ts',
+        symbolNodeIds: [symbolNodeId],
+        toolName: 'getSymbolOutline',
+      },
+    ])
+  })
+
+  it('treats symbol neighborhoods as reads instead of fallback changes', () => {
+    const operations = createFileOperationsFromToolInvocation({
+      invocation: createInvocation({
+        args: {
+          path: 'src/agent/foo.ts',
+        },
+        toolName: 'getSymbolNeighborhood',
+      }),
+      sessionId: 'session-1',
+      workspaceRootDir: '/workspace',
+    })
+
+    expect(operations).toMatchObject([
+      {
+        confidence: 'exact',
+        kind: 'file_read',
+        path: 'src/agent/foo.ts',
+        toolName: 'getSymbolNeighborhood',
+      },
+    ])
+  })
+
   it('derives symbol ids and file paths from structured tool results', () => {
     const symbolNodeId = 'symbol:src/planner/layoutQuery.ts:findNodes:100:2-140:3'
     const operations = createFileOperationsFromToolInvocation({
@@ -252,6 +383,57 @@ describe('agent file operation normalization', () => {
     ])
   })
 
+  it('tracks file window read ranges from readFileWindow results', () => {
+    const operations = createFileOperationsFromToolInvocation({
+      invocation: createInvocation({
+        args: {
+          path: 'src/agent/foo.ts',
+          reason: 'Need imports.',
+          startLine: 1,
+          endLine: 3,
+        },
+        endedAt: '2026-04-18T10:00:02.000Z',
+        resultPreview: JSON.stringify({
+          ok: true,
+          result: {
+            file: {
+              path: 'src/agent/foo.ts',
+            },
+            range: {
+              end: { column: 1, line: 3 },
+              start: { column: 1, line: 1 },
+            },
+          },
+        }),
+        toolName: 'readFileWindow',
+      }),
+      sessionId: 'session-1',
+      source: 'pi-sdk',
+      workspaceRootDir: '/workspace',
+    })
+
+    expect(operations).toMatchObject([
+      {
+        confidence: 'exact',
+        kind: 'file_read',
+        operationRanges: [
+          {
+            kind: 'read',
+            label: 'Read file window',
+            path: 'src/agent/foo.ts',
+            range: {
+              end: { column: 1, line: 3 },
+              start: { column: 1, line: 1 },
+            },
+            source: 'result',
+          },
+        ],
+        path: 'src/agent/foo.ts',
+        toolName: 'readFileWindow',
+      },
+    ])
+  })
+
   it('tracks file window replacements as followable fallback writes', () => {
     const operations = createFileOperationsFromToolInvocation({
       invocation: createInvocation({
@@ -269,6 +451,10 @@ describe('agent file operation normalization', () => {
             file: {
               path: 'src/agent/foo.ts',
             },
+            replacedRange: {
+              end: { column: 1, line: 2 },
+              start: { column: 1, line: 1 },
+            },
           },
         }),
         toolName: 'replaceFileWindow',
@@ -282,6 +468,18 @@ describe('agent file operation normalization', () => {
       {
         confidence: 'exact',
         kind: 'file_write',
+        operationRanges: [
+          {
+            kind: 'edit',
+            label: 'Edited file window',
+            path: 'src/agent/foo.ts',
+            range: {
+              end: { column: 1, line: 2 },
+              start: { column: 1, line: 1 },
+            },
+            source: 'result',
+          },
+        ],
         path: 'src/agent/foo.ts',
         paths: ['src/agent/foo.ts'],
         source: 'pi-sdk',

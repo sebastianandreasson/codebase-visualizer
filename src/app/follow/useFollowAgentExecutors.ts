@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 
 import type {
   FollowCameraCommand,
+  FollowInspectorActivity,
   FollowInspectorCommand,
   FollowRefreshCommand,
   TelemetryMode,
@@ -59,6 +60,8 @@ export function useFollowAgentExecutors({
 }: UseFollowAgentExecutorsOptions) {
   const [cameraExecutorWakeup, setCameraExecutorWakeup] = useState(0)
   const [followedEditDiffRequestKey, setFollowedEditDiffRequestKey] = useState<string | null>(null)
+  const [followedInspectorActivity, setFollowedInspectorActivity] =
+    useState<FollowInspectorActivity | null>(null)
   const acknowledgeCameraCommandRef = useRef(acknowledgeCameraCommand)
   const acknowledgeInspectorCommandRef = useRef(acknowledgeInspectorCommand)
   const cameraCommandRef = useRef(cameraCommand)
@@ -132,6 +135,7 @@ export function useFollowAgentExecutors({
     window.setTimeout(() => {
       if (!cancelled) {
         setFollowedEditDiffRequestKey(null)
+        setFollowedInspectorActivity(null)
       }
     }, 0)
 
@@ -300,8 +304,12 @@ export function useFollowAgentExecutors({
   ])
 
   return {
-    clearFollowedEditDiffRequestKey: () => setFollowedEditDiffRequestKey(null),
+    clearFollowedEditDiffRequestKey: () => {
+      setFollowedEditDiffRequestKey(null)
+      setFollowedInspectorActivity(null)
+    },
     followedEditDiffRequestKey,
+    followedInspectorActivity,
   }
 
   function runInspectorFollowStep(
@@ -318,6 +326,15 @@ export function useFollowAgentExecutors({
     setInspectorTabToFileRef.current()
     setInspectorOpenRef.current(true)
     setFollowedEditDiffRequestKey(command?.scrollToDiffRequestKey ?? null)
+    setFollowedInspectorActivity({
+      id: command?.id ?? `follow:${target.eventKey}`,
+      intent: target.intent,
+      operationRanges: command?.operationRanges ?? target.operationRanges,
+      path: target.path,
+      symbolNodeIds: target.symbolNodeIds,
+      timestamp: target.timestamp,
+      toolNames: target.toolNames,
+    })
   }
 }
 

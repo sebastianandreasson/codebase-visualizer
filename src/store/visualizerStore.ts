@@ -103,24 +103,19 @@ export function createVisualizerStore(
       })
     },
     setLayouts: (layouts) => {
-      const activeLayoutId =
-        layouts.some((layout) => layout.id === get().activeLayoutId)
-          ? get().activeLayoutId
-          : layouts[0]?.id ?? null
-
       set({
         layouts,
-        activeLayoutId,
       })
     },
     setActiveLayoutId: (activeLayoutId) => {
       set({ activeLayoutId })
     },
     setDraftLayouts: (draftLayouts) => {
+      const currentActiveDraftId = get().activeDraftId
       const activeDraftId =
-        draftLayouts.some((draft) => draft.id === get().activeDraftId)
-          ? get().activeDraftId
-          : draftLayouts[0]?.id ?? null
+        currentActiveDraftId && draftLayouts.some((draft) => draft.id === currentActiveDraftId)
+          ? currentActiveDraftId
+          : null
 
       set({
         draftLayouts,

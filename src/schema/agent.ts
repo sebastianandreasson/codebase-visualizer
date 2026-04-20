@@ -1,3 +1,5 @@
+import type { SourceRange } from './snapshot'
+
 export type AgentRunState =
   | 'idle'
   | 'initializing'
@@ -145,6 +147,18 @@ export type AgentFileOperationSource =
 
 export type AgentFileOperationStatus = 'running' | 'completed' | 'error'
 
+export type AgentFileOperationRangeKind = 'read' | 'edit' | 'preview'
+export type AgentFileOperationRangeSource = 'args' | 'result'
+
+export interface AgentFileOperationRange {
+  kind: AgentFileOperationRangeKind
+  label: string
+  path?: string
+  range: SourceRange
+  source: AgentFileOperationRangeSource
+  symbolNodeIds?: string[]
+}
+
 export interface AgentFileOperation {
   confidence: AgentFileOperationConfidence
   id: string
@@ -152,6 +166,7 @@ export interface AgentFileOperation {
   nodeIds?: string[]
   path?: string
   paths: string[]
+  operationRanges?: AgentFileOperationRange[]
   resultPreview?: string
   sessionId: string
   source: AgentFileOperationSource

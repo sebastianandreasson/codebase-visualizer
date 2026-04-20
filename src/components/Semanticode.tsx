@@ -631,7 +631,7 @@ export function Semanticode({
       telemetryActivityEvents,
     ],
   )
-  const { followedEditDiffRequestKey } = useFollowAgentExecutors({
+  const { followedEditDiffRequestKey, followedInspectorActivity } = useFollowAgentExecutors({
     acknowledgeCameraCommand,
     acknowledgeInspectorCommand,
     acknowledgeRefreshCommand,
@@ -885,6 +885,7 @@ export function Semanticode({
                     detectedPlugins={effectiveSnapshot?.detectedPlugins ?? []}
                     facetDefinitions={effectiveSnapshot?.facetDefinitions ?? []}
                     followDebugState={followDebugState}
+                    followedInspectorActivity={followedInspectorActivity}
                     graphSummary={graphSummary}
                     header={inspectorHeader}
                     inspectorBodyRef={inspectorBodyRef}

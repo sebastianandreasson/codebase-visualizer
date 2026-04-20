@@ -1,4 +1,4 @@
-import type { AgentFileOperation } from '../../schema/agent'
+import type { AgentFileOperation, AgentFileOperationRange } from '../../schema/agent'
 import type { VisualizerViewMode } from '../../schema/layout'
 import type { ProjectSnapshot } from '../../schema/snapshot'
 import type { TelemetryActivityEvent, TelemetryMode } from '../../schema/telemetry'
@@ -23,6 +23,7 @@ export type FollowDomainEvent =
       type: 'file_touched' | 'file_edited'
       key: string
       eventKey: string
+      operationRanges?: AgentFileOperationRange[]
       path: string
       symbolNodeIds?: string[]
       timestamp: string
@@ -60,6 +61,7 @@ export interface FollowTarget {
   intent: FollowIntent
   confidence: FollowTargetConfidence
   eventKey: string
+  operationRanges?: AgentFileOperationRange[]
   toolNames: string[]
   timestamp: string
   requiresSnapshotRefresh: boolean
@@ -73,9 +75,20 @@ export interface FollowCameraCommand {
 
 export interface FollowInspectorCommand {
   id: string
+  operationRanges?: AgentFileOperationRange[]
   pendingPath: string | null
   scrollToDiffRequestKey: string | null
   target: FollowTarget
+}
+
+export interface FollowInspectorActivity {
+  id: string
+  intent: FollowIntent
+  operationRanges?: AgentFileOperationRange[]
+  path: string
+  symbolNodeIds: string[]
+  timestamp: string
+  toolNames: string[]
 }
 
 export interface FollowRefreshCommand {

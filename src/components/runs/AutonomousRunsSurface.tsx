@@ -262,6 +262,9 @@ function FileOperationRow({
     operation.toolName,
     operation.status,
     operation.confidence,
+    operation.symbolNodeIds?.length
+      ? `${operation.symbolNodeIds.length} symbol${operation.symbolNodeIds.length === 1 ? '' : 's'}`
+      : null,
   ].filter(Boolean)
 
   return (
