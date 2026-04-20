@@ -27,6 +27,28 @@ import type {
   WorkspaceSidebarGroup,
   WorkspaceSidebarGroupItem,
 } from '../components/shell/WorkspaceSidebar'
+import {
+  DEFAULT_SYMBOL_FOOTPRINT_HEIGHT,
+  DEFAULT_SYMBOL_FOOTPRINT_WIDTH,
+  createSymbolFootprintLookup,
+  getNodeBadgeLabels,
+  getSymbolLoc,
+  getSymbolNodeFootprint,
+  getSymbolSubtitle,
+  getSymbolVisualKindClass,
+  type SymbolFootprint,
+  type SymbolFootprintLookup,
+  type SymbolFootprintLookupOptions,
+} from './symbolFootprint'
+
+export {
+  createSymbolFootprintLookup,
+  formatFacetLabel,
+  getSymbolVisualKindClass,
+  type SymbolFootprint,
+  type SymbolFootprintLookup,
+  type SymbolFootprintLookupOptions,
+} from './symbolFootprint'
 
 export type FlowEdgeData = Record<string, unknown> & {
   kind: GraphEdgeKind
@@ -37,10 +59,15 @@ export type FlowEdgeData = Record<string, unknown> & {
 }
 
 const DEFAULT_CALL_EDGE_RENDER_LIMIT = 700
+const GROUP_CONTAINER_NODE_Z_INDEX = 0
+const CODE_NODE_Z_INDEX = 2
+const SYMBOL_NODE_Z_INDEX = 3
+const ANNOTATION_NODE_Z_INDEX = 5
 
 export interface FlowModelOptions {
   callEdgeRenderLimit?: number
   selectedNodeIds?: Set<string>
+  symbolFootprints?: SymbolFootprintLookup
   viewportZoom?: number
 }
 
@@ -93,18 +120,22 @@ export interface LayoutGroupContainer {
   width: number
   height: number
   nodeIds: string[]
+  childPlacements: Record<string, LayoutGroupChildPlacement>
+  titleScale?: number
 }
 
-interface NodeDimensions {
+export interface LayoutGroupChildPlacement {
+  nodeId: string
+  x: number
+  y: number
   width: number
   height: number
-  scale: number
-  contentScale: number
-  compact: boolean
+  loc: number
 }
 
-interface SymbolDimensionOptions {
-  extraMetaLabels?: string[]
+export interface LayoutGroupContainerIndex {
+  containersById: Map<string, LayoutGroupContainer>
+  containerByNodeId: Map<string, LayoutGroupContainer>
 }
 
 export interface FlowModel {
@@ -126,19 +157,22 @@ const EXPANDED_CLUSTER_GAP_Y = 12
 const EXPANDED_CLUSTER_PADDING_X = 14
 const EXPANDED_CLUSTER_PADDING_TOP = 18
 const EXPANDED_CLUSTER_PADDING_BOTTOM = 14
-const DEFAULT_NODE_WIDTH = 240
-const DEFAULT_NODE_HEIGHT = 108
-const COMPACT_SYMBOL_NODE_WIDTH = 164
-const COMPACT_SYMBOL_NODE_HEIGHT = 74
-const LOC_SCALED_SYMBOL_MIN_WIDTH = 176
-const LOC_SCALED_SYMBOL_MAX_WIDTH = 1_620
-const LOC_SCALED_SYMBOL_MIN_HEIGHT = 64
-const LOC_SCALED_SYMBOL_MAX_HEIGHT = 1_080
+const DEFAULT_NODE_WIDTH = DEFAULT_SYMBOL_FOOTPRINT_WIDTH
+const DEFAULT_NODE_HEIGHT = DEFAULT_SYMBOL_FOOTPRINT_HEIGHT
 const FILESYSTEM_CONTAINER_PADDING_RIGHT = 18
 const FILESYSTEM_CONTAINER_PADDING_BOTTOM = 18
 const LAYOUT_GROUP_PADDING_X = 22
 const LAYOUT_GROUP_PADDING_TOP = 112
 const LAYOUT_GROUP_PADDING_BOTTOM = 44
+const LAYOUT_GROUP_PACK_GAP_X = 38
+const LAYOUT_GROUP_PACK_GAP_Y = 34
+const LAYOUT_GROUP_PACK_MIN_WIDTH = 760
+const LAYOUT_GROUP_PACK_MAX_WIDTH = 3_600
+const LAYOUT_GROUP_CONTAINER_GAP_X = 110
+const LAYOUT_GROUP_CONTAINER_GAP_Y = 120
+const LAYOUT_GROUP_CONTAINER_PACK_MIN_WIDTH = 1_200
+const LAYOUT_GROUP_CONTAINER_PACK_MAX_WIDTH = 7_200
+const LAYOUT_GROUP_TITLE_MAX_SCALE = 7.2
 const FOLLOW_AGENT_EDIT_SYMBOL_ZOOM = 2.15
 const FOLLOW_AGENT_EDIT_FILE_ZOOM = 1.55
 const FOLLOW_AGENT_ACTIVITY_SYMBOL_ZOOM = 1.75
@@ -232,11 +266,21 @@ export function buildFlowModel(
   expandedClusterIds: Set<string>,
   expandedClusterLayouts: Map<string, ExpandedClusterLayout>,
   filesystemContainerLayouts: Map<string, FilesystemContainerLayout>,
-  layoutGroupContainers: Map<string, LayoutGroupContainer>,
+  layoutGroupContainers: Map<string, LayoutGroupContainer> | LayoutGroupContainerIndex,
   collapsedDirectoryIds: Set<string>,
   toggleCollapsedDirectory: (nodeId: string) => void,
   options: FlowModelOptions = {},
 ) {
+  const symbolFootprints =
+    options.symbolFootprints ??
+    createSymbolFootprintLookup({
+      layout,
+      snapshot,
+      viewportZoom: options.viewportZoom,
+    })
+  const layoutGroupContainerIndex = normalizeLayoutGroupContainerIndex(
+    layoutGroupContainers,
+  )
   const hiddenNodeIds = new Set(layout.hiddenNodeIds)
   const hiddenFilesystemDescendantIds =
     viewMode === 'filesystem'
@@ -251,6 +295,7 @@ export function buildFlowModel(
     },
     width: annotation.width,
     height: annotation.height,
+    zIndex: ANNOTATION_NODE_Z_INDEX,
     draggable: true,
     selectable: false,
     data: {
@@ -258,7 +303,7 @@ export function buildFlowModel(
       dimmed: false,
     },
   } satisfies Node))
-  const groupNodes = Array.from(layoutGroupContainers.values()).map((group) => ({
+  const groupNodes = Array.from(layoutGroupContainerIndex.containersById.values()).map((group) => ({
     id: getLayoutGroupNodeId(group.id),
     type: 'codebaseNode',
     position: {
@@ -267,6 +312,7 @@ export function buildFlowModel(
     },
     width: group.width,
     height: group.height,
+    zIndex: GROUP_CONTAINER_NODE_Z_INDEX,
     draggable: true,
     selectable: true,
     data: {
@@ -279,6 +325,7 @@ export function buildFlowModel(
       tags: [],
       container: true,
       groupContainer: true,
+      groupTitleScale: group.titleScale ?? 1,
       dimmed: false,
       highlighted: false,
     },
@@ -314,10 +361,13 @@ export function buildFlowModel(
         expandedClusterIds,
         expandedClusterLayouts,
         filesystemContainerLayouts,
-        layoutGroupContainers,
+        layoutGroupContainerIndex,
         collapsedDirectoryIds,
         toggleCollapsedDirectory,
-        options,
+        {
+          ...options,
+          symbolFootprints,
+        },
       ),
     )
   const nodes = [...annotationNodes, ...groupNodes, ...codeNodes]
@@ -561,11 +611,14 @@ function buildFlowNode(
   expandedClusterIds: Set<string>,
   expandedClusterLayouts: Map<string, ExpandedClusterLayout>,
   filesystemContainerLayouts: Map<string, FilesystemContainerLayout>,
-  layoutGroupContainers: Map<string, LayoutGroupContainer>,
+  layoutGroupContainerIndex: LayoutGroupContainerIndex,
   collapsedDirectoryIds: Set<string>,
   toggleCollapsedDirectory: (nodeId: string) => void,
   options: FlowModelOptions,
 ): Node {
+  const groupParentContainer = layoutGroupContainerIndex.containerByNodeId.get(node.id) ?? null
+  const groupChildPlacement = groupParentContainer?.childPlacements[node.id]
+
   if (viewMode === 'symbols' && isSymbolNode(node)) {
     const cluster = symbolClusterState.clusterByNodeId[node.id]
     const clusterSize =
@@ -581,41 +634,52 @@ function buildFlowNode(
     const sharedCallerCount = symbolClusterState.callerCounts[node.id] ?? 0
     const clusterExpanded =
       clusterSize > 0 && cluster ? expandedClusterIds.has(cluster.id) : undefined
-    const symbolDimensions = getSymbolNodeDimensions(
-      node,
-      placement,
-      isContainedNode,
-      containedPlacement,
-      options.viewportZoom,
-      snapshot,
-      {
+    const symbolDimensions =
+      options.symbolFootprints?.get(node.id, {
+        contained: isContainedNode,
+        containedPlacement,
         extraMetaLabels: getRuntimeSymbolMetaLabels(
           sharedCallerCount,
           clusterSize,
           clusterExpanded,
         ),
-      },
-    )
+      }) ??
+      getSymbolNodeFootprint(
+        node,
+        placement,
+        {
+          contained: isContainedNode,
+          containedPlacement,
+          extraMetaLabels: getRuntimeSymbolMetaLabels(
+            sharedCallerCount,
+            clusterSize,
+            clusterExpanded,
+          ),
+        },
+        options.viewportZoom,
+        snapshot,
+      )
     const width =
       isContainedNode
         ? symbolDimensions.width
-        : (clusterLayout?.width ?? symbolDimensions.width)
+        : (clusterLayout?.width ?? groupChildPlacement?.width ?? symbolDimensions.width)
     const height =
       isContainedNode
         ? symbolDimensions.height
-        : (clusterLayout?.height ?? symbolDimensions.height)
+        : (clusterLayout?.height ?? groupChildPlacement?.height ?? symbolDimensions.height)
 
     return {
       id: node.id,
       type: 'symbolNode',
       position: {
-        x: containedPlacement?.x ?? placement.x,
-        y: containedPlacement?.y ?? placement.y,
+        x: containedPlacement?.x ?? groupChildPlacement?.x ?? placement.x,
+        y: containedPlacement?.y ?? groupChildPlacement?.y ?? placement.y,
       },
       sourcePosition: Position.Right,
       targetPosition: Position.Left,
       width,
       height,
+      zIndex: SYMBOL_NODE_Z_INDEX,
       style: {
         width,
         height,
@@ -643,8 +707,7 @@ function buildFlowNode(
     }
   }
 
-  const layoutGroupContainer = layoutGroupContainers.get(node.id)
-  const groupParentContainer = getLayoutGroupParentContainer(node.id, layoutGroupContainers)
+  const layoutGroupContainer = layoutGroupContainerIndex.containersById.get(node.id)
   const filesystemContainerLayout =
     viewMode === 'filesystem' && layout.strategy === 'structural' && isDirectoryNode(node)
       ? filesystemContainerLayouts.get(node.id)
@@ -683,13 +746,13 @@ function buildFlowNode(
     position: {
       x:
         groupParentPosition
-          ? placement.x - groupParentPosition.x
+          ? (groupChildPlacement?.x ?? placement.x) - groupParentPosition.x
           : isContainedFilesystemNode && filesystemParentPlacement
           ? placement.x - filesystemParentPlacement.x
           : placement.x,
       y:
         groupParentPosition
-          ? placement.y - groupParentPosition.y
+          ? (groupChildPlacement?.y ?? placement.y) - groupParentPosition.y
           : isContainedFilesystemNode && filesystemParentPlacement
           ? placement.y - filesystemParentPlacement.y
           : placement.y,
@@ -697,13 +760,16 @@ function buildFlowNode(
     sourcePosition: Position.Right,
     targetPosition: Position.Left,
     width:
+      groupChildPlacement?.width ??
       (isCollapsedDirectory ? placement.width ?? 240 : filesystemContainerLayout?.width) ??
       placement.width ??
       (node.kind === 'directory' ? 240 : 224),
     height:
+      groupChildPlacement?.height ??
       (isCollapsedDirectory ? placement.height ?? 72 : filesystemContainerLayout?.height) ??
       placement.height ??
       (node.kind === 'directory' ? 68 : 54),
+    zIndex: CODE_NODE_Z_INDEX,
     draggable: true,
     parentId:
       groupParentContainer
@@ -844,17 +910,50 @@ export function buildLayoutGroupContainers(
   snapshot: CodebaseSnapshot | null,
   layout: LayoutSpec | null,
   viewMode: VisualizerViewMode,
+  options: {
+    expandedClusterIds?: Set<string>
+    expandedClusterLayouts?: Map<string, ExpandedClusterLayout>
+    packGroups?: boolean
+    symbolClusterState?: SymbolClusterState
+    symbolFootprints?: SymbolFootprintLookup
+    viewportZoom?: number
+  } = {},
 ) {
-  const containers = new Map<string, LayoutGroupContainer>()
+  return buildLayoutGroupContainerIndex(
+    snapshot,
+    layout,
+    viewMode,
+    options,
+  ).containersById
+}
+
+export function buildLayoutGroupContainerIndex(
+  snapshot: CodebaseSnapshot | null,
+  layout: LayoutSpec | null,
+  viewMode: VisualizerViewMode,
+  options: {
+    expandedClusterIds?: Set<string>
+    expandedClusterLayouts?: Map<string, ExpandedClusterLayout>
+    packGroups?: boolean
+    symbolClusterState?: SymbolClusterState
+    symbolFootprints?: SymbolFootprintLookup
+    viewportZoom?: number
+  } = {},
+): LayoutGroupContainerIndex {
+  const containersById = new Map<string, LayoutGroupContainer>()
+  const containerByNodeId = new Map<string, LayoutGroupContainer>()
 
   if (!snapshot || !layout || layout.strategy !== 'agent') {
-    return containers
+    return { containerByNodeId, containersById }
   }
 
   const hiddenNodeIds = new Set(layout.hiddenNodeIds)
+  const packGroups = options.packGroups ?? viewMode === 'symbols'
+  const titleScale = getLayoutGroupTitleScale(options.viewportZoom)
+  const paddingTop = getLayoutGroupPaddingTop(options.viewportZoom)
 
   for (const group of layout.groups) {
-    const memberPlacements = group.nodeIds
+    const rawMemberPlacements = group.nodeIds
       .map((nodeId) => {
         const node = snapshot.nodes[nodeId]
         const placement = layout.placements[nodeId]
@@ -868,23 +967,40 @@ export function buildLayoutGroupContainers(
           return null
         }
 
-        const width = placement.width ?? getDefaultNodeWidth(node)
-        const height = placement.height ?? getDefaultNodeHeight(node)
+        if (
+          viewMode === 'symbols' &&
+          isSymbolNode(node) &&
+          shouldSkipGroupedSymbol(node.id, options)
+        ) {
+          return null
+        }
+
+        const dimensions = getGroupMemberDimensions(
+          node,
+          placement,
+          snapshot,
+          options,
+        )
 
         return {
           nodeId,
           x: placement.x,
           y: placement.y,
-          width,
-          height,
+          width: dimensions.width,
+          height: dimensions.height,
+          loc: isSymbolNode(node) ? getSymbolLoc(node) ?? 0 : 0,
         }
       })
       .filter((placement): placement is NonNullable<typeof placement> => Boolean(placement))
 
-    if (memberPlacements.length === 0) {
+    if (rawMemberPlacements.length === 0) {
       continue
     }
 
+    const memberPlacements =
+      packGroups && rawMemberPlacements.length > 1
+        ? packLayoutGroupMemberPlacements(rawMemberPlacements)
+        : rawMemberPlacements
     const minX = Math.min(...memberPlacements.map((placement) => placement.x))
     const minY = Math.min(...memberPlacements.map((placement) => placement.y))
     const maxRight = Math.max(
@@ -894,19 +1010,394 @@ export function buildLayoutGroupContainers(
       ...memberPlacements.map((placement) => placement.y + placement.height),
     )
 
-    containers.set(group.id, {
+    const container: LayoutGroupContainer = {
       id: group.id,
       title: group.title,
       x: minX - LAYOUT_GROUP_PADDING_X,
-      y: minY - LAYOUT_GROUP_PADDING_TOP,
+      y: minY - paddingTop,
       width: maxRight - minX + LAYOUT_GROUP_PADDING_X * 2,
       height:
-        maxBottom - minY + LAYOUT_GROUP_PADDING_TOP + LAYOUT_GROUP_PADDING_BOTTOM,
+        maxBottom - minY + paddingTop + LAYOUT_GROUP_PADDING_BOTTOM,
       nodeIds: memberPlacements.map((placement) => placement.nodeId),
-    })
+      childPlacements: Object.fromEntries(
+        memberPlacements.map((placement) => [placement.nodeId, placement]),
+      ),
+      titleScale,
+    }
+
+    containersById.set(group.id, container)
+
+    for (const nodeId of container.nodeIds) {
+      containerByNodeId.set(nodeId, container)
+    }
   }
 
-  return containers
+  const containers = Array.from(containersById.values())
+
+  if (packGroups && containers.length > 1 && hasLayoutGroupContainerOverlap(containers)) {
+    return buildPackedLayoutGroupContainerIndex(containersById)
+  }
+
+  return { containerByNodeId, containersById }
+}
+
+function normalizeLayoutGroupContainerIndex(
+  input: Map<string, LayoutGroupContainer> | LayoutGroupContainerIndex,
+): LayoutGroupContainerIndex {
+  if ('containersById' in input && 'containerByNodeId' in input) {
+    return input
+  }
+
+  const containerByNodeId = new Map<string, LayoutGroupContainer>()
+
+  for (const container of input.values()) {
+    for (const nodeId of container.nodeIds) {
+      containerByNodeId.set(nodeId, container)
+    }
+  }
+
+  return {
+    containersById: input,
+    containerByNodeId,
+  }
+}
+
+function buildPackedLayoutGroupContainerIndex(
+  containersById: Map<string, LayoutGroupContainer>,
+): LayoutGroupContainerIndex {
+  const nextContainersById = new Map<string, LayoutGroupContainer>()
+  const containerByNodeId = new Map<string, LayoutGroupContainer>()
+  const packedContainers = packLayoutGroupContainers(
+    Array.from(containersById.values()),
+  )
+
+  for (const container of packedContainers) {
+    nextContainersById.set(container.id, container)
+
+    for (const nodeId of container.nodeIds) {
+      containerByNodeId.set(nodeId, container)
+    }
+  }
+
+  return {
+    containerByNodeId,
+    containersById: nextContainersById,
+  }
+}
+
+function packLayoutGroupContainers(containers: LayoutGroupContainer[]) {
+  const rawBounds = getLayoutGroupContainerBounds(containers)
+  const maxContainerWidth = Math.max(
+    ...containers.map((container) => container.width),
+  )
+  const totalArea = containers.reduce(
+    (sum, container) =>
+      sum +
+      (container.width + LAYOUT_GROUP_CONTAINER_GAP_X) *
+        (container.height + LAYOUT_GROUP_CONTAINER_GAP_Y),
+    0,
+  )
+  const targetRowWidth = clamp(
+    Math.max(rawBounds.width, Math.sqrt(totalArea) * 1.24, maxContainerWidth),
+    Math.max(LAYOUT_GROUP_CONTAINER_PACK_MIN_WIDTH, maxContainerWidth),
+    LAYOUT_GROUP_CONTAINER_PACK_MAX_WIDTH,
+  )
+  const packedContainers: LayoutGroupContainer[] = []
+  let cursorX = rawBounds.x
+  let cursorY = rawBounds.y
+  let rowHeight = 0
+
+  for (const container of [...containers].sort(compareLayoutGroupContainerPackOrder)) {
+    if (
+      cursorX > rawBounds.x &&
+      cursorX + container.width > rawBounds.x + targetRowWidth
+    ) {
+      cursorX = rawBounds.x
+      cursorY += rowHeight + LAYOUT_GROUP_CONTAINER_GAP_Y
+      rowHeight = 0
+    }
+
+    packedContainers.push(shiftLayoutGroupContainer(container, cursorX, cursorY))
+    cursorX += container.width + LAYOUT_GROUP_CONTAINER_GAP_X
+    rowHeight = Math.max(rowHeight, container.height)
+  }
+
+  return packedContainers
+}
+
+function hasLayoutGroupContainerOverlap(containers: LayoutGroupContainer[]) {
+  const activeContainers: LayoutGroupContainer[] = []
+
+  for (const container of [...containers].sort((left, right) => left.x - right.x)) {
+    for (let index = activeContainers.length - 1; index >= 0; index -= 1) {
+      const activeContainer = activeContainers[index]
+
+      if (activeContainer && activeContainer.x + activeContainer.width <= container.x) {
+        activeContainers.splice(index, 1)
+      }
+    }
+
+    for (const activeContainer of activeContainers) {
+      if (
+        activeContainer.y < container.y + container.height &&
+        activeContainer.y + activeContainer.height > container.y
+      ) {
+        return true
+      }
+    }
+
+    activeContainers.push(container)
+  }
+
+  return false
+}
+
+function compareLayoutGroupContainerPackOrder(
+  left: LayoutGroupContainer,
+  right: LayoutGroupContainer,
+) {
+  if (left.y !== right.y) {
+    return left.y - right.y
+  }
+
+  if (left.x !== right.x) {
+    return left.x - right.x
+  }
+
+  return left.id.localeCompare(right.id)
+}
+
+function shiftLayoutGroupContainer(
+  container: LayoutGroupContainer,
+  x: number,
+  y: number,
+): LayoutGroupContainer {
+  const deltaX = x - container.x
+  const deltaY = y - container.y
+
+  if (deltaX === 0 && deltaY === 0) {
+    return container
+  }
+
+  return {
+    ...container,
+    x,
+    y,
+    childPlacements: Object.fromEntries(
+      Object.entries(container.childPlacements).map(([nodeId, placement]) => [
+        nodeId,
+        {
+          ...placement,
+          x: placement.x + deltaX,
+          y: placement.y + deltaY,
+        },
+      ]),
+    ),
+  }
+}
+
+function getLayoutGroupContainerBounds(containers: LayoutGroupContainer[]) {
+  const minX = Math.min(...containers.map((container) => container.x))
+  const minY = Math.min(...containers.map((container) => container.y))
+  const maxRight = Math.max(
+    ...containers.map((container) => container.x + container.width),
+  )
+  const maxBottom = Math.max(
+    ...containers.map((container) => container.y + container.height),
+  )
+
+  return {
+    x: minX,
+    y: minY,
+    width: maxRight - minX,
+    height: maxBottom - minY,
+  }
+}
+
+function shouldSkipGroupedSymbol(
+  nodeId: string,
+  options: {
+    expandedClusterIds?: Set<string>
+    symbolClusterState?: SymbolClusterState
+  },
+) {
+  const cluster = options.symbolClusterState?.clusterByNodeId[nodeId]
+
+  return Boolean(
+    cluster &&
+      cluster.rootNodeId !== nodeId &&
+      !options.expandedClusterIds?.has(cluster.id),
+  )
+}
+
+function getGroupMemberDimensions(
+  node: ProjectNode,
+  placement: LayoutSpec['placements'][string],
+  snapshot: CodebaseSnapshot,
+  options: {
+    expandedClusterIds?: Set<string>
+    expandedClusterLayouts?: Map<string, ExpandedClusterLayout>
+    symbolClusterState?: SymbolClusterState
+    symbolFootprints?: SymbolFootprintLookup
+    viewportZoom?: number
+  },
+) {
+  if (isSymbolNode(node)) {
+    const cluster = options.symbolClusterState?.clusterByNodeId[node.id]
+    const clusterLayout =
+      cluster &&
+      cluster.rootNodeId === node.id &&
+      options.expandedClusterIds?.has(cluster.id)
+        ? options.expandedClusterLayouts?.get(cluster.id)
+        : undefined
+
+    if (clusterLayout) {
+      return {
+        width: clusterLayout.width,
+        height: clusterLayout.height,
+      }
+    }
+
+    const clusterSize =
+      cluster && cluster.rootNodeId === node.id ? cluster.memberNodeIds.length : 0
+    const clusterExpanded =
+      clusterSize > 0 && cluster ? options.expandedClusterIds?.has(cluster.id) : undefined
+    const footprintOptions: SymbolFootprintLookupOptions = {
+      extraMetaLabels: getRuntimeSymbolMetaLabels(
+        options.symbolClusterState?.callerCounts[node.id] ?? 0,
+        clusterSize,
+        clusterExpanded,
+      ),
+    }
+    const footprint =
+      options.symbolFootprints?.get(node.id, footprintOptions) ??
+      getSymbolNodeFootprint(
+        node,
+        placement,
+        footprintOptions,
+        options.viewportZoom,
+        snapshot,
+      )
+
+    return {
+      width: footprint.width,
+      height: footprint.height,
+    }
+  }
+
+  return {
+    width: placement.width ?? getDefaultNodeWidth(node),
+    height: placement.height ?? getDefaultNodeHeight(node),
+  }
+}
+
+function packLayoutGroupMemberPlacements(
+  placements: LayoutGroupChildPlacement[],
+) {
+  const rawBounds = getLayoutGroupPlacementBounds(placements)
+  const maxNodeWidth = Math.max(...placements.map((placement) => placement.width))
+  const totalArea = placements.reduce(
+    (sum, placement) =>
+      sum +
+      (placement.width + LAYOUT_GROUP_PACK_GAP_X) *
+        (placement.height + LAYOUT_GROUP_PACK_GAP_Y),
+    0,
+  )
+  const targetRowWidth = clamp(
+    Math.max(rawBounds.width, Math.sqrt(totalArea) * 1.35, maxNodeWidth),
+    Math.max(LAYOUT_GROUP_PACK_MIN_WIDTH, maxNodeWidth),
+    LAYOUT_GROUP_PACK_MAX_WIDTH,
+  )
+  const sortedPlacements = [...placements].sort(compareLayoutGroupPackOrder)
+  const packedPlacements: LayoutGroupChildPlacement[] = []
+  let cursorX = rawBounds.x
+  let cursorY = rawBounds.y
+  let rowHeight = 0
+
+  for (const placement of sortedPlacements) {
+    if (
+      cursorX > rawBounds.x &&
+      cursorX + placement.width > rawBounds.x + targetRowWidth
+    ) {
+      cursorX = rawBounds.x
+      cursorY += rowHeight + LAYOUT_GROUP_PACK_GAP_Y
+      rowHeight = 0
+    }
+
+    packedPlacements.push({
+      ...placement,
+      x: cursorX,
+      y: cursorY,
+    })
+    cursorX += placement.width + LAYOUT_GROUP_PACK_GAP_X
+    rowHeight = Math.max(rowHeight, placement.height)
+  }
+
+  return packedPlacements
+}
+
+function compareLayoutGroupPackOrder(
+  left: LayoutGroupChildPlacement,
+  right: LayoutGroupChildPlacement,
+) {
+  if (left.y !== right.y) {
+    return left.y - right.y
+  }
+
+  if (left.x !== right.x) {
+    return left.x - right.x
+  }
+
+  if (left.loc !== right.loc) {
+    return right.loc - left.loc
+  }
+
+  return left.nodeId.localeCompare(right.nodeId)
+}
+
+function getLayoutGroupPlacementBounds(placements: LayoutGroupChildPlacement[]) {
+  const minX = Math.min(...placements.map((placement) => placement.x))
+  const minY = Math.min(...placements.map((placement) => placement.y))
+  const maxRight = Math.max(
+    ...placements.map((placement) => placement.x + placement.width),
+  )
+  const maxBottom = Math.max(
+    ...placements.map((placement) => placement.y + placement.height),
+  )
+
+  return {
+    x: minX,
+    y: minY,
+    width: maxRight - minX,
+    height: maxBottom - minY,
+  }
+}
+
+function getLayoutGroupPaddingTop(viewportZoom = 1) {
+  const titleScale = getLayoutGroupTitleScale(viewportZoom)
+
+  return Math.round(LAYOUT_GROUP_PADDING_TOP + Math.max(0, titleScale - 1) * 12)
+}
+
+function getLayoutGroupTitleScale(viewportZoom = 1) {
+  const zoom = Number.isFinite(viewportZoom) ? clamp(viewportZoom, 0.08, 4) : 1
+
+  if (zoom >= 0.85) {
+    return 1
+  }
+
+  const overviewWeight = clamp((0.85 - zoom) / 0.77, 0, 1)
+  const readableScale = 1 / zoom
+
+  return clamp(
+    1 + (Math.sqrt(readableScale) * 1.82 - 1) * overviewWeight,
+    1,
+    LAYOUT_GROUP_TITLE_MAX_SCALE,
+  )
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, value))
 }
 
 export function getLayoutGroupParentContainer(
@@ -1257,6 +1748,7 @@ export function buildExpandedClusterLayouts(
   layout: LayoutSpec | null,
   symbolClusterState: SymbolClusterState,
   expandedClusterIds: Set<string>,
+  symbolFootprints?: SymbolFootprintLookup,
 ) {
   const layouts = new Map<string, ExpandedClusterLayout>()
 
@@ -1281,21 +1773,27 @@ export function buildExpandedClusterLayouts(
       continue
     }
 
-    const rootDimensions = getSymbolNodeDimensions(
-      rootNode,
-      rootPlacement,
-      false,
-      undefined,
-      1,
-      snapshot,
-      {
+    const rootDimensions =
+      symbolFootprints?.get(rootNode.id, {
         extraMetaLabels: getRuntimeSymbolMetaLabels(
           symbolClusterState.callerCounts[rootNode.id] ?? 0,
           cluster.memberNodeIds.length,
           true,
         ),
-      },
-    )
+      }) ??
+      getSymbolNodeFootprint(
+        rootNode,
+        rootPlacement,
+        {
+          extraMetaLabels: getRuntimeSymbolMetaLabels(
+            symbolClusterState.callerCounts[rootNode.id] ?? 0,
+            cluster.memberNodeIds.length,
+            true,
+          ),
+        },
+        1,
+        snapshot,
+      )
     const rootWidth = rootDimensions.width
     const rootHeight = rootDimensions.height
 
@@ -1342,7 +1840,7 @@ export function buildExpandedClusterLayouts(
       )
     }
 
-    const sizeByNodeId = new Map<string, NodeDimensions>()
+    const sizeByNodeId = new Map<string, SymbolFootprint>()
 
     for (const memberId of memberIds) {
       const memberNode = snapshot.nodes[memberId]
@@ -1353,14 +1851,14 @@ export function buildExpandedClusterLayouts(
 
       sizeByNodeId.set(
         memberId,
-        getSymbolNodeDimensions(
-          memberNode,
-          layout.placements[memberId],
-          true,
-          undefined,
-          1,
-          snapshot,
-        ),
+        symbolFootprints?.get(memberId, { contained: true }) ??
+          getSymbolNodeFootprint(
+            memberNode,
+            layout.placements[memberId],
+            { contained: true },
+            1,
+            snapshot,
+          ),
       )
     }
 
@@ -1423,11 +1921,11 @@ export function buildExpandedClusterLayouts(
 
         const memberDimensions =
           sizeByNodeId.get(childId) ??
-          getSymbolNodeDimensions(
+          symbolFootprints?.get(childId, { contained: true }) ??
+          getSymbolNodeFootprint(
             memberNode,
             layout.placements[childId],
-            true,
-            undefined,
+            { contained: true },
             1,
             snapshot,
           )
@@ -1484,14 +1982,15 @@ export function buildExpandedClusterLayouts(
         continue
       }
 
-      const memberDimensions = getSymbolNodeDimensions(
-        memberNode,
-        layout.placements[memberId],
-        true,
-        undefined,
-        1,
-        snapshot,
-      )
+      const memberDimensions =
+        symbolFootprints?.get(memberId, { contained: true }) ??
+        getSymbolNodeFootprint(
+          memberNode,
+          layout.placements[memberId],
+          { contained: true },
+          1,
+          snapshot,
+        )
 
       childPlacements[memberId] = {
         x:
@@ -1564,269 +2063,6 @@ function compareClusterMemberOrder(
   return leftId.localeCompare(rightId)
 }
 
-function getSymbolNodeDimensions(
-  symbol: SymbolNode,
-  placement: LayoutSpec['placements'][string] | undefined,
-  contained: boolean,
-  containedPlacement?: ExpandedClusterLayout['childPlacements'][string],
-  viewportZoom = 1,
-  snapshot?: CodebaseSnapshot,
-  options: SymbolDimensionOptions = {},
-): NodeDimensions {
-  if (containedPlacement) {
-    return {
-      width: containedPlacement.width,
-      height: containedPlacement.height,
-      scale: 1,
-      contentScale: 1,
-      compact: containedPlacement.width <= COMPACT_SYMBOL_NODE_WIDTH,
-    }
-  }
-
-  if (symbol.symbolKind === 'constant') {
-    const baseWidth = contained ? COMPACT_SYMBOL_NODE_WIDTH - 12 : COMPACT_SYMBOL_NODE_WIDTH
-    const baseHeight = contained ? COMPACT_SYMBOL_NODE_HEIGHT - 6 : COMPACT_SYMBOL_NODE_HEIGHT
-    const scaledDimensions = getLocScaledSymbolDimensions(
-      symbol,
-      baseWidth,
-      baseHeight,
-      viewportZoom,
-      snapshot,
-      options,
-    )
-
-    return {
-      ...scaledDimensions,
-      compact: scaledDimensions.scale < 1.12,
-    }
-  }
-
-  const baseWidth = placement?.width ?? DEFAULT_NODE_WIDTH
-  const baseHeight = placement?.height ?? DEFAULT_NODE_HEIGHT
-
-  return {
-    ...getLocScaledSymbolDimensions(
-      symbol,
-      baseWidth,
-      baseHeight,
-      viewportZoom,
-      snapshot,
-      options,
-    ),
-    compact: false,
-  }
-}
-
-function getLocScaledSymbolDimensions(
-  symbol: SymbolNode,
-  baseWidth: number,
-  baseHeight: number,
-  viewportZoom: number,
-  snapshot?: CodebaseSnapshot,
-  options: SymbolDimensionOptions = {},
-) {
-  const loc = getSymbolLoc(symbol)
-
-  if (!loc) {
-    return {
-      width: baseWidth,
-      height: baseHeight,
-      scale: 1,
-      contentScale: 1,
-    }
-  }
-
-  const logLoc = Math.log10(loc + 1)
-  const highLocWeight = clamp((logLoc - 2.1) / 0.9, 0, 1)
-  const baseScale = clamp(
-    0.72 +
-      Math.pow(logLoc, 1.65) * 0.38 +
-      Math.pow(highLocWeight, 1.4) * 0.95,
-    0.72,
-    4.1,
-  )
-  const scale = getViewportAdjustedSymbolScale(baseScale, viewportZoom)
-  const contentScale = getSymbolContentScale(scale, viewportZoom, loc)
-  const scaledWidth = baseWidth * scale
-  const contentTextWidth = getSymbolContentTextWidth(
-    symbol,
-    snapshot,
-    contentScale,
-    options,
-  )
-  const width = Math.round(
-    clamp(
-      Math.max(scaledWidth, contentTextWidth),
-      LOC_SCALED_SYMBOL_MIN_WIDTH,
-      LOC_SCALED_SYMBOL_MAX_WIDTH,
-    ),
-  )
-  const heightScale = Math.max(scale, contentScale * 0.9)
-  const contentHeight = getSymbolContentHeight(
-    symbol,
-    snapshot,
-    contentScale,
-    width,
-    options,
-  )
-  const importantHeightFloor = getImportantSymbolHeightFloor(width, logLoc)
-
-  return {
-    width,
-    height: Math.round(
-      clamp(
-        Math.max(baseHeight * heightScale, contentHeight, importantHeightFloor),
-        LOC_SCALED_SYMBOL_MIN_HEIGHT,
-        LOC_SCALED_SYMBOL_MAX_HEIGHT,
-      ),
-    ),
-    scale,
-    contentScale,
-  }
-}
-
-function getViewportAdjustedSymbolScale(baseScale: number, viewportZoom: number) {
-  const zoom = Number.isFinite(viewportZoom) ? clamp(viewportZoom, 0.1, 4) : 1
-
-  if (zoom < 1) {
-    const zoomOutFactor = clamp((1 - zoom) / 0.9, 0, 1)
-    return clamp(1 + (baseScale - 1) * (1 + zoomOutFactor * 2.15), 0.56, 7.2)
-  }
-
-  const zoomInFactor = clamp(Math.log2(zoom) / 2, 0, 1)
-
-  return clamp(1 + (baseScale - 1) * (1 - zoomInFactor * 0.76), 0.82, 3.2)
-}
-
-function getSymbolContentScale(
-  nodeScale: number,
-  viewportZoom: number,
-  loc: number,
-) {
-  const zoom = Number.isFinite(viewportZoom) ? clamp(viewportZoom, 0.1, 4) : 1
-
-  if (zoom < 1) {
-    const readableAtViewportScale = 1 / zoom
-    const locWeight = clamp((Math.log10(loc + 1) - 1) / 1.2, 0, 1)
-    const locWeightedReadableScale =
-      1 + (readableAtViewportScale * 1.08 - 1) * locWeight
-
-    return clamp(
-      Math.max(nodeScale * 0.92, locWeightedReadableScale),
-      0.72,
-      6.2,
-    )
-  }
-
-  if (nodeScale <= 1) {
-    return clamp(nodeScale, 0.78, 1)
-  }
-
-  return clamp(1 + (nodeScale - 1) * 0.62, 1, 3.4)
-}
-
-function getImportantSymbolHeightFloor(width: number, logLoc: number) {
-  const importantLocWeight = clamp((logLoc - 1.45) / 0.85, 0, 1)
-
-  if (importantLocWeight <= 0) {
-    return 0
-  }
-
-  return width * (0.28 + importantLocWeight * 0.16)
-}
-
-function getSymbolContentTextWidth(
-  symbol: SymbolNode,
-  snapshot: CodebaseSnapshot | undefined,
-  contentScale: number,
-  options: SymbolDimensionOptions = {},
-) {
-  const subtitle = snapshot ? getSymbolSubtitle(symbol, snapshot) : symbol.path
-  const metaLabels = getSymbolDimensionMetaLabels(symbol, snapshot, options)
-
-  return Math.max(
-    getScaledTextWidth(symbol.name, contentScale, 7.8),
-    getScaledTextWidth(subtitle, contentScale, 6.25),
-    getScaledMetaRowWidth(metaLabels, contentScale),
-  )
-}
-
-function getScaledTextWidth(
-  text: string,
-  contentScale: number,
-  characterWidth: number,
-) {
-  const horizontalChrome = 62 * contentScale
-
-  return Math.ceil(text.length * characterWidth * contentScale + horizontalChrome)
-}
-
-function getSymbolContentHeight(
-  symbol: SymbolNode,
-  snapshot: CodebaseSnapshot | undefined,
-  contentScale: number,
-  width: number,
-  options: SymbolDimensionOptions = {},
-) {
-  const metaLabels = getSymbolDimensionMetaLabels(symbol, snapshot, options)
-  const horizontalPadding = 22 * contentScale
-  const availableWidth = Math.max(64, width - horizontalPadding)
-  const metaRows = getWrappedMetaRowCount(metaLabels, availableWidth, contentScale)
-  const metaHeight =
-    metaRows > 0
-      ? metaRows * 16 * contentScale + (metaRows - 1) * 4 * contentScale
-      : 0
-  const metaMargin = metaRows > 0 ? 5 * contentScale : 0
-  const titleHeight = 11.5 * contentScale * 1.3
-  const subtitleHeight = 10 * contentScale * 1.35
-  const subtitleMargin = 2 * contentScale
-  const verticalPadding = 14 * contentScale
-  const safetyPadding = 8 * contentScale
-  const runtimeBadgeReserve =
-    (options.extraMetaLabels?.length ?? 0) > 0 ? 18 * contentScale : 0
-
-  return Math.ceil(
-    verticalPadding +
-      metaHeight +
-      metaMargin +
-      titleHeight +
-      subtitleMargin +
-      subtitleHeight +
-      runtimeBadgeReserve +
-      safetyPadding,
-  )
-}
-
-function getSymbolDimensionMetaLabels(
-  symbol: SymbolNode,
-  snapshot: CodebaseSnapshot | undefined,
-  options: SymbolDimensionOptions,
-) {
-  const tagLabels = snapshot ? getNodeBadgeLabels(symbol, snapshot) : []
-
-  return [
-    getSymbolVisualKindClass(symbol),
-    ...tagLabels,
-    symbol.range ? `${getSymbolLoc(symbol) ?? 0} loc` : null,
-    ...(options.extraMetaLabels ?? []),
-  ].filter((label): label is string => Boolean(label))
-}
-
-function getScaledMetaRowWidth(labels: string[], contentScale: number) {
-  if (labels.length === 0) {
-    return 0
-  }
-
-  const gap = 4 * contentScale
-  const horizontalChrome = 28 * contentScale
-  const labelsWidth = labels.reduce(
-    (width, label) => width + label.length * 6.1 * contentScale + 12 * contentScale,
-    0,
-  )
-
-  return Math.ceil(labelsWidth + gap * Math.max(0, labels.length - 1) + horizontalChrome)
-}
-
 function getRuntimeSymbolMetaLabels(
   sharedCallerCount: number,
   clusterSize: number,
@@ -1843,70 +2079,6 @@ function getRuntimeSymbolMetaLabels(
   }
 
   return labels
-}
-
-function getWrappedMetaRowCount(
-  labels: string[],
-  availableWidth: number,
-  contentScale: number,
-) {
-  if (labels.length === 0) {
-    return 0
-  }
-
-  let rows = 1
-  let rowWidth = 0
-  const gap = 4 * contentScale
-
-  for (const label of labels) {
-    const chipWidth = label.length * 6.1 * contentScale + 12 * contentScale
-    const nextWidth = rowWidth === 0 ? chipWidth : rowWidth + gap + chipWidth
-
-    if (rowWidth > 0 && nextWidth > availableWidth) {
-      rows += 1
-      rowWidth = chipWidth
-      continue
-    }
-
-    rowWidth = nextWidth
-  }
-
-  return rows
-}
-
-function getSymbolLoc(symbol: SymbolNode) {
-  if (!symbol.range) {
-    return null
-  }
-
-  return Math.max(1, symbol.range.end.line - symbol.range.start.line + 1)
-}
-
-function clamp(value: number, min: number, max: number) {
-  return Math.max(min, Math.min(max, value))
-}
-
-export function getSymbolVisualKindClass(symbol: SymbolNode) {
-  if (symbol.facets.includes('react:hook')) {
-    return 'hook'
-  }
-
-  if (symbol.facets.includes('react:component')) {
-    return 'component'
-  }
-
-  switch (symbol.symbolKind) {
-    case 'class':
-    case 'function':
-    case 'constant':
-    case 'variable':
-    case 'module':
-      return symbol.symbolKind
-    case 'method':
-      return 'function'
-    default:
-      return 'module'
-  }
 }
 
 export function getSymbolKindRank(symbol: SymbolNode) {
@@ -2444,31 +2616,6 @@ export function getNodeSubtitle(node: ProjectNode) {
   return node.symbolKind
 }
 
-export function getNodeBadgeLabels(
-  node: ProjectNode,
-  snapshot: CodebaseSnapshot,
-) {
-  const tagLabelById = new Map(snapshot.tags.map((tag) => [tag.id, tag.label]))
-  const facetLabelById = new Map(
-    snapshot.facetDefinitions.map((facetDefinition) => [facetDefinition.id, facetDefinition.label]),
-  )
-  const facetLabels = node.facets
-    .map((facetId) => facetLabelById.get(facetId) ?? formatFacetLabel(facetId))
-  const tagLabels = node.tags.map((tagId) => tagLabelById.get(tagId) ?? tagId)
-
-  return [...facetLabels, ...tagLabels].slice(0, 3)
-}
-
-export function formatFacetLabel(facetId: string) {
-  const [, rawLabel = facetId] = facetId.split(':')
-
-  return rawLabel
-    .split(/[-_]/)
-    .filter(Boolean)
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join(' ')
-}
-
 export function getDefaultNodeWidth(node: ProjectNode) {
   if (node.kind === 'directory') {
     return 240
@@ -2491,18 +2638,6 @@ export function getDefaultNodeHeight(node: ProjectNode) {
   }
 
   return DEFAULT_NODE_HEIGHT
-}
-
-export function getSymbolSubtitle(
-  symbol: SymbolNode,
-  snapshot: CodebaseSnapshot,
-) {
-  const fileNode = snapshot.nodes[symbol.fileId]
-  const filePath =
-    fileNode && isFileNode(fileNode) ? fileNode.path : symbol.fileId
-  const lineLabel = symbol.range ? `:${symbol.range.start.line}` : ''
-
-  return `${filePath}${lineLabel}`
 }
 
 function getEdgeColor(kind: GraphEdgeKind) {
@@ -2740,6 +2875,7 @@ export function updateLayoutPlacement(
   setDraftLayouts: (draftLayouts: LayoutDraft[]) => void,
   snapshot: CodebaseSnapshot | null,
   viewMode: VisualizerViewMode,
+  viewportZoom?: number,
 ) {
   const updateCanvasLayout = (
     getNextLayout: (layout: LayoutSpec) => LayoutSpec | null,
@@ -2783,6 +2919,7 @@ export function updateLayoutPlacement(
         viewMode,
         groupId,
         position,
+        viewportZoom,
       ),
     }))
     return
@@ -2798,6 +2935,7 @@ export function updateLayoutPlacement(
             viewMode,
             nodeId,
             position,
+            viewportZoom,
           ),
         }
       : null,
@@ -2851,6 +2989,7 @@ export function buildUpdatedPlacementsForMovedNode(
   viewMode: VisualizerViewMode,
   nodeId: string,
   position: XYPosition,
+  viewportZoom?: number,
 ) {
   const currentPlacement = layout.placements[nodeId]
 
@@ -2883,6 +3022,7 @@ export function buildUpdatedPlacementsForMovedNode(
     viewMode,
     nodeId,
     position,
+    viewportZoom,
   )
 
   nextPlacements[nodeId] = {
@@ -2925,13 +3065,16 @@ export function buildUpdatedPlacementsForMovedGroup(
   viewMode: VisualizerViewMode,
   groupId: string,
   position: XYPosition,
+  viewportZoom?: number,
 ) {
   if (!snapshot) {
     return layout.placements
   }
 
-  const containers = buildLayoutGroupContainers(snapshot, layout, viewMode)
-  const container = containers.get(groupId)
+  const containers = buildLayoutGroupContainerIndex(snapshot, layout, viewMode, {
+    viewportZoom,
+  })
+  const container = containers.containersById.get(groupId)
 
   if (!container) {
     return layout.placements
@@ -2971,13 +3114,16 @@ function getAbsoluteCanvasPositionForDraggedNode(
   viewMode: VisualizerViewMode,
   nodeId: string,
   position: XYPosition,
+  viewportZoom?: number,
 ) {
   const groupContainer =
     layout.strategy === 'agent'
-      ? getLayoutGroupParentContainer(
-          nodeId,
-          buildLayoutGroupContainers(snapshot, layout, viewMode),
-        )
+      ? (buildLayoutGroupContainerIndex(
+          snapshot,
+          layout,
+          viewMode,
+          { viewportZoom },
+        ).containerByNodeId.get(nodeId) ?? null)
       : null
 
   if (groupContainer) {
@@ -3145,7 +3291,12 @@ function shouldRefreshGeneratedDefaultLayout(
 ) {
   const generatedDescription = generatedLayout.description ?? ''
   const existingDescription = existingLayout.description ?? ''
-  const versionMarkers = ['symbol-spacing-v2', 'semantic-spacing-v2', 'semantic-spacing-v3']
+  const versionMarkers = [
+    'symbol-spacing-v2',
+    'semantic-spacing-v2',
+    'semantic-spacing-v3',
+    'semantic-spacing-v4',
+  ]
 
   return versionMarkers.some(
     (marker) =>

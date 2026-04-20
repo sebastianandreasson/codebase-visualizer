@@ -30,6 +30,7 @@ import {
   type VisualizerViewMode,
 } from '../types'
 import { getPreferredFollowSymbolIdsForFile } from './follow'
+import { SEMANTIC_LAYOUT_FOOTPRINT_ZOOM } from '../semantic/semanticLayout'
 import type {
   ResolvedCanvasOverlay,
   ResolvedCanvasScene,
@@ -41,8 +42,9 @@ import {
   buildExpandedClusterLayouts,
   buildFilesystemContainerLayouts,
   buildFlowModel,
-  buildLayoutGroupContainers,
+  buildLayoutGroupContainerIndex,
   countVisibleLayoutNodes,
+  createSymbolFootprintLookup,
   deriveSymbolClusterState,
   getFollowTargetZoom,
   isAnnotationNodeId,
@@ -151,6 +153,28 @@ export function useCanvasGraphController({
     () => new Set(collapsedDirectoryIds),
     [collapsedDirectoryIds],
   )
+  const modelViewportZoom = useMemo(
+    () => getFlowModelViewportZoomBucket(viewport.zoom),
+    [viewport.zoom],
+  )
+  const symbolFootprintViewportZoom = useMemo(
+    () =>
+      resolvedScene?.layoutSpec.strategy === 'semantic'
+        ? Math.max(modelViewportZoom, SEMANTIC_LAYOUT_FOOTPRINT_ZOOM)
+        : modelViewportZoom,
+    [modelViewportZoom, resolvedScene],
+  )
+  const symbolFootprints = useMemo(
+    () =>
+      snapshotOrNull && resolvedScene
+        ? createSymbolFootprintLookup({
+            layout: resolvedScene.layoutSpec,
+            snapshot: snapshotOrNull,
+            viewportZoom: symbolFootprintViewportZoom,
+          })
+        : null,
+    [resolvedScene, snapshotOrNull, symbolFootprintViewportZoom],
+  )
   const expandedClusterLayouts = useMemo(
     () =>
       buildExpandedClusterLayouts(
@@ -158,8 +182,9 @@ export function useCanvasGraphController({
         resolvedScene?.layoutSpec ?? null,
         symbolClusterState,
         expandedClusterIds,
+        symbolFootprints ?? undefined,
       ),
-    [expandedClusterIds, resolvedScene, snapshotOrNull, symbolClusterState],
+    [expandedClusterIds, resolvedScene, snapshotOrNull, symbolClusterState, symbolFootprints],
   )
   const filesystemContainerLayouts = useMemo(
     () =>
@@ -171,18 +196,30 @@ export function useCanvasGraphController({
       ),
     [collapsedDirectoryIdSet, resolvedScene, snapshotOrNull, viewMode],
   )
-  const layoutGroupContainers = useMemo(
+  const layoutGroupContainerIndex = useMemo(
     () =>
-      buildLayoutGroupContainers(
+      buildLayoutGroupContainerIndex(
         snapshotOrNull,
         resolvedScene?.layoutSpec ?? null,
         viewMode,
+        {
+          expandedClusterIds,
+          expandedClusterLayouts,
+          symbolClusterState,
+          symbolFootprints: symbolFootprints ?? undefined,
+          viewportZoom: modelViewportZoom,
+        },
       ),
-    [resolvedScene, snapshotOrNull, viewMode],
-  )
-  const modelViewportZoom = useMemo(
-    () => getFlowModelViewportZoomBucket(viewport.zoom),
-    [viewport.zoom],
+    [
+      expandedClusterIds,
+      expandedClusterLayouts,
+      modelViewportZoom,
+      resolvedScene,
+      snapshotOrNull,
+      symbolClusterState,
+      symbolFootprints,
+      viewMode,
+    ],
   )
 
   const baseFlowModel = useMemo<FlowModel | null>(() => {
@@ -199,11 +236,12 @@ export function useCanvasGraphController({
       expandedClusterIds,
       expandedClusterLayouts,
       filesystemContainerLayouts,
-      layoutGroupContainers,
+      layoutGroupContainerIndex,
       collapsedDirectoryIdSet,
       toggleCollapsedDirectory,
       {
         selectedNodeIds: selectedNodeIdSet,
+        symbolFootprints: symbolFootprints ?? undefined,
         viewportZoom: modelViewportZoom,
       },
     )
@@ -213,10 +251,11 @@ export function useCanvasGraphController({
     expandedClusterLayouts,
     filesystemContainerLayouts,
     graphLayers,
-    layoutGroupContainers,
+    layoutGroupContainerIndex,
     resolvedScene,
     selectedNodeIdSet,
     snapshotOrNull,
+    symbolFootprints,
     symbolClusterState,
     toggleCollapsedDirectory,
     viewMode,
@@ -658,6 +697,7 @@ export function useCanvasGraphController({
         setDraftLayouts,
         snapshotOrNull,
         viewMode,
+        modelViewportZoom,
       )
     },
     [
@@ -669,6 +709,7 @@ export function useCanvasGraphController({
       setLayouts,
       snapshotOrNull,
       viewMode,
+      modelViewportZoom,
     ],
   )
 

@@ -10,7 +10,7 @@ import { buildSemanticPurposeSummaryRecords } from './purposeSummaries'
 import { projectSemanticEmbeddings } from './projection/umap'
 import { refineSemanticLayout } from './projection/refinement'
 import { hashSemanticText } from './symbolText'
-import { getSymbolLayoutSlot } from '../layouts/symbolLayout'
+import { createSymbolFootprintLookup } from '../visualizer/symbolFootprint'
 import type {
   SemanticEmbeddingVectorRecord,
   SemanticPurposeSummaryRecord,
@@ -21,7 +21,8 @@ import type { PreprocessedWorkspaceContext } from '../preprocessing/types'
 const SEMANTIC_SYMBOL_NODE_WIDTH = 248
 const SEMANTIC_SYMBOL_NODE_HEIGHT = 82
 const SEMANTIC_PROJECTION_SEED = 17
-const SEMANTIC_LAYOUT_COORDINATE_VERSION = 'semantic-spacing-v3'
+export const SEMANTIC_LAYOUT_COORDINATE_VERSION = 'semantic-spacing-v4'
+export const SEMANTIC_LAYOUT_FOOTPRINT_ZOOM = 0.25
 
 const SUPPORTED_SYMBOL_KINDS = new Set<SymbolKind>([
   'class',
@@ -56,7 +57,7 @@ export function buildSemanticLayout(
   return refineSemanticLayout(projection, {
     baseLayout,
     minimumSpacing: 260,
-    nodeFootprints: buildSemanticNodeFootprints(snapshot, purposeSummaries),
+    nodeFootprints: buildSemanticNodeFootprints(snapshot, purposeSummaries, baseLayout),
   })
 }
 
@@ -196,12 +197,27 @@ function isSupportedSemanticSymbol(
 function buildSemanticNodeFootprints(
   snapshot: ProjectSnapshot,
   purposeSummaries: SemanticPurposeSummaryRecord[],
+  baseLayout: LayoutSpec,
 ) {
+  const footprints = createSymbolFootprintLookup({
+    layout: baseLayout,
+    snapshot,
+    viewportZoom: SEMANTIC_LAYOUT_FOOTPRINT_ZOOM,
+  })
+
   return Object.fromEntries(
     purposeSummaries.flatMap((record) => {
       const node = snapshot.nodes[record.symbolId]
       return node && isSupportedSemanticSymbol(node)
-        ? [[record.symbolId, getSymbolLayoutSlot(node)]]
+        ? [
+            [
+              record.symbolId,
+              footprints.get(record.symbolId) ?? {
+                height: SEMANTIC_SYMBOL_NODE_HEIGHT,
+                width: SEMANTIC_SYMBOL_NODE_WIDTH,
+              },
+            ],
+          ]
         : []
     }),
   )

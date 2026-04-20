@@ -231,6 +231,14 @@ export const CanvasViewport = memo(function CanvasViewport({
 
     return palette.module
   }
+  const trimmedUtilitySummary = utilitySummaryText.trim()
+  const utilityStatusText =
+    trimmedUtilitySummary.toLowerCase() === 'heat off'
+      ? null
+      : trimmedUtilitySummary
+  const utilityTriggerTitle = utilityStatusText
+    ? `Canvas tools - ${utilityStatusText}`
+    : 'Canvas tools'
 
   return (
     <section className="cbv-canvas">
@@ -239,20 +247,22 @@ export const CanvasViewport = memo(function CanvasViewport({
           <div className="cbv-canvas-legend-anchor">
             <SymbolKindLegend />
           </div>
-          <div className="cbv-canvas-utility-anchor">
-          <button
-            aria-expanded={utilityPaletteOpen}
-            className={`cbv-canvas-utility-trigger${utilityPaletteOpen ? ' is-open' : ''}`}
-            onClick={() => setUtilityPaletteOpen((current) => !current)}
-            title={utilitySummaryText}
-            type="button"
-          >
-            <span className="cbv-eyebrow">canvas</span>
-            <strong>{utilitySummaryText}</strong>
-            <span className="cbv-canvas-utility-trigger-meta">
-              {utilityPaletteOpen ? 'hide tools' : 'tools'}
-            </span>
-          </button>
+          <div className={`cbv-canvas-utility-anchor${utilityPaletteOpen ? ' is-open' : ''}`}>
+            <button
+              aria-expanded={utilityPaletteOpen}
+              aria-label="Toggle canvas tools"
+              className={`cbv-canvas-utility-trigger${utilityPaletteOpen ? ' is-open' : ''}`}
+              onClick={() => setUtilityPaletteOpen((current) => !current)}
+              title={utilityTriggerTitle}
+              type="button"
+            >
+              <span className="cbv-eyebrow">canvas</span>
+              {utilityStatusText ? <strong>{utilityStatusText}</strong> : null}
+              <span className="cbv-canvas-utility-trigger-meta">
+                {utilityPaletteOpen ? 'hide tools' : 'tools'}
+              </span>
+              <span className="cbv-canvas-utility-chevron" aria-hidden="true" />
+            </button>
           {utilityPaletteOpen ? (
             <div className="cbv-canvas-utility-popover">
               {showCompareAction ? (
@@ -512,6 +522,7 @@ export const CanvasViewport = memo(function CanvasViewport({
       </div>
       <ReactFlow
         defaultViewport={viewport}
+        elevateNodesOnSelect={false}
         edges={edges}
         fitView
         maxZoom={4}

@@ -1,4 +1,4 @@
-import { memo } from 'react'
+import { memo, type CSSProperties } from 'react'
 
 import { Handle, Position, type NodeProps } from '@xyflow/react'
 
@@ -15,6 +15,7 @@ type CodebaseCanvasNodeData = Record<string, unknown> & {
   heatWeight?: number
   container?: boolean
   groupContainer?: boolean
+  groupTitleScale?: number
   collapsible?: boolean
   collapsed?: boolean
   onToggleCollapse?: (() => void) | undefined
@@ -25,6 +26,21 @@ export const CodebaseCanvasNode = memo(function CodebaseCanvasNode({
   selected,
 }: NodeProps) {
   const nodeData = data as CodebaseCanvasNodeData
+  const groupTitleScale = nodeData.groupContainer
+    ? Math.max(1, Math.min(7.2, nodeData.groupTitleScale ?? 1))
+    : 1
+  const groupHeaderScale = Math.sqrt(groupTitleScale)
+  const nodeStyle = {
+    ...getAgentHeatStyle(nodeData.heatWeight),
+    ...(nodeData.groupContainer
+      ? {
+          '--cbv-group-chip-font-size': `${Math.min(1.05, 0.58 * groupHeaderScale)}rem`,
+          '--cbv-group-meta-margin': `${Math.min(1.05, 0.28 * groupHeaderScale)}rem`,
+          '--cbv-group-subtitle-font-size': `${Math.min(1.45, 0.5 * groupHeaderScale)}rem`,
+          '--cbv-group-title-font-size': `${0.68 * groupTitleScale}rem`,
+        }
+      : {}),
+  } as CSSProperties & Record<string, string | number>
 
   return (
     <div
@@ -39,7 +55,7 @@ export const CodebaseCanvasNode = memo(function CodebaseCanvasNode({
         (nodeData.heatWeight ?? 0) > 0 && 'has-agent-heat',
         nodeData.heatPulse && 'is-agent-heat-pulse',
       )}
-      style={getAgentHeatStyle(nodeData.heatWeight)}
+      style={nodeStyle}
     >
       {nodeData.collapsible ? (
         <button

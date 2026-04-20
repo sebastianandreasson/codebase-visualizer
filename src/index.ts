@@ -6,6 +6,13 @@ export { buildStructuralLayout } from './layouts/structuralLayout'
 export { buildSymbolLayout } from './layouts/symbolLayout'
 export { buildSemanticLayout } from './semantic/semanticLayout'
 export {
+  createSymbolFootprintLookup,
+  getSymbolNodeFootprint,
+  type SymbolFootprint,
+  type SymbolFootprintLookup,
+  type SymbolFootprintLookupOptions,
+} from './visualizer/symbolFootprint'
+export {
   createVisualizerStore,
   useVisualizerStore,
   visualizerStore,

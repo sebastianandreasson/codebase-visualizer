@@ -2,7 +2,10 @@ import { createHash } from 'node:crypto'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 
-import { buildSemanticLayout } from '../semantic/semanticLayout'
+import {
+  SEMANTIC_LAYOUT_COORDINATE_VERSION,
+  buildSemanticLayout,
+} from '../semantic/semanticLayout'
 import type { PreprocessedWorkspaceContext } from '../preprocessing/types'
 import type { LayoutSpec, ProjectSnapshot } from '../types'
 
@@ -62,7 +65,8 @@ async function readCachedSemanticLayout(rootDir: string, cacheKey: string) {
       parsed.rootDir !== rootDir ||
       parsed.cacheKey !== cacheKey ||
       !parsed.layout ||
-      parsed.layout.strategy !== 'semantic'
+      parsed.layout.strategy !== 'semantic' ||
+      !parsed.layout.description?.includes(SEMANTIC_LAYOUT_COORDINATE_VERSION)
     ) {
       return null
     }
@@ -108,6 +112,7 @@ function getSemanticLayoutCacheKey(
       totalEdges: snapshot.edges.length,
       totalFiles: snapshot.totalFiles,
       totalNodes: Object.keys(snapshot.nodes).length,
+      version: SEMANTIC_LAYOUT_COORDINATE_VERSION,
     }),
   )
   hash.update('\n')

@@ -3,7 +3,10 @@ import { useEffect, useMemo } from 'react'
 import { fetchSemanticLayout } from './apiClient'
 import { buildStructuralLayout } from '../layouts/structuralLayout'
 import { buildSymbolLayout } from '../layouts/symbolLayout'
-import { buildSemanticLayoutScaffold } from '../semantic/semanticLayout'
+import {
+  SEMANTIC_LAYOUT_COORDINATE_VERSION,
+  buildSemanticLayoutScaffold,
+} from '../semantic/semanticLayout'
 import type {
   CanvasBaseScene,
   CodebaseSnapshot,
@@ -522,7 +525,7 @@ function isResolvedSemanticLayoutCurrent(
       layout.strategy === 'semantic' &&
       layout.updatedAt === snapshot.generatedAt &&
       !layout.description?.startsWith('Experimental semantic symbol layout scaffold.') &&
-      Boolean(layout.description?.includes('semantic-spacing-v3'))
+      Boolean(layout.description?.includes(SEMANTIC_LAYOUT_COORDINATE_VERSION))
   )
 }
 

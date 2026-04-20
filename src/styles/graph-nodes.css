@@ -592,6 +592,35 @@
   border-style: dashed !important;
 }
 
+.cbv-node.is-group-container .cbv-node-meta {
+  margin-bottom: var(--cbv-group-meta-margin, var(--cbv-symbol-meta-margin, 0.3125rem));
+}
+
+.cbv-node.is-group-container .cbv-node-kind,
+.cbv-node.is-group-container .cbv-node-tag {
+  min-height: auto;
+  font-size: var(--cbv-group-chip-font-size, var(--cbv-symbol-chip-font-size, 0.59375rem));
+  letter-spacing: 0.06em;
+}
+
+.cbv-node.is-group-container .cbv-node-title {
+  color: var(--app-text);
+  font-size: var(--cbv-group-title-font-size, var(--cbv-symbol-title-font-size, 0.71875rem));
+  font-weight: 650;
+  letter-spacing: 0;
+  line-height: 1.08;
+  text-overflow: clip;
+  text-transform: uppercase;
+}
+
+.cbv-node.is-group-container .cbv-node-subtitle {
+  margin-top: 0.18em;
+  color: var(--app-text-muted);
+  font-size: var(--cbv-group-subtitle-font-size, var(--cbv-symbol-subtitle-font-size, 0.625rem));
+  letter-spacing: 0;
+  line-height: 1.16;
+}
+
 .cbv-node.has-agent-heat {
   border-color: color-mix(
     in oklch,
@@ -779,7 +808,7 @@
 }
 
 .cbv-canvas-legend-anchor .cbv-symbol-legend-swatch {
-  width: 0.38rem;
-  height: 0.38rem;
+  width: 0.5rem;
+  height: 0.5rem;
   border-radius: 2px;
 }

@@ -10,9 +10,12 @@ import type {
 import {
   applyFlowEdgePresentation,
   applyFlowNodePresentation,
+  buildLayoutGroupContainerIndex,
   buildFlowModel,
   buildUpdatedPlacementsForMovedNode,
   buildWorkspaceSidebarGroups,
+  createSymbolFootprintLookup,
+  getLayoutGroupNodeId,
   mergeDefaultLayoutWithExisting,
   type SymbolClusterState,
 } from './flowModel'
@@ -431,6 +434,342 @@ describe('flowModel extracted helpers', () => {
     expect(getContentScale(largeWorkflow)).toBeGreaterThan(4)
   })
 
+  it('keeps high-LOC symbols contained in footprint-aware custom groups', () => {
+    const snapshot = buildSnapshot([
+      symbol('large', 'largeWorkflow', null, 'function', 1, 900),
+      symbol('small', 'smallHelper', null, 'function', 1, 3),
+    ])
+    const layout = buildAgentGroupLayout(['large', 'small'], {
+      large: { x: 0, y: 0 },
+      small: { x: 120, y: 40 },
+    })
+    const symbolFootprints = createSymbolFootprintLookup({
+      layout,
+      snapshot,
+      viewportZoom: 0.25,
+    })
+    const groupIndex = buildLayoutGroupContainerIndex(
+      snapshot,
+      layout,
+      'symbols',
+      { symbolFootprints },
+    )
+    const model = buildFlowModel(
+      snapshot,
+      layout,
+      { contains: false, imports: false, calls: false },
+      'symbols',
+      emptySymbolClusterState(),
+      new Set<string>(),
+      new Map(),
+      new Map(),
+      groupIndex,
+      new Set<string>(),
+      () => {},
+      { symbolFootprints, viewportZoom: 0.25 },
+    )
+    const groupNode = model.nodes.find((node) => node.id === getLayoutGroupNodeId('group:logic'))
+    const largeNode = model.nodes.find((node) => node.id === 'large')
+
+    expect(groupNode).toBeDefined()
+    expect(largeNode).toBeDefined()
+    expect(isContainedBy(largeNode, groupNode)).toBe(true)
+  })
+
+  it('keeps selected custom group containers layered below their symbols', () => {
+    const snapshot = buildSnapshot([
+      symbol('large', 'largeWorkflow', null, 'function', 1, 900),
+      symbol('small', 'smallHelper', null, 'function', 1, 3),
+    ])
+    const layout = buildAgentGroupLayout(['large', 'small'], {
+      large: { x: 0, y: 0 },
+      small: { x: 120, y: 40 },
+    })
+    const groupIndex = buildLayoutGroupContainerIndex(snapshot, layout, 'symbols')
+    const model = buildFlowModel(
+      snapshot,
+      layout,
+      { contains: false, imports: false, calls: false },
+      'symbols',
+      emptySymbolClusterState(),
+      new Set<string>(),
+      new Map(),
+      new Map(),
+      groupIndex,
+      new Set<string>(),
+      () => {},
+    )
+    const groupNodeId = getLayoutGroupNodeId('group:logic')
+    const presented = applyFlowNodePresentation(
+      model.nodes,
+      new Set([groupNodeId]),
+      { active: false, nodeIds: new Set() },
+      new Map(),
+    )
+    const groupNode = presented.find((node) => node.id === groupNodeId)
+    const memberNodes = presented.filter((node) => node.id === 'large' || node.id === 'small')
+
+    expect(groupNode?.selected).toBe(true)
+    expect(memberNodes.length).toBe(2)
+    expect(memberNodes.every((node) => (node.zIndex ?? 0) > (groupNode?.zIndex ?? 0))).toBe(true)
+  })
+
+  it('packs custom group members by final footprint without overlaps', () => {
+    const snapshot = buildSnapshot([
+      symbol('tiny', 'tinyHelper', null, 'function', 1, 1),
+      symbol('medium', 'mediumWorkflow', null, 'function', 1, 100),
+      symbol('huge', 'hugeWorkflow', null, 'function', 1, 900),
+    ])
+    const layout = buildAgentGroupLayout(['tiny', 'medium', 'huge'], {
+      tiny: { x: 0, y: 0 },
+      medium: { x: 8, y: 0 },
+      huge: { x: 16, y: 0 },
+    })
+    const symbolFootprints = createSymbolFootprintLookup({
+      layout,
+      snapshot,
+      viewportZoom: 0.25,
+    })
+    const groupIndex = buildLayoutGroupContainerIndex(
+      snapshot,
+      layout,
+      'symbols',
+      { symbolFootprints },
+    )
+    const group = groupIndex.containersById.get('group:logic')
+    const childPlacements = Object.values(group?.childPlacements ?? {})
+
+    expect(childPlacements.length).toBe(3)
+    expect(hasAnyIntersection(childPlacements)).toBe(false)
+  })
+
+  it('packs grown custom group containers without folder overlap', () => {
+    const snapshot = buildSnapshot([
+      symbol('a1', 'alphaOneWorkflow', null, 'function', 1, 900),
+      symbol('a2', 'alphaTwoWorkflow', null, 'function', 1, 100),
+      symbol('b1', 'betaOneWorkflow', null, 'function', 1, 900),
+      symbol('b2', 'betaTwoWorkflow', null, 'function', 1, 100),
+    ])
+    const layout = buildAgentLayout(
+      {
+        a1: { x: 0, y: 0 },
+        a2: { x: 20, y: 20 },
+        b1: { x: 120, y: 30 },
+        b2: { x: 140, y: 40 },
+      },
+      [
+        { id: 'group:alpha', nodeIds: ['a1', 'a2'], title: 'Alpha' },
+        { id: 'group:beta', nodeIds: ['b1', 'b2'], title: 'Beta' },
+      ],
+    )
+    const symbolFootprints = createSymbolFootprintLookup({
+      layout,
+      snapshot,
+      viewportZoom: 0.18,
+    })
+    const groupIndex = buildLayoutGroupContainerIndex(
+      snapshot,
+      layout,
+      'symbols',
+      { symbolFootprints, viewportZoom: 0.18 },
+    )
+    const containers = Array.from(groupIndex.containersById.values())
+
+    expect(containers.length).toBe(2)
+    expect(hasAnyIntersection(containers)).toBe(false)
+
+    for (const container of containers) {
+      for (const childPlacement of Object.values(container.childPlacements)) {
+        expect(isPlacementContainedBy(childPlacement, container)).toBe(true)
+      }
+    }
+  })
+
+  it('promotes custom group titles at overview zoom', () => {
+    const snapshot = buildSnapshot([
+      symbol('grouped', 'groupedWorkflow', null, 'function', 1, 120),
+    ])
+    const layout = buildAgentGroupLayout(['grouped'], {
+      grouped: { x: 0, y: 0 },
+    })
+    const detailIndex = buildLayoutGroupContainerIndex(
+      snapshot,
+      layout,
+      'symbols',
+      { viewportZoom: 1.1 },
+    )
+    const overviewIndex = buildLayoutGroupContainerIndex(
+      snapshot,
+      layout,
+      'symbols',
+      { viewportZoom: 0.13 },
+    )
+    const model = buildFlowModel(
+      snapshot,
+      layout,
+      { contains: false, imports: false, calls: false },
+      'symbols',
+      emptySymbolClusterState(),
+      new Set<string>(),
+      new Map(),
+      new Map(),
+      overviewIndex,
+      new Set<string>(),
+      () => {},
+      { viewportZoom: 0.13 },
+    )
+    const groupNode = model.nodes.find((node) => node.id === getLayoutGroupNodeId('group:logic'))
+    const groupData = groupNode?.data as { groupTitleScale?: number } | undefined
+
+    expect(detailIndex.containersById.get('group:logic')?.titleScale).toBe(1)
+    expect(overviewIndex.containersById.get('group:logic')?.titleScale).toBeGreaterThan(4)
+    expect(groupData?.groupTitleScale).toBeGreaterThan(4)
+    expect(groupData?.groupTitleScale).toBeLessThanOrEqual(7.2)
+  })
+
+  it('keeps ungrouped symbol placements unchanged when packing groups', () => {
+    const snapshot = buildSnapshot([
+      symbol('grouped', 'groupedWorkflow', null, 'function', 1, 120),
+      symbol('ungrouped', 'ungroupedWorkflow', null, 'function', 1, 90),
+    ])
+    const layout = buildAgentGroupLayout(['grouped'], {
+      grouped: { x: 0, y: 0 },
+      ungrouped: { x: 1_234, y: 456 },
+    })
+    const symbolFootprints = createSymbolFootprintLookup({
+      layout,
+      snapshot,
+      viewportZoom: 0.25,
+    })
+    const groupIndex = buildLayoutGroupContainerIndex(
+      snapshot,
+      layout,
+      'symbols',
+      { symbolFootprints },
+    )
+    const model = buildFlowModel(
+      snapshot,
+      layout,
+      { contains: false, imports: false, calls: false },
+      'symbols',
+      emptySymbolClusterState(),
+      new Set<string>(),
+      new Map(),
+      new Map(),
+      groupIndex,
+      new Set<string>(),
+      () => {},
+      { symbolFootprints, viewportZoom: 0.25 },
+    )
+    const ungrouped = model.nodes.find((node) => node.id === 'ungrouped')
+
+    expect(ungrouped?.position).toEqual({ x: 1_234, y: 456 })
+  })
+
+  it('indexes group membership and reuses cached footprints across model builds', () => {
+    const snapshot = buildSnapshot([
+      symbol('a', 'alphaWorkflow', null, 'function', 1, 100),
+      symbol('b', 'betaWorkflow', null, 'function', 1, 200),
+      symbol('c', 'gammaWorkflow', null, 'function', 1, 300),
+      symbol('d', 'ungroupedWorkflow', null, 'function', 1, 400),
+    ])
+    const layout = buildAgentGroupLayout(['a', 'b', 'c'], {
+      a: { x: 0, y: 0 },
+      b: { x: 20, y: 0 },
+      c: { x: 40, y: 0 },
+      d: { x: 2_000, y: 0 },
+    })
+    const computedSymbolIds: string[] = []
+    const symbolFootprints = createSymbolFootprintLookup({
+      layout,
+      snapshot,
+      viewportZoom: 0.25,
+      onCompute: (symbolId) => {
+        computedSymbolIds.push(symbolId)
+      },
+    })
+    const groupIndex = buildLayoutGroupContainerIndex(
+      snapshot,
+      layout,
+      'symbols',
+      { symbolFootprints },
+    )
+
+    expect(groupIndex.containerByNodeId.get('a')?.id).toBe('group:logic')
+    expect(groupIndex.containerByNodeId.get('d')).toBeUndefined()
+
+    const buildModel = () =>
+      buildFlowModel(
+        snapshot,
+        layout,
+        { contains: false, imports: false, calls: false },
+        'symbols',
+        emptySymbolClusterState(),
+        new Set<string>(),
+        new Map(),
+        new Map(),
+        groupIndex,
+        new Set<string>(),
+        () => {},
+        { symbolFootprints, viewportZoom: 0.25 },
+      )
+
+    buildModel()
+    buildModel()
+
+    expect(symbolFootprints.getComputedCount()).toBe(4)
+    expect(new Set(computedSymbolIds)).toEqual(new Set(['a', 'b', 'c', 'd']))
+  })
+
+  it('packs 5,000 grouped symbols without intra-group intersections', () => {
+    const symbols = Array.from({ length: 5_000 }, (_, index) =>
+      symbol(
+        `symbol${index}`,
+        `symbol${index}`,
+        null,
+        index % 9 === 0 ? 'constant' : 'function',
+        1,
+        1 + (index % 17 === 0 ? 900 : index % 7 === 0 ? 100 : 5),
+      ),
+    )
+    const snapshot = buildSnapshot(symbols)
+    const placements = Object.fromEntries(
+      symbols.map((item, index) => [
+        item.id,
+        {
+          x: (index % 10) * 8,
+          y: Math.floor(index / 10) * 8,
+        },
+      ]),
+    )
+    const groups = Array.from({ length: 50 }, (_, groupIndex) => ({
+      id: `group:${groupIndex}`,
+      nodeIds: symbols
+        .slice(groupIndex * 100, groupIndex * 100 + 100)
+        .map((item) => item.id),
+      title: `Group ${groupIndex}`,
+    }))
+    const layout = buildAgentLayout(placements, groups)
+    const symbolFootprints = createSymbolFootprintLookup({
+      layout,
+      snapshot,
+      viewportZoom: 0.25,
+    })
+    const groupIndex = buildLayoutGroupContainerIndex(
+      snapshot,
+      layout,
+      'symbols',
+      { symbolFootprints },
+    )
+
+    expect(groupIndex.containersById.size).toBe(50)
+    expect(symbolFootprints.getComputedCount()).toBe(5_000)
+
+    for (const group of groupIndex.containersById.values()) {
+      expect(hasAnyIntersection(Object.values(group.childPlacements))).toBe(false)
+    }
+  })
+
   it('refreshes old built-in default layout coordinates when spacing versions change', () => {
     const generated = {
       ...buildSymbolLayout(['symbol']),
@@ -541,6 +880,100 @@ function buildSymbolLayout(nodeIds: string[]): LayoutSpec {
     strategy: 'structural',
     title: 'Symbols',
   }
+}
+
+function buildAgentGroupLayout(
+  groupedNodeIds: string[],
+  placements: Record<string, { x: number; y: number; width?: number; height?: number }>,
+): LayoutSpec {
+  return buildAgentLayout(placements, [
+    {
+      id: 'group:logic',
+      nodeIds: groupedNodeIds,
+      title: 'Logic',
+    },
+  ])
+}
+
+function buildAgentLayout(
+  placements: Record<string, { x: number; y: number; width?: number; height?: number }>,
+  groups: LayoutSpec['groups'],
+): LayoutSpec {
+  return {
+    annotations: [],
+    groups,
+    hiddenNodeIds: [],
+    id: 'agent',
+    lanes: [],
+    nodeScope: 'symbols',
+    placements: Object.fromEntries(
+      Object.entries(placements).map(([nodeId, placement]) => [
+        nodeId,
+        { nodeId, ...placement },
+      ]),
+    ),
+    strategy: 'agent',
+    title: 'Agent layout',
+  }
+}
+
+function isContainedBy(node: Node | undefined, container: Node | undefined) {
+  if (!node || !container || node.width == null || node.height == null) {
+    return false
+  }
+
+  return (
+    node.position.x >= container.position.x &&
+    node.position.y >= container.position.y &&
+    node.position.x + node.width <= container.position.x + (container.width ?? 0) &&
+    node.position.y + node.height <= container.position.y + (container.height ?? 0)
+  )
+}
+
+function isPlacementContainedBy(
+  placement: { x: number; y: number; width: number; height: number },
+  container: { x: number; y: number; width: number; height: number },
+) {
+  return (
+    placement.x >= container.x &&
+    placement.y >= container.y &&
+    placement.x + placement.width <= container.x + container.width &&
+    placement.y + placement.height <= container.y + container.height
+  )
+}
+
+function hasAnyIntersection(
+  placements: Array<{ x: number; y: number; width: number; height: number }>,
+) {
+  for (let leftIndex = 0; leftIndex < placements.length; leftIndex += 1) {
+    const left = placements[leftIndex]
+
+    if (!left) {
+      continue
+    }
+
+    for (let rightIndex = leftIndex + 1; rightIndex < placements.length; rightIndex += 1) {
+      const right = placements[rightIndex]
+
+      if (right && intersects(left, right)) {
+        return true
+      }
+    }
+  }
+
+  return false
+}
+
+function intersects(
+  left: { x: number; y: number; width: number; height: number },
+  right: { x: number; y: number; width: number; height: number },
+) {
+  return (
+    left.x < right.x + right.width &&
+    left.x + left.width > right.x &&
+    left.y < right.y + right.height &&
+    left.y + left.height > right.y
+  )
 }
 
 function buildFilesystemSnapshot(): CodebaseSnapshot {

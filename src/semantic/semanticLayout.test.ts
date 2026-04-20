@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
+import { createSymbolFootprintLookup } from '../visualizer/symbolFootprint'
 import { buildSemanticLayout } from './semanticLayout'
 import type { PreprocessedWorkspaceContext, ProjectSnapshot } from '../types'
 
@@ -71,7 +72,21 @@ describe('buildSemanticLayout', () => {
       (layout.placements['symbol:beta']?.x ?? 0) -
         (layout.placements['symbol:alpha']?.x ?? 0),
     ).toBeGreaterThan(1_000)
-    expect(layout.description).toContain('semantic-spacing-v3')
+    const footprints = createSymbolFootprintLookup({
+      layout,
+      snapshot,
+      viewportZoom: 0.25,
+    })
+    const alphaFootprint = footprints.get('symbol:alpha')
+
+    expect(alphaFootprint?.width).toBeGreaterThan(
+      layout.placements['symbol:alpha']?.width ?? 0,
+    )
+    expect(
+      (layout.placements['symbol:beta']?.x ?? 0) -
+        (layout.placements['symbol:alpha']?.x ?? 0),
+    ).toBeGreaterThan((alphaFootprint?.width ?? 0) + 120)
+    expect(layout.description).toContain('semantic-spacing-v4')
     expect(layout.hiddenNodeIds).not.toContain('symbol:alpha')
     expect(layout.hiddenNodeIds).not.toContain('symbol:beta')
   })
