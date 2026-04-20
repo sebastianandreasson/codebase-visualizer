@@ -93,6 +93,7 @@ interface CanvasViewportProps {
   onEdgesChange: ReturnType<typeof useEdgesState<Edge>>[2]
   onInit: (instance: ReactFlowInstance<Node, Edge>) => void
   onAgentHeatModeChange: (mode: TelemetryMode) => void
+  onOpenAgentEventFeed: () => void
   onAgentHeatSourceChange: (source: TelemetrySource) => void
   onToggleAgentHeatDebug: () => void
   onToggleAgentHeatFollow: () => void
@@ -151,6 +152,7 @@ export const CanvasViewport = memo(function CanvasViewport({
   onEdgesChange,
   onInit,
   onAgentHeatModeChange,
+  onOpenAgentEventFeed,
   onAgentHeatSourceChange,
   onToggleAgentHeatDebug,
   onToggleAgentHeatFollow,
@@ -343,6 +345,16 @@ export const CanvasViewport = memo(function CanvasViewport({
                     type="button"
                   >
                     {agentHeatDebugOpen ? 'Hide follow debug' : 'Show follow debug'}
+                  </button>
+                  <button
+                    className="cbv-agent-heat-debug-toggle"
+                    onClick={() => {
+                      onOpenAgentEventFeed()
+                      setUtilityPaletteOpen(false)
+                    }}
+                    type="button"
+                  >
+                    Open event feed
                   </button>
                   {agentHeatDebugOpen ? (
                     <div className="cbv-agent-heat-debug">

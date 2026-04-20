@@ -366,7 +366,7 @@ export function useCanvasGraphController({
   )
   const denseCanvasMode = viewMode === 'symbols' && visibleNodeCount > 250
 
-  const focusCanvasOnFollowTarget = useCallback((input: {
+  const focusCanvasOnFollowTarget = useCallback(async (input: {
     fileNodeId: string
     isEdit: boolean
     mode: TelemetryMode
@@ -391,17 +391,38 @@ export function useCanvasGraphController({
       mode: input.mode,
       node: primaryNode,
     })
+    const collapsedAncestorIds = getCollapsedFilesystemAncestorIds(
+      input.fileNodeId,
+      snapshotOrNull,
+      collapsedDirectoryIdSet,
+    )
+    const focusTarget = () =>
+      focusFlowOnNode({
+        duration: input.isEdit ? 260 : 220,
+        flowInstance,
+        maxZoom: desiredZoom,
+        nodes: flowInstance.getNodes(),
+        padding: input.isEdit ? 0.14 : 0.18,
+        targetNodeId: primaryNodeId,
+        targetNodeIds,
+      })
 
-    focusFlowOnNode({
-      duration: input.isEdit ? 260 : 220,
-      flowInstance,
-      maxZoom: desiredZoom,
-      nodes,
-      padding: input.isEdit ? 0.14 : 0.18,
-      targetNodeId: primaryNodeId,
-      targetNodeIds,
-    })
-  }, [flowInstance, nodes, snapshotOrNull])
+    if (collapsedAncestorIds.length > 0) {
+      for (const directoryId of collapsedAncestorIds) {
+        toggleCollapsedDirectory(directoryId)
+      }
+      await waitForFollowFocusDelay(80)
+      await focusTarget()
+      return
+    }
+
+    await focusTarget()
+  }, [
+    collapsedDirectoryIdSet,
+    flowInstance,
+    snapshotOrNull,
+    toggleCollapsedDirectory,
+  ])
 
   const focusCanvasOnNode = useCallback((input: {
     fallbackNodeIds?: string[]
@@ -671,7 +692,7 @@ export function useCanvasGraphController({
   }
 }
 
-function focusFlowOnNode(input: {
+async function focusFlowOnNode(input: {
   duration: number
   flowInstance: ReactFlowInstance<Node, Edge>
   maxZoom: number
@@ -683,7 +704,7 @@ function focusFlowOnNode(input: {
   const bounds = input.flowInstance.getNodesBounds([input.targetNodeId])
 
   if (bounds.width > 0 && bounds.height > 0) {
-    void input.flowInstance.setCenter(
+    await input.flowInstance.setCenter(
       bounds.x + bounds.width / 2,
       bounds.y + bounds.height / 2,
       {
@@ -698,13 +719,48 @@ function focusFlowOnNode(input: {
   const nodesToFit = input.nodes.filter((node) => targetNodeIds.includes(node.id))
 
   if (nodesToFit.length > 0) {
-    void input.flowInstance.fitView({
+    await input.flowInstance.fitView({
       duration: input.duration,
       maxZoom: input.maxZoom,
       nodes: nodesToFit,
       padding: input.padding,
     })
   }
+}
+
+function waitForFollowFocusDelay(durationMs: number) {
+  return new Promise<void>((resolve) => {
+    window.setTimeout(resolve, durationMs)
+  })
+}
+
+function getCollapsedFilesystemAncestorIds(
+  nodeId: string,
+  snapshot: CodebaseSnapshot,
+  collapsedDirectoryIdSet: Set<string>,
+) {
+  const collapsedAncestorIds: string[] = []
+  const currentNode = snapshot.nodes[nodeId]
+  let parentId =
+    currentNode && !isSymbolNode(currentNode)
+      ? currentNode.parentId
+      : null
+
+  while (parentId) {
+    const parentNode = snapshot.nodes[parentId]
+
+    if (!parentNode || !isDirectoryNode(parentNode)) {
+      break
+    }
+
+    if (collapsedDirectoryIdSet.has(parentId)) {
+      collapsedAncestorIds.push(parentId)
+    }
+
+    parentId = parentNode.parentId
+  }
+
+  return collapsedAncestorIds.reverse()
 }
 
 function getFlowModelViewportZoomBucket(zoom: number) {

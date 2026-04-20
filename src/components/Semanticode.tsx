@@ -37,6 +37,10 @@ import {
 } from './shell/workspaceStatusFormat'
 import { useAgentFollowController } from '../app/useAgentFollowController'
 import { useAgentFileOperations } from '../app/useAgentFileOperations'
+import {
+  buildAgentDebugFeedEntries,
+  useAgentEventFeed,
+} from '../app/useAgentEventFeed'
 import { useAutonomousRunsController } from '../app/useAutonomousRunsController'
 import { useCanvasGraphController } from '../app/useCanvasGraphController'
 import { useFollowAgentExecutors } from '../app/useFollowAgentExecutors'
@@ -249,6 +253,7 @@ export function Semanticode({
   const agentFileOperations = useAgentFileOperations({
     enabled: followActiveAgent,
   })
+  const liveAgentEventFeedEntries = useAgentEventFeed()
   const followFileOperations = useMemo(() => {
     const autonomousFileOperations =
       selectedRunDetail?.runId === activeRunId
@@ -606,6 +611,27 @@ export function Semanticode({
     enableTelemetry()
     setFollowActiveAgent((current) => !current)
   }, [enableTelemetry])
+  const handleOpenAgentEventFeed = useCallback(() => {
+    setInspectorOpen(true)
+    setInspectorTab('events')
+  }, [setInspectorOpen, setInspectorTab])
+  const agentEventFeedEntries = useMemo(
+    () =>
+      buildAgentDebugFeedEntries({
+        agentEvents: liveAgentEventFeedEntries,
+        dirtyFileEditSignals: followDirtyFileSignals,
+        fileOperations: followFileOperations,
+        followDebugState,
+        telemetryActivityEvents,
+      }),
+    [
+      followDebugState,
+      followDirtyFileSignals,
+      followFileOperations,
+      liveAgentEventFeedEntries,
+      telemetryActivityEvents,
+    ],
+  )
   const { followedEditDiffRequestKey } = useFollowAgentExecutors({
     acknowledgeCameraCommand,
     acknowledgeInspectorCommand,
@@ -621,7 +647,6 @@ export function Semanticode({
     setInspectorOpen,
     setInspectorTabToFile,
     setRefreshStatus,
-    telemetryMode,
   })
 
   useEffect(() => {
@@ -802,6 +827,7 @@ export function Semanticode({
                   onEdgesChange={onEdgesChange}
                   onInit={setFlowInstance}
                   onAgentHeatModeChange={handleTelemetryModeChange}
+                  onOpenAgentEventFeed={handleOpenAgentEventFeed}
                   onAgentHeatSourceChange={handleTelemetrySourceChange}
                   onToggleAgentHeatDebug={handleToggleFollowDebug}
                   onToggleAgentHeatFollow={handleToggleFollowActiveAgent}
@@ -854,11 +880,13 @@ export function Semanticode({
                 <Suspense fallback={<InspectorFallback header={inspectorHeader} onClose={() => setInspectorOpen(false)} />}>
                   <LazyInspectorPane
                     activeDraft={activeDraft}
+                    agentEventFeedEntries={agentEventFeedEntries}
                     compareOverlayActive={compareOverlayActive}
                     desktopHostAvailable={isDesktopHost}
                     draftActionError={draftActionError}
                     detectedPlugins={effectiveSnapshot?.detectedPlugins ?? []}
                     facetDefinitions={effectiveSnapshot?.facetDefinitions ?? []}
+                    followDebugState={followDebugState}
                     graphSummary={graphSummary}
                     header={inspectorHeader}
                     inspectorBodyRef={inspectorBodyRef}

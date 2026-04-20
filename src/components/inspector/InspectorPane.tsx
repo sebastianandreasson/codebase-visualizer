@@ -23,6 +23,7 @@ import {
 import {
   type WorkingSetState,
   type CodebaseFile,
+  type FollowDebugState,
   type GitFileDiff,
   type InspectorTab,
   type LayoutGroup,
@@ -40,6 +41,7 @@ import { type AgentScopeContext } from '../AgentPanel'
 import { AgentContextPane } from '../agent/AgentContextPane'
 import type { ThemeMode } from '../../app/themeBootstrap'
 import type { GroupPrototypeRecord } from '../../semantic/groups/groupPrototypes'
+import type { AgentDebugFeedEntry } from '../../app/useAgentEventFeed'
 
 const MAX_VISIBLE_SELECTED_FILES = 8
 
@@ -51,11 +53,13 @@ interface GraphSummary {
 
 interface InspectorPaneProps {
   activeDraft: LayoutDraft | null
+  agentEventFeedEntries: AgentDebugFeedEntry[]
   compareOverlayActive: boolean
   desktopHostAvailable: boolean
   detectedPlugins: ProjectPluginDetection[]
   draftActionError?: string | null
   facetDefinitions: ProjectFacetDefinition[]
+  followDebugState: FollowDebugState
   graphSummary: GraphSummary
   header: {
     eyebrow: string
@@ -108,11 +112,13 @@ interface InspectorPaneProps {
 
 export function InspectorPane({
   activeDraft,
+  agentEventFeedEntries,
   compareOverlayActive,
   desktopHostAvailable,
   detectedPlugins,
   draftActionError = null,
   facetDefinitions,
+  followDebugState,
   graphSummary,
   header,
   inspectorBodyRef,
@@ -193,6 +199,13 @@ export function InspectorPane({
         >
           graph
         </button>
+        <button
+          className={inspectorTab === 'events' ? 'is-active' : ''}
+          onClick={() => onSetInspectorTab('events')}
+          type="button"
+        >
+          events
+        </button>
       </div>
 
       <div className="cbv-inspector-body" ref={inspectorBodyRef}>
@@ -225,6 +238,11 @@ export function InspectorPane({
             selectedEdge={selectedEdge}
             selectedNode={selectedNode}
             summary={graphSummary}
+          />
+        ) : inspectorTab === 'events' ? (
+          <AgentEventFeedInspector
+            entries={agentEventFeedEntries}
+            followDebugState={followDebugState}
           />
         ) : selectedSymbols.length > 1 ? (
           <MultiSymbolInspector
@@ -371,6 +389,94 @@ function PluginSemanticsCard({
 
 function isPathWithinScope(path: string, scopeRoot: string) {
   return scopeRoot === '' || path === scopeRoot || path.startsWith(`${scopeRoot}/`)
+}
+
+function AgentEventFeedInspector({
+  entries,
+  followDebugState,
+}: {
+  entries: AgentDebugFeedEntry[]
+  followDebugState: FollowDebugState
+}) {
+  const latestTarget = followDebugState.currentTarget
+
+  return (
+    <div className="cbv-agent-event-feed">
+      <section className="cbv-agent-event-summary">
+        <div>
+          <p className="cbv-eyebrow">Follow resolver</p>
+          <strong>{followDebugState.currentMode}</strong>
+        </div>
+        <p>
+          {latestTarget
+            ? `${latestTarget.intent} · ${latestTarget.kind} · ${latestTarget.path}`
+            : 'No resolved target'}
+        </p>
+        <div className="cbv-agent-event-summary-grid">
+          <span>queue {followDebugState.queueLength}</span>
+          <span>{followDebugState.cameraLockActive ? 'camera lock' : 'camera idle'}</span>
+          <span>
+            {followDebugState.refreshInFlight
+              ? 'refreshing'
+              : followDebugState.refreshPending
+                ? 'refresh pending'
+                : 'refresh idle'}
+          </span>
+        </div>
+      </section>
+
+      {entries.length === 0 ? (
+        <div className="cbv-empty">
+          <h2>No events yet</h2>
+          <p>Run an agent request with follow enabled to populate the event feed.</p>
+        </div>
+      ) : (
+        <ol className="cbv-agent-event-list">
+          {entries.map((entry) => (
+            <li className={`cbv-agent-event-item is-${entry.source}`} key={entry.id}>
+              <div className="cbv-agent-event-item-header">
+                <time dateTime={entry.timestamp}>{formatEventFeedTime(entry.timestamp)}</time>
+                <strong>{entry.title}</strong>
+                <span>{entry.source}</span>
+              </div>
+              {entry.path ? <p className="cbv-agent-event-path">{entry.path}</p> : null}
+              {entry.detail ? <p className="cbv-agent-event-detail">{entry.detail}</p> : null}
+              <div className="cbv-agent-event-meta">
+                <span>{entry.type}</span>
+                {entry.status ? <span>{entry.status}</span> : null}
+              </div>
+              {entry.payload !== undefined ? (
+                <details className="cbv-agent-event-payload">
+                  <summary>payload</summary>
+                  <pre>{formatEventPayload(entry.payload)}</pre>
+                </details>
+              ) : null}
+            </li>
+          ))}
+        </ol>
+      )}
+    </div>
+  )
+}
+
+function formatEventFeedTime(timestamp: string) {
+  const date = new Date(timestamp)
+
+  if (!Number.isFinite(date.getTime())) {
+    return '--:--:--'
+  }
+
+  return date.toLocaleTimeString()
+}
+
+function formatEventPayload(payload: unknown) {
+  try {
+    const text = JSON.stringify(payload, null, 2)
+
+    return text.length > 5000 ? `${text.slice(0, 5000)}\n...` : text
+  } catch {
+    return '[unserializable payload]'
+  }
 }
 
 function TelemetrySummaryCard({

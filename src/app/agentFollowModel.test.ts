@@ -129,6 +129,67 @@ describe('agentFollowModel', () => {
     expect(state.latestResolvedActivityTarget?.path).toBe('debug_brute.js')
   })
 
+  it('queues rapid activity camera commands in playback order', () => {
+    const snapshot = createSnapshot()
+    let state = reduceFollowState([
+      { type: 'FOLLOW_TOGGLED', enabled: true, nowMs: 1_650 },
+      {
+        type: 'SNAPSHOT_CONTEXT_UPDATED',
+        nowMs: 1_660,
+        snapshot,
+        visibleNodeIds: ['file:debug', 'file:game'],
+      },
+      {
+        type: 'FILE_OPERATIONS_UPDATED',
+        fileOperations: [
+          createFileOperation({
+            id: 'operation:read:game',
+            kind: 'file_read',
+            path: 'game.js',
+            timestamp: '2026-04-18T10:00:02.000Z',
+            toolName: 'read_file',
+          }),
+          createFileOperation({
+            id: 'operation:read:debug',
+            kind: 'file_read',
+            path: 'debug_brute.js',
+            timestamp: '2026-04-18T10:00:01.000Z',
+            toolName: 'read_file',
+          }),
+        ],
+        nowMs: 1_670,
+      },
+    ])
+
+    expect(state.currentCameraCommand?.target.path).toBe('debug_brute.js')
+    expect(state.currentInspectorCommand?.target.path).toBe('debug_brute.js')
+    expect(state.currentInspectorCommand?.scrollToDiffRequestKey).toBeNull()
+    expect(state.debug.queueLength).toBe(1)
+
+    state = followControllerReducer(state, {
+      type: 'COMMAND_ACKNOWLEDGED',
+      commandId: state.currentCameraCommand!.id,
+      commandType: 'camera',
+      intent: 'activity',
+      nowMs: 1_680,
+    })
+
+    expect(state.currentCameraCommand?.target.path).toBe('game.js')
+    expect(state.currentInspectorCommand?.target.path).toBe('game.js')
+    expect(state.currentInspectorCommand?.scrollToDiffRequestKey).toBeNull()
+    expect(state.debug.queueLength).toBe(0)
+
+    state = followControllerReducer(state, {
+      type: 'COMMAND_ACKNOWLEDGED',
+      commandId: state.currentCameraCommand!.id,
+      commandType: 'camera',
+      intent: 'activity',
+      nowMs: 1_690,
+    })
+
+    expect(state.currentCameraCommand).toBeNull()
+  })
+
   it('prefers recent live operation reads over coarser request telemetry', () => {
     const snapshot = createSnapshot()
     const state = reduceFollowState([
@@ -171,6 +232,40 @@ describe('agentFollowModel', () => {
     expect(state.latestResolvedActivityTarget?.path).toBe('debug_brute.js')
   })
 
+  it('ignores fallback telemetry activity for follow targets', () => {
+    const snapshot = createSnapshot()
+    const state = reduceFollowState([
+      { type: 'FOLLOW_TOGGLED', enabled: true, nowMs: 1_750 },
+      {
+        type: 'SNAPSHOT_CONTEXT_UPDATED',
+        nowMs: 1_760,
+        snapshot,
+        visibleNodeIds: ['file:debug'],
+      },
+      {
+        type: 'TELEMETRY_BATCH_UPDATED',
+        nowMs: 1_770,
+        telemetryEnabled: true,
+        telemetryActivityEvents: [
+          createTelemetryEvent({
+            confidence: 'fallback',
+            key: 'semanticode-request:test:debug_brute.js',
+            path: 'debug_brute.js',
+            source: 'interactive',
+            timestamp: '2026-04-18T10:00:01.000Z',
+            toolNames: ['bash'],
+            totalTokens: 0,
+          }),
+        ],
+      },
+    ])
+
+    expect(state.debug.currentMode).toBe('idle')
+    expect(state.latestResolvedActivityTarget).toBeNull()
+    expect(state.currentCameraCommand).toBeNull()
+    expect(state.currentInspectorCommand).toBeNull()
+  })
+
   it('follows file references extracted from assistant messages', () => {
     const snapshot = createSnapshot()
     const state = reduceFollowState([
@@ -204,6 +299,80 @@ describe('agentFollowModel', () => {
         eventKey: 'operation:assistant:debug',
         path: 'debug_brute.js',
         primaryNodeId: 'file:debug',
+      }),
+    )
+  })
+
+  it('uses visible symbols when file activity arrives while the canvas is in symbol view', () => {
+    const snapshot = createSnapshot()
+    const state = reduceFollowState([
+      { type: 'FOLLOW_TOGGLED', enabled: true, nowMs: 1_850 },
+      { type: 'VIEW_MODE_CHANGED', mode: 'files', nowMs: 1_855, viewMode: 'symbols' },
+      {
+        type: 'SNAPSHOT_CONTEXT_UPDATED',
+        nowMs: 1_860,
+        snapshot,
+        visibleNodeIds: ['symbol:getSpawnCell'],
+      },
+      {
+        type: 'FILE_OPERATIONS_UPDATED',
+        fileOperations: [
+          createFileOperation({
+            id: 'operation:assistant:game',
+            kind: 'file_read',
+            path: 'game.js',
+            source: 'assistant-message',
+            timestamp: '2026-04-18T10:00:01.000Z',
+            toolName: 'assistant_message',
+          }),
+        ],
+        nowMs: 1_870,
+      },
+    ])
+
+    expect(state.debug.currentMode).toBe('activity')
+    expect(state.latestResolvedActivityTarget).toEqual(
+      expect.objectContaining({
+        kind: 'symbol',
+        path: 'game.js',
+        primaryNodeId: 'symbol:getSpawnCell',
+      }),
+    )
+  })
+
+  it('keeps file activity followable in filesystem view even when the file is currently hidden', () => {
+    const snapshot = createSnapshot()
+    const state = reduceFollowState([
+      { type: 'FOLLOW_TOGGLED', enabled: true, nowMs: 1_900 },
+      { type: 'VIEW_MODE_CHANGED', mode: 'files', nowMs: 1_905, viewMode: 'filesystem' },
+      {
+        type: 'SNAPSHOT_CONTEXT_UPDATED',
+        nowMs: 1_910,
+        snapshot,
+        visibleNodeIds: ['file:debug'],
+      },
+      {
+        type: 'FILE_OPERATIONS_UPDATED',
+        fileOperations: [
+          createFileOperation({
+            id: 'operation:assistant:game',
+            kind: 'file_read',
+            path: 'game.js',
+            source: 'assistant-message',
+            timestamp: '2026-04-18T10:00:01.000Z',
+            toolName: 'assistant_message',
+          }),
+        ],
+        nowMs: 1_920,
+      },
+    ])
+
+    expect(state.debug.currentMode).toBe('activity')
+    expect(state.currentCameraCommand?.target).toEqual(
+      expect.objectContaining({
+        kind: 'file',
+        path: 'game.js',
+        primaryNodeId: 'file:game',
       }),
     )
   })
@@ -695,7 +864,7 @@ function createTelemetryEvent(
   overrides: Partial<TelemetryActivityEvent> & Pick<TelemetryActivityEvent, 'key' | 'path'>,
 ): TelemetryActivityEvent {
   return {
-    confidence: 'attributed',
+    confidence: overrides.confidence ?? 'attributed',
     key: overrides.key,
     path: overrides.path,
     requestCount: overrides.requestCount ?? 1,

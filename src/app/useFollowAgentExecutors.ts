@@ -9,6 +9,7 @@ import type {
 
 const LIVE_SNAPSHOT_REFRESH_DEBOUNCE_MS = 500
 const LIVE_SNAPSHOT_REFRESH_MIN_INTERVAL_MS = 1800
+export const FOLLOW_AGENT_TARGET_LINGER_MS = 900
 
 interface FocusFollowTargetInput {
   fileNodeId: string
@@ -30,7 +31,7 @@ interface UseFollowAgentExecutorsOptions {
   acknowledgeRefreshCommand: (commandId: string) => void
   cameraCommand: FollowCameraCommand | null
   canMoveCamera: boolean
-  focusCanvasOnFollowTarget: (input: FocusFollowTargetInput) => void
+  focusCanvasOnFollowTarget: (input: FocusFollowTargetInput) => Promise<void> | void
   inspectorCommand: FollowInspectorCommand | null
   onLiveWorkspaceRefresh?: (() => Promise<void>) | null
   refreshCommand: FollowRefreshCommand | null
@@ -38,7 +39,6 @@ interface UseFollowAgentExecutorsOptions {
   setInspectorOpen: (open: boolean) => void
   setInspectorTabToFile: () => void
   setRefreshStatus: (status: 'idle' | 'in_flight') => void
-  telemetryMode: TelemetryMode
 }
 
 export function useFollowAgentExecutors({
@@ -56,11 +56,71 @@ export function useFollowAgentExecutors({
   setInspectorOpen,
   setInspectorTabToFile,
   setRefreshStatus,
-  telemetryMode,
 }: UseFollowAgentExecutorsOptions) {
   const [followedEditDiffRequestKey, setFollowedEditDiffRequestKey] = useState<string | null>(null)
+  const acknowledgeCameraCommandRef = useRef(acknowledgeCameraCommand)
+  const acknowledgeInspectorCommandRef = useRef(acknowledgeInspectorCommand)
+  const cameraCommandRef = useRef(cameraCommand)
+  const cameraExecutorTimeoutRef = useRef<number | null>(null)
+  const cameraLingerTimeoutRef = useRef<number | null>(null)
+  const cameraRunTokenRef = useRef(0)
+  const focusCanvasOnFollowTargetRef = useRef(focusCanvasOnFollowTarget)
+  const inspectorCommandRef = useRef(inspectorCommand)
+  const runningCameraCommandIdRef = useRef<string | null>(null)
   const refreshExecutorTimeoutRef = useRef<number | null>(null)
   const lastRefreshExecutorAtRef = useRef(0)
+  const selectFileNodeRef = useRef(selectFileNode)
+  const setInspectorOpenRef = useRef(setInspectorOpen)
+  const setInspectorTabToFileRef = useRef(setInspectorTabToFile)
+
+  useEffect(() => {
+    acknowledgeCameraCommandRef.current = acknowledgeCameraCommand
+  }, [acknowledgeCameraCommand])
+
+  useEffect(() => {
+    acknowledgeInspectorCommandRef.current = acknowledgeInspectorCommand
+  }, [acknowledgeInspectorCommand])
+
+  useEffect(() => {
+    cameraCommandRef.current = cameraCommand
+  }, [cameraCommand])
+
+  useEffect(() => {
+    focusCanvasOnFollowTargetRef.current = focusCanvasOnFollowTarget
+  }, [focusCanvasOnFollowTarget])
+
+  useEffect(() => {
+    inspectorCommandRef.current = inspectorCommand
+  }, [inspectorCommand])
+
+  useEffect(() => {
+    selectFileNodeRef.current = selectFileNode
+  }, [selectFileNode])
+
+  useEffect(() => {
+    setInspectorOpenRef.current = setInspectorOpen
+  }, [setInspectorOpen])
+
+  useEffect(() => {
+    setInspectorTabToFileRef.current = setInspectorTabToFile
+  }, [setInspectorTabToFile])
+
+  useEffect(() => {
+    return () => {
+      cameraRunTokenRef.current += 1
+      runningCameraCommandIdRef.current = null
+
+      if (cameraExecutorTimeoutRef.current !== null) {
+        window.clearTimeout(cameraExecutorTimeoutRef.current)
+        cameraExecutorTimeoutRef.current = null
+      }
+
+      if (cameraLingerTimeoutRef.current !== null) {
+        window.clearTimeout(cameraLingerTimeoutRef.current)
+        cameraLingerTimeoutRef.current = null
+      }
+    }
+  }, [])
 
   useEffect(() => {
     if (active) {
@@ -80,73 +140,110 @@ export function useFollowAgentExecutors({
   }, [active])
 
   useEffect(() => {
-    if (!active || !canMoveCamera || !cameraCommand) {
+    if (active) {
       return
     }
 
-    window.setTimeout(() => {
-      focusCanvasOnFollowTarget({
-        fileNodeId: cameraCommand.target.fileNodeId,
-        isEdit: cameraCommand.target.intent === 'edit',
-        mode: telemetryMode,
-        nodeIds:
-          cameraCommand.target.kind === 'symbol'
-            ? [cameraCommand.target.primaryNodeId]
-            : [cameraCommand.target.fileNodeId],
-      })
-      acknowledgeCameraCommand({
-        commandId: cameraCommand.id,
-        intent: cameraCommand.target.intent,
-      })
-    }, 0)
-  }, [
-    acknowledgeCameraCommand,
-    active,
-    cameraCommand,
-    canMoveCamera,
-    focusCanvasOnFollowTarget,
-    telemetryMode,
-  ])
+    runningCameraCommandIdRef.current = null
+    cameraRunTokenRef.current += 1
+
+    if (cameraExecutorTimeoutRef.current !== null) {
+      window.clearTimeout(cameraExecutorTimeoutRef.current)
+      cameraExecutorTimeoutRef.current = null
+    }
+
+    if (cameraLingerTimeoutRef.current !== null) {
+      window.clearTimeout(cameraLingerTimeoutRef.current)
+      cameraLingerTimeoutRef.current = null
+    }
+  }, [active])
 
   useEffect(() => {
-    if (!active || !inspectorCommand) {
+    if (!active || !canMoveCamera || !cameraCommand?.id) {
       return
     }
 
-    const target = inspectorCommand.target
+    if (runningCameraCommandIdRef.current !== null) {
+      return
+    }
 
-    window.setTimeout(() => {
-      const focusedNodeIds =
-        telemetryMode === 'symbols'
-          ? target.kind === 'symbol'
-            ? [target.primaryNodeId]
-            : [target.fileNodeId]
-          : [target.fileNodeId]
+    const command = cameraCommandRef.current
 
-      selectFileNode(target.fileNodeId)
-      setInspectorTabToFile()
-      setInspectorOpen(true)
-      setFollowedEditDiffRequestKey(inspectorCommand.scrollToDiffRequestKey)
-      focusCanvasOnFollowTarget({
-        fileNodeId: target.fileNodeId,
-        isEdit: true,
-        mode: telemetryMode,
-        nodeIds: focusedNodeIds,
-      })
-      acknowledgeInspectorCommand({
-        commandId: inspectorCommand.id,
-        pendingPath: inspectorCommand.pendingPath,
+    if (!command) {
+      return
+    }
+
+    const pairedInspectorCommand = getPairedInspectorCommand(
+      command,
+      inspectorCommandRef.current,
+    )
+    const cameraRunToken = cameraRunTokenRef.current + 1
+    cameraRunTokenRef.current = cameraRunToken
+    runningCameraCommandIdRef.current = command.id
+
+    cameraExecutorTimeoutRef.current = window.setTimeout(() => {
+      cameraExecutorTimeoutRef.current = null
+      runInspectorFollowStep(pairedInspectorCommand)
+
+      void Promise.resolve(focusCanvasOnFollowTargetRef.current({
+        fileNodeId: command.target.fileNodeId,
+        isEdit: command.target.intent === 'edit',
+        mode: getTargetTelemetryMode(command.target),
+        nodeIds:
+          command.target.kind === 'symbol'
+            ? [command.target.primaryNodeId]
+            : [command.target.fileNodeId],
+      })).finally(() => {
+        if (
+          !active ||
+          cameraRunTokenRef.current !== cameraRunToken ||
+          runningCameraCommandIdRef.current !== command.id
+        ) {
+          return
+        }
+
+        cameraLingerTimeoutRef.current = window.setTimeout(() => {
+          cameraLingerTimeoutRef.current = null
+
+          if (
+            !active ||
+            cameraRunTokenRef.current !== cameraRunToken ||
+            runningCameraCommandIdRef.current !== command.id
+          ) {
+            return
+          }
+
+          runningCameraCommandIdRef.current = null
+          acknowledgeCameraCommandRef.current({
+            commandId: command.id,
+            intent: command.target.intent,
+          })
+          if (pairedInspectorCommand) {
+            acknowledgeInspectorCommandRef.current({
+              commandId: pairedInspectorCommand.id,
+              pendingPath: pairedInspectorCommand.pendingPath,
+            })
+          }
+        }, FOLLOW_AGENT_TARGET_LINGER_MS)
       })
     }, 0)
+
+    return () => {
+      if (
+        cameraExecutorTimeoutRef.current !== null &&
+        runningCameraCommandIdRef.current === command.id
+      ) {
+        window.clearTimeout(cameraExecutorTimeoutRef.current)
+        cameraExecutorTimeoutRef.current = null
+        runningCameraCommandIdRef.current = null
+        cameraRunTokenRef.current += 1
+      }
+    }
   }, [
-    acknowledgeInspectorCommand,
     active,
-    focusCanvasOnFollowTarget,
-    inspectorCommand,
-    selectFileNode,
-    setInspectorOpen,
-    setInspectorTabToFile,
-    telemetryMode,
+    cameraCommand?.id,
+    canMoveCamera,
+    inspectorCommand?.id,
   ])
 
   useEffect(() => {
@@ -200,4 +297,35 @@ export function useFollowAgentExecutors({
     clearFollowedEditDiffRequestKey: () => setFollowedEditDiffRequestKey(null),
     followedEditDiffRequestKey,
   }
+
+  function runInspectorFollowStep(command: FollowInspectorCommand | null) {
+    if (!command) {
+      return
+    }
+
+    selectFileNodeRef.current(command.target.fileNodeId)
+    setInspectorTabToFileRef.current()
+    setInspectorOpenRef.current(true)
+    setFollowedEditDiffRequestKey(command.scrollToDiffRequestKey)
+  }
+}
+
+function getTargetTelemetryMode(target: FollowCameraCommand['target']): TelemetryMode {
+  return target.kind === 'symbol' ? 'symbols' : 'files'
+}
+
+function getPairedInspectorCommand(
+  cameraCommand: FollowCameraCommand,
+  inspectorCommand: FollowInspectorCommand | null,
+) {
+  if (
+    !inspectorCommand ||
+    inspectorCommand.target.eventKey !== cameraCommand.target.eventKey ||
+    inspectorCommand.target.intent !== cameraCommand.target.intent ||
+    inspectorCommand.target.path !== cameraCommand.target.path
+  ) {
+    return null
+  }
+
+  return inspectorCommand
 }

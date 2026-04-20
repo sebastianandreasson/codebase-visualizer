@@ -276,9 +276,15 @@ export class AgentTelemetryService {
     const events: TelemetryActivityEvent[] = []
 
     for (const request of telemetry.requests) {
-      const requestPaths = collectRequestPaths(request, spansByRequestId.get(String(request.requestId ?? '')) ?? [])
       const totalTokens = getAttributionBudget(request)
       const confidence = getRequestConfidence(request)
+      const source = getTelemetrySourceForRequest(request)
+
+      if (!shouldExposeTelemetryActivity({ confidence, source })) {
+        continue
+      }
+
+      const requestPaths = collectRequestPaths(request, spansByRequestId.get(String(request.requestId ?? '')) ?? [])
 
       if (requestPaths.length === 0) {
         continue
@@ -292,7 +298,7 @@ export class AgentTelemetryService {
           requestCount: 1,
           runId: String(request.runId ?? ''),
           sessionId: String(request.sessionId ?? ''),
-          source: getTelemetrySourceForRequest(request),
+          source,
           timestamp: String(request.timestamp ?? ''),
           toolNames: Array.isArray(request.toolNames)
             ? request.toolNames
@@ -327,14 +333,19 @@ export class AgentTelemetryService {
     }>()
 
     for (const request of telemetry.requests) {
+      const attributionBudget = getAttributionBudget(request)
+      const source = getTelemetrySourceForRequest(request)
+      const confidence = getRequestConfidence(request)
+
+      if (!shouldExposeTelemetryActivity({ confidence, source })) {
+        continue
+      }
+
       const requestPaths = collectRequestPaths(
         request,
         spansByRequestId.get(String(request.requestId ?? '')) ?? [],
       )
-      const attributionBudget = getAttributionBudget(request)
       const perPathBudget = requestPaths.length > 0 ? attributionBudget / requestPaths.length : 0
-      const source = getTelemetrySourceForRequest(request)
-      const confidence = getRequestConfidence(request)
 
       for (const pathValue of requestPaths) {
         const current = byPath.get(pathValue) ?? {
@@ -569,6 +580,13 @@ function getRequestConfidence(request: RequestRecord): TelemetryConfidence {
   }
 
   return 'attributed'
+}
+
+function shouldExposeTelemetryActivity(input: {
+  confidence: TelemetryConfidence
+  source: TelemetrySource
+}) {
+  return !(input.source === 'interactive' && input.confidence === 'fallback')
 }
 
 function mergeConfidence(

@@ -359,6 +359,161 @@
   gap: 0.75rem;
 }
 
+.cbv-agent-event-feed {
+  display: grid;
+  gap: 0.8rem;
+}
+
+.cbv-agent-event-summary {
+  display: grid;
+  gap: 0.45rem;
+  padding: 0.8rem;
+  border: 1px solid var(--app-border);
+  border-radius: var(--cbv-radius-lg);
+  background: var(--app-surface-soft);
+}
+
+.cbv-agent-event-summary p,
+.cbv-agent-event-summary strong,
+.cbv-agent-event-summary span {
+  margin: 0;
+}
+
+.cbv-agent-event-summary strong {
+  color: var(--app-text);
+  font-size: 0.98rem;
+  font-weight: 600;
+}
+
+.cbv-agent-event-summary p {
+  color: var(--app-muted);
+  font-size: 0.76rem;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.cbv-agent-event-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.35rem;
+}
+
+.cbv-agent-event-summary-grid span,
+.cbv-agent-event-meta span,
+.cbv-agent-event-item-header span {
+  min-width: 0;
+  border: 1px solid var(--app-border-soft);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--app-surface) 70%, transparent);
+  color: var(--app-muted);
+  padding: 0.18rem 0.42rem;
+  font-family: var(--cbv-font-mono);
+  font-size: 0.62rem;
+  line-height: 1.2;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cbv-agent-event-list {
+  display: grid;
+  gap: 0.55rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.cbv-agent-event-item {
+  display: grid;
+  gap: 0.34rem;
+  padding: 0.68rem 0.72rem;
+  border: 1px solid var(--app-border-soft);
+  border-left: 3px solid var(--app-border);
+  border-radius: var(--cbv-radius-lg);
+  background: var(--app-surface);
+}
+
+.cbv-agent-event-item.is-follow {
+  border-left-color: var(--app-accent);
+}
+
+.cbv-agent-event-item.is-file-operation {
+  border-left-color: color-mix(in srgb, var(--app-accent) 56%, var(--app-border));
+}
+
+.cbv-agent-event-item.is-telemetry {
+  border-left-color: color-mix(in srgb, var(--app-warning) 68%, var(--app-border));
+}
+
+.cbv-agent-event-item-header {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.42rem;
+}
+
+.cbv-agent-event-item-header time {
+  color: var(--app-text-faint);
+  font-family: var(--cbv-font-mono);
+  font-size: 0.64rem;
+  white-space: nowrap;
+}
+
+.cbv-agent-event-item-header strong {
+  min-width: 0;
+  color: var(--app-text);
+  font-size: 0.78rem;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cbv-agent-event-path,
+.cbv-agent-event-detail {
+  margin: 0;
+  color: var(--app-muted);
+  font-size: 0.72rem;
+  line-height: 1.38;
+  overflow-wrap: anywhere;
+}
+
+.cbv-agent-event-path {
+  color: var(--app-text);
+  font-family: var(--cbv-font-mono);
+}
+
+.cbv-agent-event-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+}
+
+.cbv-agent-event-payload {
+  margin-top: 0.1rem;
+}
+
+.cbv-agent-event-payload summary {
+  cursor: pointer;
+  color: var(--app-text-faint);
+  font-family: var(--cbv-font-mono);
+  font-size: 0.66rem;
+}
+
+.cbv-agent-event-payload pre {
+  max-height: 18rem;
+  margin: 0.35rem 0 0;
+  overflow: auto;
+  border: 1px solid var(--app-code-border);
+  border-radius: var(--cbv-radius-md);
+  background: var(--app-code-bg);
+  color: var(--app-code-text);
+  padding: 0.6rem;
+  font-family: var(--cbv-font-mono);
+  font-size: 0.67rem;
+  line-height: 1.45;
+}
+
 .cbv-graph-card p,
 .cbv-graph-card strong {
   margin: 0;

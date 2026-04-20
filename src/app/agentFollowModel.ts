@@ -11,6 +11,7 @@ import {
 
 export const FOLLOW_AGENT_EDIT_CAMERA_LOCK_MS = 1400
 const FOLLOW_AGENT_EVENT_PRIORITY_WINDOW_MS = 30_000
+const MAX_ACKNOWLEDGED_CAMERA_COMMAND_IDS = 300
 
 export type FollowTargetKind = 'symbol' | 'file'
 export type FollowTargetConfidence =
@@ -82,7 +83,7 @@ export interface FollowCameraCommand {
 export interface FollowInspectorCommand {
   id: string
   pendingPath: string | null
-  scrollToDiffRequestKey: string
+  scrollToDiffRequestKey: string | null
   target: FollowTarget
 }
 
@@ -124,6 +125,8 @@ export interface FollowControllerState {
   refreshPending: boolean
   refreshInFlight: boolean
   refreshRequestedAtMs: number | null
+  acknowledgedCameraCommandIds: string[]
+  acknowledgedInspectorCommandIds: string[]
   lastAcknowledgedCameraCommandId: string | null
   lastAcknowledgedInspectorCommandId: string | null
   lastAcknowledgedRefreshCommandId: string | null
@@ -228,6 +231,8 @@ export function createInitialFollowControllerState(): FollowControllerState {
     enabled: false,
     fileOperations: [],
     knownChangedPaths: [],
+    acknowledgedCameraCommandIds: [],
+    acknowledgedInspectorCommandIds: [],
     lastAcknowledgedCameraCommandId: null,
     lastAcknowledgedInspectorCommandId: null,
     lastAcknowledgedRefreshCommandId: null,
@@ -268,6 +273,8 @@ export function followControllerReducer(
           enabled: false,
           fileOperations: [],
           knownChangedPaths: [],
+          acknowledgedCameraCommandIds: [],
+          acknowledgedInspectorCommandIds: [],
           lastAcknowledgedCameraCommandId: null,
           lastAcknowledgedInspectorCommandId: null,
           lastAcknowledgedRefreshCommandId: null,
@@ -283,6 +290,12 @@ export function followControllerReducer(
 
       return deriveFollowControllerState({
         ...state,
+        acknowledgedCameraCommandIds: state.enabled
+          ? state.acknowledgedCameraCommandIds
+          : [],
+        acknowledgedInspectorCommandIds: state.enabled
+          ? state.acknowledgedInspectorCommandIds
+          : [],
         enabled: true,
         nowMs: action.nowMs,
         latestNormalizedEvent: createLifecycleEvent('follow_enabled', action.nowMs),
@@ -399,6 +412,10 @@ export function followControllerReducer(
       }
 
       if (action.commandType === 'camera') {
+        nextState.acknowledgedCameraCommandIds = appendAcknowledgedCommandId(
+          nextState.acknowledgedCameraCommandIds,
+          action.commandId,
+        )
         nextState.lastAcknowledgedCameraCommandId = action.commandId
 
         if (action.intent === 'edit') {
@@ -407,6 +424,10 @@ export function followControllerReducer(
       }
 
       if (action.commandType === 'inspector') {
+        nextState.acknowledgedInspectorCommandIds = appendAcknowledgedCommandId(
+          nextState.acknowledgedInspectorCommandIds,
+          action.commandId,
+        )
         nextState.lastAcknowledgedInspectorCommandId = action.commandId
 
         if (action.pendingPath) {
@@ -462,11 +483,13 @@ export function computePendingEditedPaths(input: {
 
   const telemetryIndexByPath = new Map<string, number>()
 
-  input.telemetryActivityEvents.forEach((event, index) => {
-    if (!telemetryIndexByPath.has(event.path)) {
-      telemetryIndexByPath.set(event.path, index)
-    }
-  })
+  input.telemetryActivityEvents
+    .filter(shouldUseTelemetryEventForFollow)
+    .forEach((event, index) => {
+      if (!telemetryIndexByPath.has(event.path)) {
+        telemetryIndexByPath.set(event.path, index)
+      }
+    })
 
   newChangedPaths.sort((leftPath, rightPath) => {
     const leftIndex = telemetryIndexByPath.get(leftPath) ?? Number.MAX_SAFE_INTEGER
@@ -558,9 +581,10 @@ function deriveFollowControllerState(
 
   const indexes = buildFollowIndexes(state.snapshot)
   const normalizedTelemetryEvents = state.telemetryEnabled
-    ? state.telemetryActivityEvents.map((event) =>
-        createTelemetryFollowEvent(event, state.nowMs),
-      ).sort(compareFollowEventsDescending)
+    ? state.telemetryActivityEvents
+        .filter(shouldUseTelemetryEventForFollow)
+        .map((event) => createTelemetryFollowEvent(event, state.nowMs))
+        .sort(compareFollowEventsDescending)
     : []
   const normalizedFileOperationEvents = state.fileOperations
     .map((operation) => createFileOperationFollowEvent(operation, state.nowMs))
@@ -584,40 +608,69 @@ function deriveFollowControllerState(
   const latestResolvedEdit = resolveLatestEditTarget({
     indexes,
     liveChangedFiles: state.liveChangedFiles,
-    mode: state.telemetryMode,
+    mode: getFollowTargetMode(state.viewMode),
     normalizedEditEvents,
     pendingDirtyPaths: state.pendingDirtyPaths,
     snapshot: state.snapshot,
     viewMode: state.viewMode,
     visibleNodeIds: state.visibleNodeIds,
   })
-  const latestResolvedActivity = resolveLatestActivityTarget({
+  const resolvedActivityQueue = resolveActivityTargets({
     indexes,
-    mode: state.telemetryMode,
-    normalizedTelemetryEvents: normalizedActivityEvents,
+    mode: getFollowTargetMode(state.viewMode),
+    normalizedActivityEvents: [...normalizedActivityEvents].sort(compareFollowEventsForPlayback),
     snapshot: state.snapshot,
     viewMode: state.viewMode,
     visibleNodeIds: state.visibleNodeIds,
+  })
+  const latestResolvedActivity = resolvedActivityQueue[0] ?? null
+  const acknowledgedCameraCommandIds = pruneAcknowledgedCameraCommandIds({
+    acknowledgedCommandIds: state.acknowledgedCameraCommandIds,
+    candidateTargets: [
+      ...(latestResolvedEdit ? [latestResolvedEdit.target] : []),
+      ...resolvedActivityQueue.map((resolvedTarget) => resolvedTarget.target),
+    ],
+    currentCommand: state.currentCameraCommand,
+  })
+  const inspectorCandidateTargets = [
+    ...(latestResolvedEdit ? [latestResolvedEdit.target] : []),
+    ...resolvedActivityQueue.map((resolvedTarget) => resolvedTarget.target),
+  ]
+  const acknowledgedInspectorCommandIds = pruneAcknowledgedInspectorCommandIds({
+    acknowledgedCommandIds: state.acknowledgedInspectorCommandIds,
+    candidateTargets: inspectorCandidateTargets,
+    currentCommand: state.currentInspectorCommand,
   })
   const latestNormalizedEvent =
     latestResolvedEdit?.sourceEvent ??
     latestResolvedActivity?.sourceEvent ??
     state.latestNormalizedEvent
-  const currentTarget = latestResolvedEdit?.target ?? latestResolvedActivity?.target ?? null
-  const currentMode: FollowIntent | 'idle' = latestResolvedEdit
-    ? 'edit'
-    : latestResolvedActivity
-      ? 'activity'
-      : 'idle'
   const currentCameraCommand = buildCameraCommand({
+    acknowledgedCommandIds: acknowledgedCameraCommandIds,
     cameraLockUntilMs: state.cameraLockUntilMs,
-    editTarget: latestResolvedEdit?.target ?? null,
+    currentCommand: state.currentCameraCommand,
+    editTargets: latestResolvedEdit ? [latestResolvedEdit.target] : [],
     lastAcknowledgedCommandId: state.lastAcknowledgedCameraCommandId,
     nowMs: state.nowMs,
-    activityTarget: latestResolvedActivity?.target ?? null,
+    activityTargets: resolvedActivityQueue.map((resolvedTarget) => resolvedTarget.target),
   })
+  const currentTarget = currentCameraCommand?.target ??
+    latestResolvedEdit?.target ??
+    latestResolvedActivity?.target ??
+    null
+  const currentMode: FollowIntent | 'idle' = currentTarget?.intent ?? 'idle'
+  const inspectorTarget = currentCameraCommand?.target ??
+    latestResolvedEdit?.target ??
+    latestResolvedActivity?.target ??
+    null
   const currentInspectorCommand = buildInspectorCommand({
-    editTarget: latestResolvedEdit ?? null,
+    acknowledgedCommandIds: acknowledgedInspectorCommandIds,
+    pendingPath:
+      inspectorTarget?.intent === 'edit' &&
+      inspectorTarget.eventKey === latestResolvedEdit?.target.eventKey
+        ? latestResolvedEdit.pendingPath
+        : null,
+    target: inspectorTarget,
     lastAcknowledgedCommandId: state.lastAcknowledgedInspectorCommandId,
   })
   const currentRefreshCommand = buildRefreshCommand({
@@ -630,6 +683,8 @@ function deriveFollowControllerState(
 
   return {
     ...state,
+    acknowledgedCameraCommandIds,
+    acknowledgedInspectorCommandIds,
     currentCameraCommand,
     currentInspectorCommand,
     currentRefreshCommand,
@@ -638,7 +693,15 @@ function deriveFollowControllerState(
       currentMode,
       currentTarget,
       latestEvent: latestNormalizedEvent,
-      queueLength: state.pendingDirtyPaths.length,
+      queueLength: state.pendingDirtyPaths.length +
+        countQueuedCameraTargets({
+          acknowledgedCommandIds: acknowledgedCameraCommandIds,
+          currentCommand: currentCameraCommand,
+          targets: [
+            ...(latestResolvedEdit ? [latestResolvedEdit.target] : []),
+            ...resolvedActivityQueue.map((resolvedTarget) => resolvedTarget.target),
+          ],
+        }),
       refreshInFlight: state.refreshInFlight,
       refreshPending: state.refreshPending,
       nowMs: state.nowMs,
@@ -649,17 +712,20 @@ function deriveFollowControllerState(
   }
 }
 
-function resolveLatestActivityTarget(input: {
+function resolveActivityTargets(input: {
   indexes: FollowIndexes | null
   mode: TelemetryMode
-  normalizedTelemetryEvents: FollowFileEvent[]
+  normalizedActivityEvents: FollowFileEvent[]
   snapshot: ProjectSnapshot | null
   viewMode: VisualizerViewMode
   visibleNodeIds: string[]
 }) {
-  for (const event of input.normalizedTelemetryEvents) {
+  const result: ResolvedFollowTarget[] = []
+  const seenCommandIds = new Set<string>()
+
+  for (const event of input.normalizedActivityEvents) {
     const resolvedTarget = resolveFollowTargetFromEvent({
-      allowInvisibleFileFallback: false,
+      allowInvisibleFileFallback: input.viewMode === 'filesystem',
       indexes: input.indexes,
       intent: 'activity',
       mode: input.mode,
@@ -670,11 +736,16 @@ function resolveLatestActivityTarget(input: {
     })
 
     if (resolvedTarget) {
-      return resolvedTarget
+      const commandId = createCameraCommandId(resolvedTarget.target)
+
+      if (!seenCommandIds.has(commandId)) {
+        seenCommandIds.add(commandId)
+        result.push(resolvedTarget)
+      }
     }
   }
 
-  return null
+  return result
 }
 
 function resolveLatestEditTarget(input: {
@@ -805,7 +876,7 @@ function resolveFollowTargetFromEvent(input: {
         path: input.sourceEvent.path,
         primaryNodeId: visibleSymbolIds[0],
         requiresSnapshotRefresh: input.intent === 'edit' && input.viewMode === 'symbols',
-        shouldOpenInspector: input.intent === 'edit',
+        shouldOpenInspector: true,
         symbolNodeIds: visibleSymbolIds,
         timestamp: input.sourceEvent.timestamp,
         toolNames: input.sourceEvent.toolNames,
@@ -834,7 +905,7 @@ function resolveFollowTargetFromEvent(input: {
       path: input.sourceEvent.path,
       primaryNodeId: fileNodeId,
       requiresSnapshotRefresh: input.intent === 'edit' && input.viewMode === 'symbols',
-      shouldOpenInspector: input.intent === 'edit',
+      shouldOpenInspector: true,
       symbolNodeIds: [],
       timestamp: input.sourceEvent.timestamp,
       toolNames: input.sourceEvent.toolNames,
@@ -842,54 +913,139 @@ function resolveFollowTargetFromEvent(input: {
   }
 }
 
+function getFollowTargetMode(viewMode: VisualizerViewMode): TelemetryMode {
+  return viewMode === 'symbols' ? 'symbols' : 'files'
+}
+
 function buildCameraCommand(input: {
-  activityTarget: FollowTarget | null
+  acknowledgedCommandIds: string[]
+  activityTargets: FollowTarget[]
   cameraLockUntilMs: number
-  editTarget: FollowTarget | null
+  currentCommand: FollowCameraCommand | null
+  editTargets: FollowTarget[]
   lastAcknowledgedCommandId: string | null
   nowMs: number
 }) {
-  const target = input.editTarget
-    ? input.editTarget
-    : input.cameraLockUntilMs <= input.nowMs
-      ? input.activityTarget
-      : null
+  const acknowledgedCommandIds = new Set(input.acknowledgedCommandIds)
+
+  const candidateTargets = input.editTargets.length > 0
+    ? input.editTargets
+    : input.currentCommand?.target.intent === 'activity' &&
+        !acknowledgedCommandIds.has(input.currentCommand.id) &&
+        input.currentCommand.id !== input.lastAcknowledgedCommandId
+      ? [input.currentCommand.target]
+      : input.cameraLockUntilMs <= input.nowMs
+        ? input.activityTargets
+        : []
+
+  const target = candidateTargets.find((candidateTarget) => {
+    const commandId = createCameraCommandId(candidateTarget)
+    return commandId !== input.lastAcknowledgedCommandId && !acknowledgedCommandIds.has(commandId)
+  }) ?? null
 
   if (!target) {
     return null
   }
 
-  const commandId = `camera:${target.intent}:${target.eventKey}:${target.primaryNodeId}:${target.confidence}`
-
-  if (commandId === input.lastAcknowledgedCommandId) {
-    return null
-  }
-
   return {
-    id: commandId,
+    id: createCameraCommandId(target),
     target,
   } satisfies FollowCameraCommand
 }
 
+function createCameraCommandId(target: FollowTarget) {
+  return `camera:${target.intent}:${target.eventKey}:${target.primaryNodeId}:${target.confidence}`
+}
+
+function appendAcknowledgedCommandId(
+  acknowledgedCommandIds: string[],
+  commandId: string,
+) {
+  return [
+    ...acknowledgedCommandIds.filter((acknowledgedCommandId) => acknowledgedCommandId !== commandId),
+    commandId,
+  ].slice(-MAX_ACKNOWLEDGED_CAMERA_COMMAND_IDS)
+}
+
+function createInspectorCommandId(target: FollowTarget) {
+  return `inspector:${target.intent}:${target.path}:${target.eventKey}`
+}
+
+function pruneAcknowledgedInspectorCommandIds(input: {
+  acknowledgedCommandIds: string[]
+  candidateTargets: FollowTarget[]
+  currentCommand: FollowInspectorCommand | null
+}) {
+  const candidateCommandIds = new Set(
+    input.candidateTargets.map(createInspectorCommandId),
+  )
+
+  if (input.currentCommand) {
+    candidateCommandIds.add(input.currentCommand.id)
+  }
+
+  return input.acknowledgedCommandIds
+    .filter((commandId) => candidateCommandIds.has(commandId))
+    .slice(-MAX_ACKNOWLEDGED_CAMERA_COMMAND_IDS)
+}
+
+function pruneAcknowledgedCameraCommandIds(input: {
+  acknowledgedCommandIds: string[]
+  candidateTargets: FollowTarget[]
+  currentCommand: FollowCameraCommand | null
+}) {
+  const candidateCommandIds = new Set(
+    input.candidateTargets.map(createCameraCommandId),
+  )
+
+  if (input.currentCommand) {
+    candidateCommandIds.add(input.currentCommand.id)
+  }
+
+  return input.acknowledgedCommandIds
+    .filter((commandId) => candidateCommandIds.has(commandId))
+    .slice(-MAX_ACKNOWLEDGED_CAMERA_COMMAND_IDS)
+}
+
+function countQueuedCameraTargets(input: {
+  acknowledgedCommandIds: string[]
+  currentCommand: FollowCameraCommand | null
+  targets: FollowTarget[]
+}) {
+  const acknowledgedCommandIds = new Set(input.acknowledgedCommandIds)
+  const currentCommandId = input.currentCommand?.id ?? null
+
+  return input.targets.filter((target) => {
+    const commandId = createCameraCommandId(target)
+    return commandId !== currentCommandId && !acknowledgedCommandIds.has(commandId)
+  }).length
+}
+
 function buildInspectorCommand(input: {
-  editTarget: ResolvedFollowTarget | null
+  acknowledgedCommandIds: string[]
+  pendingPath: string | null
+  target: FollowTarget | null
   lastAcknowledgedCommandId: string | null
 }) {
-  if (!input.editTarget?.target.shouldOpenInspector) {
+  if (!input.target?.shouldOpenInspector) {
     return null
   }
 
-  const commandId = `inspector:${input.editTarget.target.path}:${input.editTarget.target.eventKey}`
+  const commandId = createInspectorCommandId(input.target)
 
-  if (commandId === input.lastAcknowledgedCommandId) {
+  if (
+    commandId === input.lastAcknowledgedCommandId ||
+    input.acknowledgedCommandIds.includes(commandId)
+  ) {
     return null
   }
 
   return {
     id: commandId,
-    pendingPath: input.editTarget.pendingPath,
-    scrollToDiffRequestKey: `edit:${input.editTarget.target.eventKey}`,
-    target: input.editTarget.target,
+    pendingPath: input.target.intent === 'edit' ? input.pendingPath : null,
+    scrollToDiffRequestKey:
+      input.target.intent === 'edit' ? `edit:${input.target.eventKey}` : null,
+    target: input.target,
   } satisfies FollowInspectorCommand
 }
 
@@ -1036,6 +1192,10 @@ function createTelemetryFollowEvent(
   }
 }
 
+function shouldUseTelemetryEventForFollow(event: TelemetryActivityEvent) {
+  return event.confidence !== 'fallback'
+}
+
 function createFileOperationFollowEvent(
   operation: AgentFileOperation,
   fallbackNowMs: number,
@@ -1164,6 +1324,30 @@ function compareFollowEventsDescending(left: FollowFileEvent, right: FollowFileE
   }
 
   return right.eventKey.localeCompare(left.eventKey)
+}
+
+function compareFollowEventsForPlayback(left: FollowFileEvent, right: FollowFileEvent) {
+  if (left.timestampMs !== right.timestampMs) {
+    const timestampDeltaMs = Math.abs(right.timestampMs - left.timestampMs)
+    if (
+      timestampDeltaMs <= FOLLOW_AGENT_EVENT_PRIORITY_WINDOW_MS &&
+      left.sourcePriority !== right.sourcePriority
+    ) {
+      return right.sourcePriority - left.sourcePriority
+    }
+
+    return left.timestampMs - right.timestampMs
+  }
+
+  if (left.sourcePriority !== right.sourcePriority) {
+    return right.sourcePriority - left.sourcePriority
+  }
+
+  if (left.sourceSequence !== right.sourceSequence) {
+    return left.sourceSequence - right.sourceSequence
+  }
+
+  return left.eventKey.localeCompare(right.eventKey)
 }
 
 function parseTimestampMs(timestamp: string, fallbackNowMs: number) {
