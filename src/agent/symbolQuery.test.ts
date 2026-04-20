@@ -257,6 +257,21 @@ describe('symbol query session', () => {
       '',
     ].join('\n'))
   })
+
+  it('requires an explicit reason for file window fallbacks', async () => {
+    const session = createTestSession()
+    const result = await session.execute({
+      args: {
+        path: 'src/agent.ts',
+      },
+      operation: 'readFileWindow',
+    })
+
+    expect(result).toMatchObject({
+      ok: false,
+      warning: 'readFileWindow requires a reason explaining why symbol slices are insufficient.',
+    })
+  })
 })
 
 function createTestSession() {

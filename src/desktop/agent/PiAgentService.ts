@@ -51,6 +51,7 @@ import type {
   AgentSettingsState,
   AgentSourceInfo,
   AgentTimelineItem,
+  AgentToolProfile,
   AgentToolControlInfo,
   AgentToolInvocation,
 } from '../../schema/agent'
@@ -116,6 +117,7 @@ interface BaseAgentSessionRecord {
   timelineRevision: number
   turnToolCallIds: Set<string>
   toolInvocationById: Map<string, AgentToolInvocation>
+  toolProfile: AgentToolProfile
   promptSequence: number
   unsubscribe: () => void
   workspaceRootDir: string
@@ -418,6 +420,7 @@ export class PiAgentService {
       timelineRevision: 0,
       turnToolCallIds: new Set(),
       toolInvocationById: new Map(),
+      toolProfile: input.settings.toolProfile,
       unsubscribe,
       workspaceRootDir: input.workspaceRootDir,
     }
@@ -488,6 +491,9 @@ export class PiAgentService {
         throw new Error(`No pi SDK model is available for provider "${input.provider}".`)
       }
 
+      const toolProfile = input.settings.toolProfile
+      const toolConfig = createSdkSessionToolConfig(cwd, toolProfile)
+
       return {
         ...(await createAgentSessionFromServices({
           model,
@@ -495,13 +501,8 @@ export class PiAgentService {
           sessionManager,
           sessionStartEvent,
           thinkingLevel: 'medium',
-          customTools: createSymbolQueryToolDefinitions(cwd),
-          tools: [
-            ...createCodingTools(cwd),
-            createGrepTool(cwd),
-            createFindTool(cwd),
-            createLsTool(cwd),
-          ],
+          customTools: toolConfig.customTools,
+          tools: toolConfig.tools,
         })),
         diagnostics: services.diagnostics,
         services,
@@ -551,6 +552,7 @@ export class PiAgentService {
       timelineRevision: 0,
       turnToolCallIds: new Set(),
       toolInvocationById: new Map(),
+      toolProfile: input.settings.toolProfile,
       unsubscribe: () => undefined,
       workspaceRootDir: input.workspaceRootDir,
     }
@@ -746,6 +748,7 @@ export class PiAgentService {
         scope: promptRequest.metadata,
         sessionId: record.summary.id,
         startedAt,
+        toolProfile: record.toolProfile,
         toolInvocations: collectNewToolInvocations(
           record.toolInvocationById,
           existingToolCallIds,
@@ -871,6 +874,7 @@ export class PiAgentService {
         rootDir: workspaceRootDir,
         settings,
         systemPrompt: input.systemPrompt ?? buildWorkspaceSystemPrompt(workspaceRootDir),
+        toolProfile: settings.toolProfile,
       })
 
       await this.telemetryService?.recordInteractivePrompt({
@@ -884,6 +888,7 @@ export class PiAgentService {
         scope: input.telemetry,
         sessionId: `one-off:${randomUUID()}`,
         startedAt: result.startedAt,
+        toolProfile: settings.toolProfile,
         toolInvocations: result.toolInvocations,
       }).catch((error) => {
         this.logger.warn(
@@ -965,6 +970,7 @@ export class PiAgentService {
         scope: input.telemetry,
         sessionId,
         startedAt,
+        toolProfile: settings.toolProfile,
         toolInvocations: [...toolInvocationById.values()],
       }).catch((error) => {
         this.logger.warn(
@@ -1594,6 +1600,7 @@ export class PiAgentService {
     rootDir: string
     settings: AgentSettingsState
     systemPrompt?: string
+    toolProfile?: AgentToolProfile
     tools?: AgentTool[]
   }) {
     const startedAt = new Date().toISOString()
@@ -1649,15 +1656,22 @@ export class PiAgentService {
         throw new Error(`No pi SDK model is available for provider "${input.provider}".`)
       }
 
+      const toolConfig = input.customTools || input.tools
+        ? {
+            customTools: input.customTools,
+            tools: (input.tools ?? []) as never,
+          }
+        : createSdkSessionToolConfig(cwd, input.toolProfile ?? input.settings.toolProfile)
+
       return {
         ...(await createAgentSessionFromServices({
           model: resolvedModel,
           services,
           sessionManager,
           sessionStartEvent,
-          customTools: input.customTools,
+          customTools: toolConfig.customTools,
           thinkingLevel: 'medium',
-          tools: (input.tools ?? []) as never,
+          tools: toolConfig.tools,
         })),
         diagnostics: services.diagnostics,
         services,
@@ -3236,6 +3250,22 @@ function resolveSdkModel(
   )
 }
 
+function createSdkSessionToolConfig(cwd: string, toolProfile: AgentToolProfile) {
+  return {
+    customTools: createSymbolQueryToolDefinitions(cwd),
+    tools: toolProfile === 'symbol_first' ? [] : createStandardSdkTools(cwd),
+  }
+}
+
+function createStandardSdkTools(cwd: string) {
+  return [
+    ...createCodingTools(cwd),
+    createGrepTool(cwd),
+    createFindTool(cwd),
+    createLsTool(cwd),
+  ]
+}
+
 function resolveLegacyProviderModel(provider: string, preferredModelId?: string) {
   try {
     return resolveModel(provider as KnownProvider, preferredModelId)
@@ -3275,8 +3305,8 @@ function buildWorkspaceSystemPrompt(workspaceRootDir: string) {
     'You are embedded inside Semanticode, a desktop code exploration and editing environment.',
     `The active workspace root is: ${workspaceRootDir}`,
     'Prefer reasoning about the active repository and use tools rather than making assumptions about the workspace state.',
-    'When symbol query tools are available, use getSymbolWorkspaceSummary, findSymbols, getSymbolNeighborhood, and readSymbolSlice before broad file reads.',
-    'Use readFileWindow as a bounded fallback for imports, module headers, configs, tests, or other code that cannot be represented as one symbol.',
+    'When symbol query tools are available, use getSymbolWorkspaceSummary, findSymbols, getSymbolOutline, getSymbolNeighborhood, and readSymbolSlice before broad file reads.',
+    'Use readFileWindow as a bounded fallback for imports, module headers, configs, tests, or other code that cannot be represented as one symbol, and always include a reason.',
   ].join('\n')
 }
 

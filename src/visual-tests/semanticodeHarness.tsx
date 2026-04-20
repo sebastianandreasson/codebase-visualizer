@@ -755,6 +755,7 @@ const agentSettings: AgentSettingsState = {
   modelId: 'gpt-5.4',
   provider: 'openai',
   storageKind: 'plaintext',
+  toolProfile: 'symbol_first',
 }
 
 const workspaceHistory: WorkspaceHistoryPayload = {

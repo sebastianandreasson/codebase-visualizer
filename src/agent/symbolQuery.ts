@@ -431,6 +431,15 @@ export class SymbolQuerySession {
   }
 
   private readFileWindow(snapshot: ProjectSnapshot, args: Record<string, unknown>) {
+    const reason = typeof args.reason === 'string' ? args.reason.trim() : ''
+
+    if (!reason) {
+      return {
+        ok: false,
+        warning: 'readFileWindow requires a reason explaining why symbol slices are insufficient.',
+      }
+    }
+
     const file = resolveFile(snapshot, args, this.input.rootDir)
 
     if (!file) {
@@ -473,7 +482,7 @@ export class SymbolQuerySession {
         end: { column: 1, line: endLine },
         start: { column: 1, line: startLine },
       },
-      reason: typeof args.reason === 'string' ? args.reason : undefined,
+      reason,
       text: truncatedText,
       totalLines: lines.length,
       truncated,

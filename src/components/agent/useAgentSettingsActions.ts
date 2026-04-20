@@ -7,6 +7,7 @@ import type {
   AgentSessionSummary,
   AgentSettingsState,
   AgentTimelineItem,
+  AgentToolProfile,
 } from '../../schema/agent'
 import type { useAgentSettingsDraft } from '../agentPanel/useAgentSettingsDraft'
 
@@ -33,6 +34,7 @@ export function useAgentSettingsActions({
   setTimeline,
   settings,
   settingsDraftDirty,
+  toolProfileValue,
 }: {
   agentClient: DesktopAgentClient
   apiKeyValue: string
@@ -52,6 +54,7 @@ export function useAgentSettingsActions({
   setTimeline: Dispatch<SetStateAction<AgentTimelineItem[]>>
   settings: AgentSettingsState | null
   settingsDraftDirty: boolean
+  toolProfileValue: AgentToolProfile
 }) {
   async function persistSettingsDraftIfNeeded() {
     if (!settingsDraftDirty) {
@@ -69,6 +72,7 @@ export function useAgentSettingsActions({
         authMode: authModeValue,
         provider: providerValue,
         modelId: modelValue,
+        toolProfile: toolProfileValue,
         apiKey: authModeValue === 'api_key' ? apiKeyValue.trim() || undefined : undefined,
         openAiOAuthClientId:
           settings?.canEditOpenAiOAuthConfig ? openAiOAuthClientIdValue : undefined,
@@ -98,6 +102,7 @@ export function useAgentSettingsActions({
           authMode: authModeValue,
           provider: providerValue,
           modelId: modelValue,
+          toolProfile: toolProfileValue,
           apiKey: apiKeyValue.trim() || undefined,
           openAiOAuthClientId:
             settings?.canEditOpenAiOAuthConfig ? openAiOAuthClientIdValue : undefined,
@@ -126,6 +131,7 @@ export function useAgentSettingsActions({
           authMode: authModeValue,
           provider: providerValue,
           modelId: modelValue,
+          toolProfile: toolProfileValue,
           clearApiKey: true,
         })
 
@@ -159,6 +165,7 @@ export function useAgentSettingsActions({
           authMode: 'brokered_oauth',
           provider: effectiveProvider,
           modelId: effectiveModelId,
+          toolProfile: toolProfileValue,
           openAiOAuthClientId:
             settings?.canEditOpenAiOAuthConfig ? openAiOAuthClientIdValue : undefined,
           openAiOAuthClientSecret:
@@ -242,6 +249,7 @@ export function useAgentSettingsActions({
           authMode: authModeValue,
           provider: providerValue,
           modelId: modelValue,
+          toolProfile: toolProfileValue,
           clearOpenAiOAuthClientId: true,
           clearOpenAiOAuthClientSecret: true,
         })

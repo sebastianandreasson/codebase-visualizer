@@ -26,6 +26,7 @@ import {
   type TelemetrySource,
   type TelemetryWindow,
 } from '../types'
+import type { AgentToolProfile } from '../schema/agent'
 
 interface InteractiveTelemetryInput {
   kind: string
@@ -46,6 +47,7 @@ interface InteractiveTelemetryInput {
   sessionId: string
   startedAt: string
   finishedAt: string
+  toolProfile?: AgentToolProfile
   toolInvocations: {
     args: unknown
     toolCallId: string
@@ -67,6 +69,7 @@ interface RequestRecord {
   [key: string]: unknown
   cacheReadTokens?: number
   cacheWriteTokens?: number
+  fileFallbackToolCallCount?: number
   files?: string[]
   inputTokens?: number
   iteration?: number
@@ -83,6 +86,8 @@ interface RequestRecord {
   task?: string
   timestamp?: string
   toolNames?: string[]
+  toolProfile?: AgentToolProfile
+  symbolToolCallCount?: number
   totalTokens?: number
   usageSource?: string
 }
@@ -178,6 +183,7 @@ export class AgentTelemetryService {
       sessionId: input.sessionId,
     })
     const spanSummary = summarizeRequestSpans(spanRecords)
+    const toolProfileSummary = summarizeInteractiveToolProfile(input.toolInvocations)
 
     await appendRequestTelemetryArtifacts(paths, {
       request: {
@@ -208,6 +214,9 @@ export class AgentTelemetryService {
         textBytes: spanSummary.textBytes,
         textChars: spanSummary.textChars,
         timestamp: input.finishedAt,
+        fileFallbackToolCallCount: toolProfileSummary.fileFallbackToolCallCount,
+        symbolToolCallCount: toolProfileSummary.symbolToolCallCount,
+        toolProfile: input.toolProfile,
         toolNames: spanSummary.toolNames,
         totalTokens: 0,
         usageSource: 'unavailable',
@@ -539,6 +548,45 @@ function buildInteractiveSpanRecords(input: {
   })
 
   return spans
+}
+
+const SYMBOL_QUERY_TOOL_NAMES = new Set([
+  'findSymbols',
+  'getSymbolNeighborhood',
+  'getSymbolOutline',
+  'getSymbolWorkspaceSummary',
+  'readSymbolSlice',
+])
+
+const FILE_FALLBACK_TOOL_NAMES = new Set([
+  'bash',
+  'find',
+  'grep',
+  'ls',
+  'read',
+  'readFileWindow',
+])
+
+function summarizeInteractiveToolProfile(
+  toolInvocations: InteractiveTelemetryInput['toolInvocations'],
+) {
+  let fileFallbackToolCallCount = 0
+  let symbolToolCallCount = 0
+
+  for (const invocation of toolInvocations) {
+    if (SYMBOL_QUERY_TOOL_NAMES.has(invocation.toolName)) {
+      symbolToolCallCount += 1
+    }
+
+    if (FILE_FALLBACK_TOOL_NAMES.has(invocation.toolName)) {
+      fileFallbackToolCallCount += 1
+    }
+  }
+
+  return {
+    fileFallbackToolCallCount,
+    symbolToolCallCount,
+  }
 }
 
 function collectRequestPaths(

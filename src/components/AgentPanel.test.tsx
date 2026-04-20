@@ -934,6 +934,7 @@ function buildSettings(input: {
     openAiOAuthClientId: '',
     provider: 'openai-codex',
     storageKind: 'plaintext',
+    toolProfile: 'symbol_first',
   }
 }
 

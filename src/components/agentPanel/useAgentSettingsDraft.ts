@@ -1,6 +1,6 @@
 import { useCallback, useState } from 'react'
 
-import type { AgentAuthMode, AgentSettingsState } from '../../schema/agent'
+import type { AgentAuthMode, AgentSettingsState, AgentToolProfile } from '../../schema/agent'
 
 export interface AgentSettingsDraft {
   apiKey: string
@@ -11,6 +11,7 @@ export interface AgentSettingsDraft {
   openAiOAuthClientId: string
   openAiOAuthClientSecret: string
   provider: string
+  toolProfile: AgentToolProfile
 }
 
 export type AgentSettingsDraftPatch = Partial<Pick<
@@ -22,6 +23,7 @@ export type AgentSettingsDraftPatch = Partial<Pick<
   | 'openAiOAuthClientId'
   | 'openAiOAuthClientSecret'
   | 'provider'
+  | 'toolProfile'
 >>
 
 export interface AgentSettingsDraftUpdateOptions {
@@ -37,6 +39,7 @@ const INITIAL_AGENT_SETTINGS_DRAFT: AgentSettingsDraft = {
   openAiOAuthClientId: '',
   openAiOAuthClientSecret: '',
   provider: '',
+  toolProfile: 'symbol_first',
 }
 
 export function useAgentSettingsDraft() {
@@ -83,5 +86,6 @@ function createAgentSettingsDraftFromSettings(
     modelId: settings.modelId,
     openAiOAuthClientId: settings.openAiOAuthClientId ?? '',
     provider: settings.provider,
+    toolProfile: settings.toolProfile,
   }
 }

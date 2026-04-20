@@ -1,6 +1,7 @@
 import type {
   AgentAuthMode,
   AgentSettingsState,
+  AgentToolProfile,
 } from '../../schema/agent'
 import type { useAgentSettingsDraft } from '../agentPanel/useAgentSettingsDraft'
 
@@ -26,6 +27,7 @@ export function AgentSettingsPanel({
   providerValue,
   settings,
   settingsPending,
+  toolProfileValue,
   updateSettingsDraft,
 }: {
   apiKeyValue: string
@@ -47,6 +49,7 @@ export function AgentSettingsPanel({
   providerValue: string
   settings: AgentSettingsState | null
   settingsPending: boolean
+  toolProfileValue: AgentToolProfile
   updateSettingsDraft: UpdateSettingsDraft
 }) {
   return (
@@ -112,6 +115,23 @@ export function AgentSettingsPanel({
                 {model.id}
               </option>
             ))}
+          </select>
+        </label>
+
+        <label>
+          <span>Tool profile</span>
+          <select
+            disabled={settingsPending || !settings}
+            onChange={(event) => {
+              updateSettingsDraft(
+                { toolProfile: event.target.value as AgentToolProfile },
+                { dirty: true },
+              )
+            }}
+            value={toolProfileValue}
+          >
+            <option value="symbol_first">Symbol-first</option>
+            <option value="standard">Standard</option>
           </select>
         </label>
 

@@ -137,7 +137,7 @@ export function buildWorkspaceScopedPrompt(
   return [
     ...workspaceContextLines,
     ...purposeSummaryLines,
-    'Use this preprocessed workspace context first. When symbol query tools are available, prefer getSymbolWorkspaceSummary, findSymbols, getSymbolNeighborhood, and readSymbolSlice before broad file reads. Use readFileWindow only for imports, module headers, configs, or other code that cannot be represented as one symbol.',
+    'Use this preprocessed workspace context first. When symbol query tools are available, prefer getSymbolWorkspaceSummary, findSymbols, getSymbolOutline, getSymbolNeighborhood, and readSymbolSlice before broad file reads. Use readFileWindow only for imports, module headers, configs, or other code that cannot be represented as one symbol, and include a reason.',
     '',
     scopedPrompt,
   ].join('\n')

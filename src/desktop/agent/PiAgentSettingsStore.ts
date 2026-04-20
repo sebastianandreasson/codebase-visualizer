@@ -16,6 +16,7 @@ import type {
   AgentBrokerSessionSummary,
   AgentSettingsInput,
   AgentSettingsState,
+  AgentToolProfile,
 } from '../../schema/agent'
 
 const DEFAULT_AUTH_MODE: AgentAuthMode = 'brokered_oauth'
@@ -23,6 +24,7 @@ const DEFAULT_PROVIDER = 'openai'
 export const CODEX_PROVIDER = 'openai-codex'
 const DEFAULT_MODEL_ID = 'gpt-4.1-mini'
 const DEFAULT_CODEX_MODEL_ID = 'gpt-5.4'
+const DEFAULT_TOOL_PROFILE: AgentToolProfile = 'symbol_first'
 const SETTINGS_FILENAME = 'agent-settings.json'
 const APP_SERVER_URL_ENV_NAME = 'SEMANTICODE_PI_APP_SERVER_URL'
 export const CODEX_OPENAI_MODELS = [
@@ -53,6 +55,7 @@ interface PersistedSettings {
   brokerRefreshToken?: PersistedSecret
   brokerTokenExpiresAt?: string
   modelId?: string
+  toolProfile?: AgentToolProfile
   appServerUrl?: string
   openAiOAuthClientId?: string
   openAiOAuthClientSecret?: PersistedSecret
@@ -82,6 +85,7 @@ export class PiAgentSettingsStore {
       brokerSession: this.getBrokerSessionSummary(persisted),
       provider,
       modelId,
+      toolProfile: this.normalizeToolProfile(persisted.toolProfile),
       hasApiKey: Boolean(await this.getStoredApiKey(provider)),
       appServerUrl: this.resolveAppServerUrl(persisted),
       hasAppServerUrl: Boolean(this.resolveAppServerUrl(persisted)),
@@ -107,6 +111,7 @@ export class PiAgentSettingsStore {
       authMode,
       provider,
       modelId,
+      toolProfile: this.normalizeToolProfile(input.toolProfile ?? persisted.toolProfile),
       apiKeys: {
         ...(persisted.apiKeys ?? {}),
       },
@@ -531,6 +536,12 @@ export class PiAgentSettingsStore {
 
   private getStorageKind(): AgentSettingsState['storageKind'] {
     return safeStorage.isEncryptionAvailable() ? 'safe_storage' : 'plaintext'
+  }
+
+  private normalizeToolProfile(value: unknown): AgentToolProfile {
+    return value === 'standard' || value === 'symbol_first'
+      ? value
+      : DEFAULT_TOOL_PROFILE
   }
 
   private serializeSecret(value: string): PersistedSecret {

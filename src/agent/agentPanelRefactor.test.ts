@@ -222,5 +222,6 @@ function buildSettings(): AgentSettingsState {
     modelId: 'gpt-5.4',
     provider: 'openai-codex',
     storageKind: 'safe_storage',
+    toolProfile: 'symbol_first',
   }
 }

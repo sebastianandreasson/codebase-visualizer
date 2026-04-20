@@ -34,11 +34,11 @@ slices before falling back to bounded file windows.
 
 ## Phase 2: Symbol-first tool profile
 
-- [ ] Add a workspace/agent setting for `standard` versus `symbol-first`.
-- [ ] Build the PI SDK session with symbol tools active in symbol-first mode.
-- [ ] Keep broad file tools disabled by default in symbol-first mode.
-- [ ] Keep `readFileWindow` as the explicit fallback with a required reason.
-- [ ] Track fallback frequency in telemetry.
+- [x] Add a workspace/agent setting for `standard` versus `symbol-first`.
+- [x] Build the PI SDK session with symbol tools active in symbol-first mode.
+- [x] Keep broad file tools disabled by default in symbol-first mode.
+- [x] Keep `readFileWindow` as the explicit fallback with a required reason.
+- [x] Track fallback frequency in telemetry.
 
 ## Phase 3: Symbol editing
 

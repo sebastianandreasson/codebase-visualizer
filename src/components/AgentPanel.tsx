@@ -88,6 +88,7 @@ export function AgentPanel({
     settingsPending,
     terminalModelOptions,
     timeline,
+    toolProfileValue,
     updateSettingsDraft,
     workingSetMatchesInspectorContext,
   } = useAgentSessionController({
@@ -165,6 +166,7 @@ export function AgentPanel({
           providerValue={providerValue}
           settings={settings}
           settingsPending={settingsPending}
+          toolProfileValue={toolProfileValue}
           updateSettingsDraft={updateSettingsDraft}
         />
       ) : !sessionIsInteractive ? (

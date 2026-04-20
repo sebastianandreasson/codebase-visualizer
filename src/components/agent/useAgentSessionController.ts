@@ -115,6 +115,7 @@ export function useAgentSessionController({
   const manualRedirectUrlValue = settingsDraft.manualRedirectUrl
   const openAiOAuthClientIdValue = settingsDraft.openAiOAuthClientId
   const openAiOAuthClientSecretValue = settingsDraft.openAiOAuthClientSecret
+  const toolProfileValue = settingsDraft.toolProfile
   const settingsDraftDirty = settingsDraft.dirty
 
   useEffect(() => {
@@ -646,6 +647,7 @@ export function useAgentSessionController({
     setTimeline,
     settings,
     settingsDraftDirty,
+    toolProfileValue,
   })
 
   const availableModels = settings ? getSelectableModels(settings, authModeValue, providerValue) : []
@@ -716,6 +718,7 @@ export function useAgentSessionController({
     settingsPending,
     terminalModelOptions,
     timeline,
+    toolProfileValue,
     updateSettingsDraft,
     workingSetMatchesInspectorContext,
   }

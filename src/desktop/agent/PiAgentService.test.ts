@@ -272,6 +272,10 @@ const piCodingAgentMock = vi.hoisted(() => {
   }
 })
 
+const agentSettingsStoreMock = vi.hoisted(() => ({
+  toolProfile: 'symbol_first' as 'standard' | 'symbol_first',
+}))
+
 vi.mock('electron', () => ({
   app: {
     getPath: vi.fn(() => '/tmp/semanticode-tests'),
@@ -331,6 +335,7 @@ vi.mock('./PiAgentSettingsStore', () => ({
         openAiOAuthClientId: '',
         provider: 'openai-codex',
         storageKind: 'plaintext',
+        toolProfile: agentSettingsStoreMock.toolProfile,
         availableProviders: ['openai-codex'],
         availableModelsByProvider: {
           'openai-codex': [{ id: 'gpt-5.4' }],
@@ -338,7 +343,11 @@ vi.mock('./PiAgentSettingsStore', () => ({
       }
     }
 
-    async saveSettings() {
+    async saveSettings(input?: { toolProfile?: 'standard' | 'symbol_first' }) {
+      if (input?.toolProfile) {
+        agentSettingsStoreMock.toolProfile = input.toolProfile
+      }
+
       return this.getSettings()
     }
   },
@@ -403,7 +412,9 @@ describe('PiAgentService brokered oauth integration', () => {
     piCodingAgentMock.SessionManager.continueRecent.mockClear()
     piCodingAgentMock.SessionManager.create.mockClear()
     piCodingAgentMock.createAgentSessionRuntime.mockClear()
+    piCodingAgentMock.createAgentSessionFromServices.mockClear()
     piCodingAgentMock.setRestoredSessionMessages([])
+    agentSettingsStoreMock.toolProfile = 'symbol_first'
     execFileMock.mockImplementation((_file, _args, callback) => {
       callback?.(new Error('rust-analyzer unavailable in test environment'), '', '')
       return undefined as never
@@ -438,6 +449,17 @@ describe('PiAgentService brokered oauth integration', () => {
     expect(summary.provider).toBe('openai-codex')
     expect(summary.modelId).toBe('gpt-5.4')
     expect(summary.runState).toBe('ready')
+    expect(piCodingAgentMock.createAgentSessionFromServices).toHaveBeenCalledWith(
+      expect.objectContaining({
+        customTools: expect.arrayContaining([
+          expect.objectContaining({ name: 'findSymbols' }),
+          expect.objectContaining({ name: 'getSymbolOutline' }),
+          expect.objectContaining({ name: 'readSymbolSlice' }),
+          expect.objectContaining({ name: 'readFileWindow' }),
+        ]),
+        tools: [],
+      }),
+    )
     expect(summary.capabilities).toMatchObject({
       compact: true,
       newSession: true,
@@ -648,6 +670,35 @@ describe('PiAgentService brokered oauth integration', () => {
     })
 
     await service.disposeWorkspaceSession(workspaceRootDir)
+  })
+
+  it('includes broad SDK tools only for the standard tool profile', async () => {
+    agentSettingsStoreMock.toolProfile = 'standard'
+    const { PiAgentService } = await import('./PiAgentService')
+    const service = new PiAgentService({
+      logger: {
+        error: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+      },
+    })
+
+    await service.ensureWorkspaceSession('/tmp/workspace')
+
+    expect(piCodingAgentMock.createAgentSessionFromServices).toHaveBeenCalledWith(
+      expect.objectContaining({
+        customTools: expect.arrayContaining([
+          expect.objectContaining({ name: 'findSymbols' }),
+        ]),
+        tools: [
+          { name: 'grep' },
+          { name: 'find' },
+          { name: 'ls' },
+        ],
+      }),
+    )
+
+    await service.disposeWorkspaceSession('/tmp/workspace')
   })
 
   it('starts a fresh implicit session instead of reusing local-model history for Codex OAuth', async () => {

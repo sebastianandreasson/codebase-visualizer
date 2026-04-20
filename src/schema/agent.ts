@@ -234,6 +234,7 @@ export interface AgentPermissionRequest {
 }
 
 export type AgentSecretStorageKind = 'plaintext' | 'safe_storage'
+export type AgentToolProfile = 'standard' | 'symbol_first'
 
 export interface AgentModelOption {
   authMode?: AgentAuthMode
@@ -245,6 +246,7 @@ export interface AgentSettingsState {
   brokerSession: AgentBrokerSessionSummary
   provider: string
   modelId: string
+  toolProfile: AgentToolProfile
   hasApiKey: boolean
   appServerUrl?: string
   hasAppServerUrl: boolean
@@ -263,6 +265,7 @@ export interface AgentSettingsInput {
   brokerBackendUrl?: string
   provider: string
   modelId: string
+  toolProfile?: AgentToolProfile
   apiKey?: string
   clearApiKey?: boolean
   appServerUrl?: string

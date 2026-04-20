@@ -20,7 +20,7 @@ const SYMBOL_TOOL_GUIDELINES = [
   'Use Semanticode symbol tools before broad file reads when exploring source code.',
   'For top-N symbol requests, pass the requested limit and an explicit sortBy value such as loc, degree, name, path, or kind.',
   'For descriptions of large or multiple symbols, call getSymbolOutline first, then page through readSymbolSlice with startLine or relativeStartLine only when details are needed.',
-  'Prefer readSymbolSlice for implementation bodies; use readFileWindow only for imports, module headers, configs, tests, or non-symbol code.',
+  'Prefer readSymbolSlice for implementation bodies; use readFileWindow only for imports, module headers, configs, tests, or non-symbol code, and include the required reason.',
 ]
 
 const SYMBOL_TOOL_SPECS: Record<
@@ -56,9 +56,9 @@ const SYMBOL_TOOL_SPECS: Record<
   },
   readFileWindow: {
     description:
-      'Read a bounded line window from a file path or fileId when symbol slices are insufficient. Include a reason when using this fallback.',
+      'Read a bounded line window from a file path or fileId when symbol slices are insufficient. The reason argument is required.',
     promptSnippet:
-      'Read a bounded file line window as a fallback for imports, module headers, configs, tests, or non-symbol code.',
+      'Read a bounded file line window as a fallback for imports, module headers, configs, tests, or non-symbol code. Always pass reason.',
   },
   readSymbolSlice: {
     description:
