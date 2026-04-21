@@ -220,6 +220,10 @@ export interface AgentResumeSessionRequest {
   sessionFile: string
 }
 
+export interface AgentDeleteSessionRequest {
+  sessionFile: string
+}
+
 export interface AgentThinkingLevelRequest {
   thinkingLevel: NonNullable<AgentSessionSummary['thinkingLevel']>
 }

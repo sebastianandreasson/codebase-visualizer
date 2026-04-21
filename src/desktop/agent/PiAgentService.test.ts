@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 const execFileMock = vi.fn()
 const mkdirMock = vi.fn()
 const readFileMock = vi.fn()
+const unlinkMock = vi.fn()
 
 const piCodingAgentMock = vi.hoisted(() => {
   type Listener = (event: Record<string, unknown>) => void
@@ -293,9 +294,11 @@ vi.mock('node:fs/promises', () => ({
   default: {
     mkdir: mkdirMock,
     readFile: readFileMock,
+    unlink: unlinkMock,
   },
   mkdir: mkdirMock,
   readFile: readFileMock,
+  unlink: unlinkMock,
 }))
 
 vi.mock('@mariozechner/pi-coding-agent', () => piCodingAgentMock)
@@ -408,9 +411,12 @@ describe('PiAgentService brokered oauth integration', () => {
     execFileMock.mockReset()
     mkdirMock.mockReset()
     readFileMock.mockReset()
+    unlinkMock.mockReset()
     piCodingAgentMock.session.prompt.mockClear()
     piCodingAgentMock.SessionManager.continueRecent.mockClear()
     piCodingAgentMock.SessionManager.create.mockClear()
+    piCodingAgentMock.SessionManager.list.mockClear()
+    piCodingAgentMock.SessionManager.open.mockClear()
     piCodingAgentMock.createAgentSessionRuntime.mockClear()
     piCodingAgentMock.createAgentSessionFromServices.mockClear()
     piCodingAgentMock.setRestoredSessionMessages([])
@@ -421,6 +427,7 @@ describe('PiAgentService brokered oauth integration', () => {
     })
     mkdirMock.mockResolvedValue(undefined)
     readFileMock.mockResolvedValue('{}')
+    unlinkMock.mockResolvedValue(undefined)
   })
 
   afterEach(() => {
@@ -741,5 +748,55 @@ describe('PiAgentService brokered oauth integration', () => {
     )
 
     await service.disposeWorkspaceSession('/tmp/workspace')
+  })
+
+  it('deletes only sessions returned by the pi session list', async () => {
+    const { PiAgentService } = await import('./PiAgentService')
+    const service = new PiAgentService({
+      logger: {
+        error: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+      },
+    })
+
+    piCodingAgentMock.SessionManager.list.mockResolvedValueOnce([
+      {
+        allMessagesText: 'Delete me',
+        created: new Date('2026-04-15T00:00:00.000Z'),
+        cwd: '/tmp/workspace',
+        firstMessage: 'Delete me',
+        id: 'listed-session',
+        messageCount: 2,
+        modified: new Date('2026-04-15T00:01:00.000Z'),
+        name: 'Listed session',
+        path: '/tmp/workspace/.pi/listed.jsonl',
+      },
+    ] as never[])
+
+    await expect(
+      service.deleteWorkspaceSession('/tmp/workspace', '/tmp/workspace/.pi/listed.jsonl'),
+    ).resolves.toBeNull()
+
+    expect(unlinkMock).toHaveBeenCalledWith('/tmp/workspace/.pi/listed.jsonl')
+  })
+
+  it('rejects delete requests for paths outside the pi session list', async () => {
+    const { PiAgentService } = await import('./PiAgentService')
+    const service = new PiAgentService({
+      logger: {
+        error: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+      },
+    })
+
+    piCodingAgentMock.SessionManager.list.mockResolvedValueOnce([])
+
+    await expect(
+      service.deleteWorkspaceSession('/tmp/workspace', '/tmp/workspace/.pi/missing.jsonl'),
+    ).rejects.toThrow('No saved pi session matched')
+
+    expect(unlinkMock).not.toHaveBeenCalled()
   })
 })

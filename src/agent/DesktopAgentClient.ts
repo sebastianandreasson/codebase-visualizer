@@ -2,6 +2,7 @@ import type {
   AgentActiveToolsRequest,
   AgentBrokerCallbackResult,
   AgentCompactionRequest,
+  AgentDeleteSessionRequest,
   AgentBrokerCompleteRequest,
   AgentCodexImportResponse,
   AgentBrokerLoginStartResponse,
@@ -29,6 +30,7 @@ import {
   SEMANTICODE_AGENT_MESSAGE_ROUTE,
   SEMANTICODE_AGENT_MODEL_ROUTE,
   SEMANTICODE_AGENT_SESSIONS_ROUTE,
+  SEMANTICODE_AGENT_SESSION_DELETE_ROUTE,
   SEMANTICODE_AGENT_SESSION_NEW_ROUTE,
   SEMANTICODE_AGENT_SESSION_RESUME_ROUTE,
   SEMANTICODE_AGENT_SETTINGS_ROUTE,
@@ -51,6 +53,7 @@ interface DesktopAgentBridge {
   ) => Promise<boolean>
   listSessions?: () => Promise<AgentSessionListResponse>
   newSession?: () => Promise<AgentSessionSummary | null>
+  deleteSession?: (sessionFile: string) => Promise<AgentStateResponse>
   resumeSession?: (sessionFile: string) => Promise<AgentSessionSummary | null>
   setThinkingLevel?: (thinkingLevel: NonNullable<AgentSessionSummary['thinkingLevel']>) => Promise<AgentSessionSummary | null>
   setActiveTools?: (toolNames: string[]) => Promise<AgentControlsResponse>
@@ -220,6 +223,22 @@ export class DesktopAgentClient {
     })
 
     return state.session
+  }
+
+  async deleteSession(sessionFile: string) {
+    const bridge = this.getBridge()
+
+    if (bridge?.deleteSession) {
+      return bridge.deleteSession(sessionFile)
+    }
+
+    return this.fetchAgentState(SEMANTICODE_AGENT_SESSION_DELETE_ROUTE, {
+      body: JSON.stringify({ sessionFile } satisfies AgentDeleteSessionRequest),
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      method: 'POST',
+    })
   }
 
   async setActiveTools(toolNames: string[]) {

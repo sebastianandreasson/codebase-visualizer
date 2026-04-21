@@ -23,7 +23,6 @@ export function AgentTerminal({
   inspectorContext,
   messageListRef,
   onAdoptInspectorContextAsWorkingSet,
-  onCancel,
   onClearWorkingSet,
   onComposerChange,
   onSubmit,
@@ -46,7 +45,6 @@ export function AgentTerminal({
   inspectorContext: AgentScopeContext | null | undefined
   messageListRef: RefObject<HTMLDivElement | null>
   onAdoptInspectorContextAsWorkingSet?: () => void
-  onCancel: () => void | Promise<void>
   onClearWorkingSet?: () => void
   onComposerChange: (value: string) => void
   onSubmit: (mode?: SubmitMode) => void | Promise<void>
@@ -63,24 +61,6 @@ export function AgentTerminal({
 }) {
   return (
     <div className="cbv-agent-terminal">
-      <div className="cbv-agent-terminal-bar">
-        <span>thinking {session.thinkingLevel ?? 'medium'}</span>
-        <span className={`cbv-agent-terminal-state is-${session.runState}`}>
-          {session.runState}
-        </span>
-        <span title={session.sessionFile ?? undefined}>
-          session {session.sessionName ?? abbreviateId(session.id)}
-        </span>
-        {sessionControls?.tools.length ? (
-          <span title={sessionControls.tools.map((tool) => `${tool.active ? 'on' : 'off'} ${tool.name}`).join(' · ')}>
-            tools {sessionControls.activeToolNames.length}/{sessionControls.tools.length}
-          </span>
-        ) : null}
-        <span>
-          queue s:{session.queue?.steering ?? 0} f:{session.queue?.followUp ?? 0}
-        </span>
-      </div>
-
       <AgentTerminalTimeline
         items={timeline}
         listRef={messageListRef}
@@ -101,79 +81,71 @@ export function AgentTerminal({
         {commandSuggestions.length > 0 ? (
           <AgentCommandSuggestions commands={commandSuggestions} />
         ) : null}
-        <textarea
-          ref={composerRef}
-          onChange={(event) => onComposerChange(event.target.value)}
-          onKeyDown={(event) => {
-            if (
-              event.key === 'Enter' &&
-              (event.metaKey || event.ctrlKey || !event.shiftKey)
-            ) {
-              event.preventDefault()
-              void onSubmit(session.runState === 'running' ? 'steer' : 'send')
-            }
-          }}
-          placeholder={buildComposerPlaceholder(session, sessionControls)}
-          rows={1}
-          value={composerValue}
-        />
-        <div className="cbv-agent-actions">
-          <button
-            className="is-secondary"
-            disabled={session.runState !== 'running'}
-            onClick={() => {
-              void onCancel()
-            }}
-            type="button"
-          >
-            Cancel
-          </button>
-          {session.runState === 'running' ? (
-            <>
-              {sessionCapabilities.steer ? (
-                <button
-                  disabled={pending || composerValue.trim().length === 0}
-                  onClick={() => {
-                    void onSubmit('steer')
-                  }}
-                  title={sendDisabledReason ?? undefined}
-                  type="button"
-                >
-                  Steer
-                </button>
-              ) : null}
-              {sessionCapabilities.followUp ? (
-                <button
-                  className="is-secondary"
-                  disabled={pending || composerValue.trim().length === 0}
-                  onClick={() => {
-                    void onSubmit('follow_up')
-                  }}
-                  title={sendDisabledReason ?? undefined}
-                  type="button"
-                >
-                  Follow-Up
-                </button>
-              ) : null}
-            </>
-          ) : (
-            <button
-              disabled={
-                pending ||
-                composerValue.trim().length === 0 ||
-                !sessionCapabilities.prompt ||
-                session.runState === 'disabled' ||
-                session.runState === 'initializing'
+        <div className="cbv-agent-composer-entry">
+          <textarea
+            ref={composerRef}
+            onChange={(event) => onComposerChange(event.target.value)}
+            onKeyDown={(event) => {
+              if (
+                event.key === 'Enter' &&
+                (event.metaKey || event.ctrlKey || !event.shiftKey)
+              ) {
+                event.preventDefault()
+                void onSubmit(session.runState === 'running' ? 'steer' : 'send')
               }
-              title={sendDisabledReason ?? undefined}
-              onClick={() => {
-                void onSubmit('send')
-              }}
-              type="button"
-            >
-              Send
-            </button>
-          )}
+            }}
+            placeholder={buildComposerPlaceholder(session, sessionControls)}
+            rows={1}
+            value={composerValue}
+          />
+          <div className="cbv-agent-actions">
+            {session.runState === 'running' ? (
+              <>
+                {sessionCapabilities.steer ? (
+                  <button
+                    disabled={pending || composerValue.trim().length === 0}
+                    onClick={() => {
+                      void onSubmit('steer')
+                    }}
+                    title={sendDisabledReason ?? undefined}
+                    type="button"
+                  >
+                    Steer
+                  </button>
+                ) : null}
+                {sessionCapabilities.followUp ? (
+                  <button
+                    className="is-secondary"
+                    disabled={pending || composerValue.trim().length === 0}
+                    onClick={() => {
+                      void onSubmit('follow_up')
+                    }}
+                    title={sendDisabledReason ?? undefined}
+                    type="button"
+                  >
+                    Follow-Up
+                  </button>
+                ) : null}
+              </>
+            ) : (
+              <button
+                disabled={
+                  pending ||
+                  composerValue.trim().length === 0 ||
+                  !sessionCapabilities.prompt ||
+                  session.runState === 'disabled' ||
+                  session.runState === 'initializing'
+                }
+                title={sendDisabledReason ?? undefined}
+                onClick={() => {
+                  void onSubmit('send')
+                }}
+                type="button"
+              >
+                Send
+              </button>
+            )}
+          </div>
         </div>
       </div>
     </div>
@@ -202,8 +174,4 @@ function AgentCommandSuggestions({
       ))}
     </div>
   )
-}
-
-function abbreviateId(id: string) {
-  return id.length > 10 ? id.slice(0, 10) : id
 }

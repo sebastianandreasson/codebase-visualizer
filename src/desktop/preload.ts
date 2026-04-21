@@ -29,6 +29,8 @@ contextBridge.exposeInMainWorld('semanticodeDesktop', {
   listSessions: () => ipcRenderer.invoke('semanticode:agent:list-sessions'),
   getControls: () => ipcRenderer.invoke('semanticode:agent:get-controls'),
   newSession: () => ipcRenderer.invoke('semanticode:agent:new-session'),
+  deleteSession: (sessionFile: string) =>
+    ipcRenderer.invoke('semanticode:agent:delete-session', sessionFile),
   resumeSession: (sessionFile: string) =>
     ipcRenderer.invoke('semanticode:agent:resume-session', sessionFile),
   setThinkingLevel: (thinkingLevel: string) =>

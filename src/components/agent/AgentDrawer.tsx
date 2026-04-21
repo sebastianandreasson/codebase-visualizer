@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactNode } from 'react'
+import { useId, useMemo, useState, type ReactNode } from 'react'
 
 import type { AgentScopeContext } from '../../agent/agentScopeContext'
 import type {
@@ -172,6 +172,8 @@ export function AgentPanelContent({
   workingSetContext = null,
   workspaceProfile = null,
 }: AgentPanelContentProps) {
+  const sessionRailHostId = useId()
+
   return (
     <section className="cbv-agent-drawer is-open is-docked">
       <div className="cbv-agent-drawer-body">
@@ -188,22 +190,41 @@ export function AgentPanelContent({
               ×
             </button>
           </div>
-          <div className="cbv-agent-drawer-tabs" role="tablist" aria-label="Agent drawer">
-            {([
-              { id: 'chat', label: 'chat' },
-              { id: 'agents', label: 'agents' },
-              { id: 'layout', label: 'layout' },
-            ] as const).map((tab) => (
-              <button
-                aria-selected={activeTab === tab.id}
-                className={`is-${tab.id}${activeTab === tab.id ? ' is-active' : ''}`}
-                key={tab.id}
-                onClick={() => onChangeTab(tab.id)}
-                type="button"
-              >
-                {tab.label}
-              </button>
-            ))}
+          <div
+            className={`cbv-agent-drawer-tabs${activeTab === 'chat' ? ' has-session-rail' : ''}`}
+            role="tablist"
+            aria-label="Agent drawer"
+          >
+            <button
+              aria-selected={activeTab === 'chat'}
+              className={`is-chat${activeTab === 'chat' ? ' is-active' : ''}`}
+              onClick={() => onChangeTab('chat')}
+              type="button"
+            >
+              chat
+            </button>
+            {activeTab === 'chat' ? (
+              <div
+                className="cbv-agent-drawer-session-slot"
+                id={sessionRailHostId}
+              />
+            ) : null}
+            <button
+              aria-selected={activeTab === 'agents'}
+              className={`is-agents${activeTab === 'agents' ? ' is-active' : ''}`}
+              onClick={() => onChangeTab('agents')}
+              type="button"
+            >
+              agents
+            </button>
+            <button
+              aria-selected={activeTab === 'layout'}
+              className={`is-layout${activeTab === 'layout' ? ' is-active' : ''}`}
+              onClick={() => onChangeTab('layout')}
+              type="button"
+            >
+              layout
+            </button>
           </div>
         </div>
         {activeTab === 'chat' ? (
@@ -220,6 +241,7 @@ export function AgentPanelContent({
             onRunSettled={onRunSettled}
             preprocessedWorkspaceContext={preprocessedWorkspaceContext}
             promptSeed={promptSeed}
+            sessionRailHostId={sessionRailHostId}
             workingSet={workingSet}
             workingSetContext={workingSetContext}
             workspaceProfile={workspaceProfile}

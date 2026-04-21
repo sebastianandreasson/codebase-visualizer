@@ -194,6 +194,26 @@ void app.whenReady().then(async () => {
     return piAgentService.resumeWorkspaceSession(activeWorkspaceRootDir, sessionFile)
   })
 
+  ipcMain.handle('semanticode:agent:delete-session', async (_event, sessionFile: string) => {
+    if (!activeWorkspaceRootDir || !sessionFile) {
+      return {
+        fileOperations: [],
+        messages: [],
+        session: null,
+        timeline: [],
+      }
+    }
+
+    const session = await piAgentService.deleteWorkspaceSession(activeWorkspaceRootDir, sessionFile)
+
+    return {
+      fileOperations: piAgentService.getWorkspaceFileOperations(activeWorkspaceRootDir),
+      messages: piAgentService.getWorkspaceMessages(activeWorkspaceRootDir),
+      session,
+      timeline: piAgentService.getWorkspaceTimeline(activeWorkspaceRootDir),
+    }
+  })
+
   ipcMain.handle('semanticode:agent:set-thinking-level', async (_event, thinkingLevel: string) => {
     if (!activeWorkspaceRootDir || !isAgentThinkingLevel(thinkingLevel)) {
       return null
@@ -311,6 +331,7 @@ app.on('before-quit', () => {
   ipcMain.removeHandler('semanticode:agent:list-sessions')
   ipcMain.removeHandler('semanticode:agent:new-session')
   ipcMain.removeHandler('semanticode:agent:resume-session')
+  ipcMain.removeHandler('semanticode:agent:delete-session')
   ipcMain.removeHandler('semanticode:agent:set-thinking-level')
   ipcMain.removeHandler('semanticode:agent:compact')
   ipcMain.removeHandler('semanticode:agent:cancel')

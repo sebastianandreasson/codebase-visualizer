@@ -1093,7 +1093,11 @@ window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
     })
   }
 
-  if (path === '/__semanticode/agent/session/new' || path === '/__semanticode/agent/session/resume') {
+  if (
+    path === '/__semanticode/agent/session/new' ||
+    path === '/__semanticode/agent/session/resume' ||
+    path === '/__semanticode/agent/session/delete'
+  ) {
     return jsonResponse({
       fileOperations: getVisualAgentFileOperations(),
       messages: agentMessages,

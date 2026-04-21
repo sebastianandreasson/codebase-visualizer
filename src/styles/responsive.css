@@ -204,13 +204,13 @@
     grid-template-columns: 6.75rem minmax(0, 1fr);
   }
 
-  .cbv-agent-drawer:not(.is-collapsed) .cbv-agent-drawer-tabs button {
+  .cbv-agent-drawer:not(.is-collapsed) .cbv-agent-drawer-tabs > button {
     min-height: 1.8rem;
     padding-inline: 0.55rem;
     font-size: 0.6875rem;
   }
 
-  .cbv-agent-drawer:not(.is-collapsed) .cbv-agent-drawer-tabs button::after {
+  .cbv-agent-drawer:not(.is-collapsed) .cbv-agent-drawer-tabs > button::after {
     width: 6.75rem;
   }
 }

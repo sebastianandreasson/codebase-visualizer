@@ -444,6 +444,48 @@ describe('flowModel extracted helpers', () => {
     expect(childIndex).toBeGreaterThan(rootIndex)
   })
 
+  it('packs large expanded clusters into wrapped internal rows', () => {
+    const root = symbol('root', 'ManagementPlansPage', 'react:component', 'function', 1, 464)
+    const internals = Array.from({ length: 100 }, (_, index) => ({
+      ...symbol(
+        `internal${String(index).padStart(3, '0')}`,
+        `internalHelper${index}`,
+        null,
+        'function',
+        500 + index * 4,
+        502 + index * 4,
+      ),
+      parentSymbolId: root.id,
+    }))
+    const snapshot = buildSnapshot([root, ...internals])
+    const layout = buildSymbolLayout([root.id, ...internals.map((item) => item.id)])
+    const symbolClusterState = deriveSymbolClusterState(snapshot, layout, 'symbols')
+    const expandedClusterLayouts = buildExpandedClusterLayouts(
+      snapshot,
+      layout,
+      symbolClusterState,
+      new Set(['cluster:root']),
+    )
+    const clusterLayout = expandedClusterLayouts.get('cluster:root')
+
+    expect(clusterLayout).toBeDefined()
+    expect(Object.keys(clusterLayout?.childPlacements ?? {})).toHaveLength(100)
+    expect(clusterLayout?.width).toBeLessThan(2_000)
+
+    const placements = Object.values(clusterLayout?.childPlacements ?? {})
+    const rowCount = new Set(placements.map((placement) => Math.round(placement.y))).size
+    const childRightEdge = Math.max(
+      ...placements.map((placement) => placement.x + placement.width),
+    )
+    const childBottomEdge = Math.max(
+      ...placements.map((placement) => placement.y + placement.height),
+    )
+
+    expect(rowCount).toBeGreaterThan(1)
+    expect(childRightEdge).toBeLessThanOrEqual(clusterLayout?.width ?? 0)
+    expect(childBottomEdge).toBeLessThanOrEqual(clusterLayout?.height ?? 0)
+  })
+
   it('does not promote tiny constants to large-symbol size when zoomed out', () => {
     const snapshot = buildSnapshot([
       symbol('tinyConstant', 'MAX_RETRIES', null, 'constant', 1, 1),

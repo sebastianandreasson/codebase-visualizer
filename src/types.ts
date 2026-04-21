@@ -121,6 +121,7 @@ export type {
   AgentBrokerCallbackResult,
   AgentCompactionRequest,
   AgentControlsResponse,
+  AgentDeleteSessionRequest,
   AgentBrokerLoginStartResponse,
   AgentModelSelectionRequest,
   AgentBrokerSessionResponse,

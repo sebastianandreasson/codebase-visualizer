@@ -14,6 +14,7 @@ import {
   SEMANTICODE_AGENT_MESSAGE_ROUTE,
   SEMANTICODE_AGENT_MODEL_ROUTE,
   SEMANTICODE_AGENT_SESSIONS_ROUTE,
+  SEMANTICODE_AGENT_SESSION_DELETE_ROUTE,
   SEMANTICODE_AGENT_SESSION_NEW_ROUTE,
   SEMANTICODE_AGENT_SESSION_RESUME_ROUTE,
   SEMANTICODE_AGENT_SETTINGS_ROUTE,
@@ -25,6 +26,7 @@ import type {
   AgentActiveToolsRequest,
   AgentCompactionRequest,
   AgentControlsResponse,
+  AgentDeleteSessionRequest,
   AgentModelSelectionRequest,
   AgentResumeSessionRequest,
   AgentBrokerCompleteRequest,
@@ -190,6 +192,31 @@ export async function handleAgentRoute(
     }
 
     const session = await options.agentRuntime.resumeWorkspaceSession(
+      options.rootDir,
+      payload.sessionFile,
+    )
+    const state: AgentStateResponse = {
+      fileOperations: options.agentRuntime.getWorkspaceFileOperations(options.rootDir),
+      session,
+      messages: options.agentRuntime.getWorkspaceMessages(options.rootDir),
+      timeline: options.agentRuntime.getWorkspaceTimeline(options.rootDir),
+    }
+
+    sendJson(response, 200, state)
+    return true
+  }
+
+  if (pathname === SEMANTICODE_AGENT_SESSION_DELETE_ROUTE && method === 'POST') {
+    const payload = await readJsonBody<AgentDeleteSessionRequest>(request)
+
+    if (!payload?.sessionFile?.trim()) {
+      sendJson(response, 400, {
+        message: 'A session file is required.',
+      })
+      return true
+    }
+
+    const session = await options.agentRuntime.deleteWorkspaceSession(
       options.rootDir,
       payload.sessionFile,
     )

@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { unlink } from 'node:fs/promises'
 import { join } from 'node:path'
 
 import { Agent, ProviderTransport, type AgentEvent as PiAgentEvent } from '@mariozechner/pi-agent'
@@ -1320,6 +1321,88 @@ export class PiAgentService {
   async listWorkspaceSessions(workspaceRootDir: string): Promise<AgentSessionListItem[]> {
     const sessions = await SessionManager.list(workspaceRootDir).catch(() => [])
     return sessions.map(formatSessionListItem)
+  }
+
+  async deleteWorkspaceSession(workspaceRootDir: string, sessionFile: string) {
+    const sessions = await SessionManager.list(workspaceRootDir).catch(() => [])
+    const sessionToDelete = sessions.find((entry) =>
+      entry.path === sessionFile || entry.id === sessionFile,
+    )
+
+    if (!sessionToDelete) {
+      throw new Error(`No saved pi session matched ${sessionFile}.`)
+    }
+
+    const existingRecord = this.sessionsByWorkspaceRootDir.get(workspaceRootDir)
+    const deletingActiveSession =
+      existingRecord?.kind === 'sdk' &&
+      existingRecord.session.sessionFile === sessionToDelete.path
+
+    if (deletingActiveSession && existingRecord.summary.runState === 'running') {
+      throw new Error('Cannot delete the active session while the agent is running.')
+    }
+
+    await unlink(sessionToDelete.path).catch((error) => {
+      if (hasNodeErrorCode(error, 'ENOENT')) {
+        return
+      }
+
+      throw error
+    })
+
+    if (!deletingActiveSession) {
+      return existingRecord?.summary ?? null
+    }
+
+    existingRecord.summary = updateSessionSummary(existingRecord.summary, {
+      lastError: undefined,
+      runState: 'running',
+    })
+    this.emit({
+      session: existingRecord.summary,
+      type: 'session_updated',
+    })
+
+    try {
+      await existingRecord.runtime.newSession()
+      this.refreshSdkRecordFromRuntime(existingRecord, `pi-session:${randomUUID()}`)
+      this.emit({
+        session: existingRecord.summary,
+        type: 'session_created',
+      })
+      this.addTimelineItem(
+        existingRecord,
+        createLifecycleTimelineItem({
+          detail: sessionToDelete.name ?? sessionToDelete.path,
+          event: 'session_created',
+          label: 'session deleted',
+          status: 'completed',
+        }),
+      )
+      return existingRecord.summary
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'Failed to start a fresh session.'
+
+      existingRecord.summary = updateSessionSummary(existingRecord.summary, {
+        lastError: message,
+        runState: 'error',
+      })
+      this.emit({
+        session: existingRecord.summary,
+        type: 'session_updated',
+      })
+      this.addTimelineItem(
+        existingRecord,
+        createLifecycleTimelineItem({
+          detail: message,
+          event: 'error',
+          label: 'session delete failed',
+          status: 'error',
+        }),
+      )
+      throw error
+    }
   }
 
   async startNewWorkspaceSession(workspaceRootDir: string) {
@@ -3320,6 +3403,15 @@ function updateSessionSummary(
     ...changes,
     updatedAt: new Date().toISOString(),
   }
+}
+
+function hasNodeErrorCode(error: unknown, code: string) {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    'code' in error &&
+    (error as { code?: unknown }).code === code
+  )
 }
 
 function normalizeAgentMessage(

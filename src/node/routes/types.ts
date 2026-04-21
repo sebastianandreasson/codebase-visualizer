@@ -42,6 +42,7 @@ export interface AgentRuntimeRequestBridge {
   getWorkspaceSessionSummary: (workspaceRootDir: string) => AgentStateResponse['session']
   getWorkspaceTimeline: (workspaceRootDir: string) => AgentStateResponse['timeline']
   listWorkspaceSessions: (workspaceRootDir: string) => Promise<AgentSessionListItem[]>
+  deleteWorkspaceSession: (workspaceRootDir: string, sessionFile: string) => Promise<AgentStateResponse['session']>
   logoutBrokeredAuthSession: () => Promise<AgentBrokerSessionResponse['brokerSession']>
   compactWorkspaceSession: (workspaceRootDir: string, instructions?: string) => Promise<AgentStateResponse['session']>
   promptWorkspaceSession: (

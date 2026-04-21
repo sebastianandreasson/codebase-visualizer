@@ -11,14 +11,16 @@ export function AgentTerminalTimeline({
   listRef: RefObject<HTMLDivElement | null>
   onScroll: () => void
 }) {
+  const timelineEntries = buildTimelineEntries(items)
+
   return (
     <div className="cbv-agent-terminal-timeline" onScroll={onScroll} ref={listRef}>
-      {items.length > 0 ? (
-        items.map((item, index) => (
-          <AgentTimelineRow
-            isLast={index === items.length - 1}
-            item={item}
-            key={item.id}
+      {timelineEntries.length > 0 ? (
+        timelineEntries.map((entry, index) => (
+          <AgentTimelineEntry
+            entry={entry}
+            isLast={index === timelineEntries.length - 1}
+            key={entry.key}
           />
         ))
       ) : (
@@ -31,22 +33,290 @@ export function AgentTerminalTimeline({
   )
 }
 
-function AgentTimelineRow({
+type ActivityTimelineItem =
+  | Extract<AgentTimelineItem, { type: 'tool' }>
+  | Extract<AgentTimelineItem, { type: 'lifecycle' }>
+  | ActivityTimelineMessage
+
+type ActivityTimelineMessage = Extract<AgentTimelineItem, { type: 'message' }> & (
+  | { blockKind: 'thinking' }
+  | { role: 'tool' }
+)
+
+type TimelineEntry =
+  | {
+      item: AgentTimelineItem
+      key: string
+      type: 'item'
+    }
+  | {
+      items: ActivityTimelineItem[]
+      key: string
+      type: 'activity'
+    }
+
+type ActivityTimelineEntry = Extract<TimelineEntry, { type: 'activity' }>
+
+function buildTimelineEntries(items: AgentTimelineItem[]): TimelineEntry[] {
+  const entries: TimelineEntry[] = []
+  let activeActivityEntry: ActivityTimelineEntry | null = null
+
+  function closeActivityGroup() {
+    activeActivityEntry = null
+  }
+
+  function addActivityItem(item: ActivityTimelineItem) {
+    if (!activeActivityEntry) {
+      activeActivityEntry = {
+        items: [],
+        key: `activity:${item.id}`,
+        type: 'activity',
+      }
+      entries.push(activeActivityEntry)
+    }
+
+    activeActivityEntry.items.push(item)
+    const firstItem = activeActivityEntry.items[0]
+    activeActivityEntry.key = [
+      'activity',
+      firstItem.id,
+      item.id,
+      activeActivityEntry.items.length,
+    ].join(':')
+  }
+
+  for (const item of items) {
+    if (isVisibleMessageTimelineItem(item)) {
+      closeActivityGroup()
+      entries.push({
+        item,
+        key: item.id,
+        type: 'item',
+      })
+      continue
+    }
+
+    if (isActivityTimelineItem(item)) {
+      addActivityItem(item)
+      continue
+    }
+  }
+
+  return entries
+}
+
+function isVisibleMessageTimelineItem(
+  item: AgentTimelineItem,
+): item is Extract<AgentTimelineItem, { type: 'message' }> {
+  return item.type === 'message' && !isActivityTimelineMessage(item)
+}
+
+function isActivityTimelineItem(item: AgentTimelineItem): item is ActivityTimelineItem {
+  return (
+    item.type === 'tool' ||
+    item.type === 'lifecycle' ||
+    isActivityTimelineMessage(item)
+  )
+}
+
+function isActivityTimelineMessage(
+  item: AgentTimelineItem,
+): item is ActivityTimelineMessage {
+  return item.type === 'message' && (item.blockKind === 'thinking' || item.role === 'tool')
+}
+
+function AgentTimelineEntry({
+  entry,
   isLast,
+}: {
+  entry: TimelineEntry
+  isLast: boolean
+}) {
+  const glyph = isLast ? '└' : '├'
+
+  if (entry.type === 'activity') {
+    return <ActivityTimelineGroup glyph={glyph} items={entry.items} />
+  }
+
+  return <AgentTimelineRow glyph={glyph} item={entry.item} />
+}
+
+function AgentTimelineRow({
+  glyph,
   item,
 }: {
-  isLast: boolean
+  glyph: string
   item: AgentTimelineItem
 }) {
   if (item.type === 'tool') {
-    return <ToolTimelineRow glyph={isLast ? '└' : '├'} item={item} />
+    return <ToolTimelineRow glyph={glyph} item={item} />
   }
 
   if (item.type === 'lifecycle') {
-    return <LifecycleTimelineRow glyph={isLast ? '└' : '├'} item={item} />
+    return <LifecycleTimelineRow glyph={glyph} item={item} />
   }
 
-  return <MessageTimelineRow glyph={isLast ? '└' : '├'} item={item} />
+  return <MessageTimelineRow glyph={glyph} item={item} />
+}
+
+function ActivityTimelineGroup({
+  glyph,
+  items,
+}: {
+  glyph: string
+  items: ActivityTimelineItem[]
+}) {
+  const status = getActivityStatus(items)
+
+  return (
+    <details className={`cbv-agent-terminal-row is-activity is-${status}`}>
+      <summary>
+        <span className="cbv-agent-terminal-glyph">{glyph}</span>
+        <span className="cbv-agent-terminal-row-label">activity</span>
+        <span className="cbv-agent-terminal-row-meta">· {formatActivitySummary(items)}</span>
+      </summary>
+      <div className="cbv-agent-terminal-activity-details">
+        {items.map((item) => {
+          if (item.type === 'tool') {
+            return <ActivityToolDetail item={item} key={item.id} />
+          }
+
+          if (item.type === 'lifecycle') {
+            return <ActivityLifecycleDetail item={item} key={item.id} />
+          }
+
+          return <ActivityMessageDetail item={item} key={item.id} />
+        })}
+      </div>
+    </details>
+  )
+}
+
+function ActivityToolDetail({
+  item,
+}: {
+  item: Extract<AgentTimelineItem, { type: 'tool' }>
+}) {
+  const durationText = item.durationMs === undefined
+    ? null
+    : formatDuration(item.durationMs)
+  const statusText = item.status === 'completed'
+    ? 'ok'
+    : item.status === 'error'
+      ? 'error'
+      : 'running'
+
+  return (
+    <div className={`cbv-agent-terminal-activity-item is-tool is-${item.status}`}>
+      <div className="cbv-agent-terminal-row-line">
+        <span className="cbv-agent-terminal-row-label">{formatToolTitle(item)}</span>
+        {durationText ? <span className="cbv-agent-terminal-row-meta">· {durationText}</span> : null}
+        <span className="cbv-agent-terminal-row-meta">· {statusText}</span>
+      </div>
+      <div className="cbv-agent-terminal-details">
+        {item.paths?.length ? (
+          <p>paths {item.paths.join(' · ')}</p>
+        ) : null}
+        {item.symbolNodeIds?.length ? (
+          <p>symbols {formatSymbolRefs(item.symbolNodeIds)}</p>
+        ) : null}
+        <pre>args {formatJsonPreview(item.args)}</pre>
+        {item.resultPreview ? (
+          <pre>result {item.resultPreview}</pre>
+        ) : null}
+        {item.isError ? <p>error true</p> : null}
+      </div>
+    </div>
+  )
+}
+
+function ActivityMessageDetail({
+  item,
+}: {
+  item: ActivityTimelineMessage
+}) {
+  const isThinking = item.blockKind === 'thinking'
+
+  return (
+    <div className={`cbv-agent-terminal-activity-item is-${isThinking ? 'thinking' : 'tool-result'}`}>
+      <div className="cbv-agent-terminal-row-line">
+        <span className="cbv-agent-terminal-row-label">
+          {isThinking ? 'thinking' : 'tool result'}
+        </span>
+        <span className="cbv-agent-terminal-row-meta">
+          · {item.isStreaming ? 'streaming' : 'done'}
+        </span>
+      </div>
+      <pre>{item.text || '...'}</pre>
+    </div>
+  )
+}
+
+function ActivityLifecycleDetail({
+  item,
+}: {
+  item: Extract<AgentTimelineItem, { type: 'lifecycle' }>
+}) {
+  const detail = formatLifecycleDetail(item)
+
+  return (
+    <div className={`cbv-agent-terminal-activity-item is-lifecycle is-${item.status ?? 'idle'}`}>
+      <div className="cbv-agent-terminal-row-line">
+        <span className="cbv-agent-terminal-row-label">{item.label}</span>
+        {detail ? (
+          <span className="cbv-agent-terminal-row-meta">· {detail}</span>
+        ) : null}
+      </div>
+      {item.detail ? (
+        <p className="cbv-agent-terminal-detail-line">{item.detail}</p>
+      ) : null}
+    </div>
+  )
+}
+
+function getActivityStatus(items: ActivityTimelineItem[]) {
+  if (items.some((item) => item.type === 'tool' && item.status === 'error')) {
+    return 'error'
+  }
+
+  if (items.some((item) => (
+    item.type === 'tool'
+      ? item.status === 'running'
+      : item.type === 'lifecycle'
+        ? item.status === 'running' || item.status === 'queued'
+        : item.isStreaming
+  ))) {
+    return 'running'
+  }
+
+  return 'completed'
+}
+
+function formatActivitySummary(items: ActivityTimelineItem[]) {
+  const toolCallCount = items.filter((item) => item.type === 'tool').length
+  const toolResultCount = items.filter(
+    (item) => item.type === 'message' && item.role === 'tool',
+  ).length
+  const thinkingCount = items.filter(
+    (item) => item.type === 'message' && item.blockKind === 'thinking',
+  ).length
+  const lifecycleCount = items.filter((item) => item.type === 'lifecycle').length
+  const status = getActivityStatus(items)
+  const parts = [
+    toolCallCount > 0
+      ? `${toolCallCount} tool call${toolCallCount === 1 ? '' : 's'}`
+      : '',
+    toolResultCount > 0
+      ? `${toolResultCount} tool result${toolResultCount === 1 ? '' : 's'}`
+      : '',
+    thinkingCount > 0 ? `${thinkingCount} thinking` : '',
+    lifecycleCount > 0
+      ? `${lifecycleCount} event${lifecycleCount === 1 ? '' : 's'}`
+      : '',
+    status !== 'completed' ? status : '',
+  ].filter(Boolean)
+
+  return parts.join(' · ')
 }
 
 function MessageTimelineRow({
@@ -86,8 +356,10 @@ function MessageTimelineRow({
     >
       <div className="cbv-agent-terminal-row-line">
         <span className="cbv-agent-terminal-glyph">{glyph}</span>
-        <span>{rowLabel}</span>
-        {item.isStreaming ? <span>· streaming</span> : null}
+        <span className="cbv-agent-terminal-row-label">{rowLabel}</span>
+        {item.isStreaming ? (
+          <span className="cbv-agent-terminal-row-meta">· streaming</span>
+        ) : null}
       </div>
       <div className="cbv-agent-terminal-message-body">
         {item.text || (item.role === 'assistant' ? '...' : ' ')}
@@ -116,7 +388,6 @@ function ToolTimelineRow({
   return (
     <details
       className={`cbv-agent-terminal-row is-tool is-${item.status}`}
-      open={item.status !== 'completed'}
     >
       <summary>
         <span className="cbv-agent-terminal-glyph">{glyph}</span>

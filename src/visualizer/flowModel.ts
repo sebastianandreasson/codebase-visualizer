@@ -159,11 +159,15 @@ const CLUSTERABLE_SYMBOL_KINDS = new Set([
 ])
 const EXPANDED_CLUSTER_CHILD_WIDTH = 188
 const EXPANDED_CLUSTER_CHILD_HEIGHT = 82
+const EXPANDED_CLUSTER_CHILD_MAX_WIDTH = 280
+const EXPANDED_CLUSTER_CHILD_MAX_HEIGHT = 104
 const EXPANDED_CLUSTER_GAP_X = 14
 const EXPANDED_CLUSTER_GAP_Y = 12
 const EXPANDED_CLUSTER_PADDING_X = 14
 const EXPANDED_CLUSTER_PADDING_TOP = 18
 const EXPANDED_CLUSTER_PADDING_BOTTOM = 14
+const EXPANDED_CLUSTER_PACK_MAX_INNER_WIDTH = 1_760
+const EXPANDED_CLUSTER_PACK_ASPECT_WEIGHT = 1.16
 const DEFAULT_NODE_WIDTH = DEFAULT_SYMBOL_FOOTPRINT_WIDTH
 const DEFAULT_NODE_HEIGHT = DEFAULT_SYMBOL_FOOTPRINT_HEIGHT
 const FILESYSTEM_CONTAINER_PADDING_RIGHT = 18
@@ -1816,27 +1820,6 @@ export function buildExpandedClusterLayouts(
       continue
     }
 
-    memberIds.sort((leftId, rightId) => {
-      const leftPlacement = layout.placements[leftId]
-      const rightPlacement = layout.placements[rightId]
-      const leftY = leftPlacement?.y ?? Number.MAX_SAFE_INTEGER
-      const rightY = rightPlacement?.y ?? Number.MAX_SAFE_INTEGER
-
-      if (leftY !== rightY) {
-        return leftY - rightY
-      }
-
-      const leftX = leftPlacement?.x ?? Number.MAX_SAFE_INTEGER
-      const rightX = rightPlacement?.x ?? Number.MAX_SAFE_INTEGER
-
-      if (leftX !== rightX) {
-        return leftX - rightX
-      }
-
-      return leftId.localeCompare(rightId)
-    })
-
-    const columns = Math.max(1, Math.min(3, Math.ceil(Math.sqrt(memberIds.length))))
     const childPlacements: ExpandedClusterLayout['childPlacements'] = {}
     const childIdsByOwner = new Map<string, string[]>()
 
@@ -1864,182 +1847,253 @@ export function buildExpandedClusterLayouts(
 
       sizeByNodeId.set(
         memberId,
-        symbolFootprints?.get(memberId, { contained: true }) ??
-          getSymbolNodeFootprint(
-            memberNode,
-            layout.placements[memberId],
-            { contained: true },
-            1,
-            snapshot,
-          ),
-      )
-    }
-
-    const subtreeWidthByNodeId = new Map<string, number>()
-    const computeSubtreeWidth = (nodeId: string): number => {
-      const existingWidth = subtreeWidthByNodeId.get(nodeId)
-
-      if (existingWidth != null) {
-        return existingWidth
-      }
-
-      const childIds = childIdsByOwner.get(nodeId) ?? []
-      const nodeWidth =
-        sizeByNodeId.get(nodeId)?.width ??
-        (nodeId === cluster.rootNodeId ? rootWidth : EXPANDED_CLUSTER_CHILD_WIDTH)
-
-      if (childIds.length === 0) {
-        subtreeWidthByNodeId.set(nodeId, nodeWidth)
-        return nodeWidth
-      }
-
-      const childrenWidth = childIds.reduce(
-        (total, childId, index) =>
-          total +
-          computeSubtreeWidth(childId) +
-          (index > 0 ? EXPANDED_CLUSTER_GAP_X : 0),
-        0,
-      )
-      const subtreeWidth = Math.max(nodeWidth, childrenWidth)
-      subtreeWidthByNodeId.set(nodeId, subtreeWidth)
-      return subtreeWidth
-    }
-
-    const depthByNodeId = new Map<string, number>()
-    const computeDepth = (nodeId: string): number => {
-      const existingDepth = depthByNodeId.get(nodeId)
-
-      if (existingDepth != null) {
-        return existingDepth
-      }
-
-      const ownerId = cluster.ownerByMemberNodeId[nodeId]
-      const depth = ownerId && ownerId !== cluster.rootNodeId ? computeDepth(ownerId) + 1 : 1
-      depthByNodeId.set(nodeId, depth)
-      return depth
-    }
-
-    let maxDepth = 1
-
-    const placeSubtree = (ownerId: string, startX: number) => {
-      const childIds = childIdsByOwner.get(ownerId) ?? []
-      let currentX = startX
-
-      for (const childId of childIds) {
-        const memberNode = snapshot.nodes[childId]
-
-        if (!memberNode || !isSymbolNode(memberNode)) {
-          continue
-        }
-
-        const memberDimensions =
-          sizeByNodeId.get(childId) ??
-          symbolFootprints?.get(childId, { contained: true }) ??
-          getSymbolNodeFootprint(
-            memberNode,
-            layout.placements[childId],
-            { contained: true },
-            1,
-            snapshot,
-          )
-        const subtreeWidth = computeSubtreeWidth(childId)
-        const depth = computeDepth(childId)
-        maxDepth = Math.max(maxDepth, depth)
-
-        childPlacements[childId] = {
-          x: currentX + Math.max(0, (subtreeWidth - memberDimensions.width) / 2),
-          y:
-            rootHeight +
-            EXPANDED_CLUSTER_PADDING_TOP +
-            (depth - 1) * (EXPANDED_CLUSTER_CHILD_HEIGHT + EXPANDED_CLUSTER_GAP_Y),
-          width: memberDimensions.width,
-          height: memberDimensions.height,
-        }
-
-        placeSubtree(childId, currentX)
-        currentX += subtreeWidth + EXPANDED_CLUSTER_GAP_X
-      }
-    }
-
-    const rootChildren = childIdsByOwner.get(cluster.rootNodeId) ?? []
-    const childTreeWidth = rootChildren.reduce(
-      (total, childId, index) =>
-        total + computeSubtreeWidth(childId) + (index > 0 ? EXPANDED_CLUSTER_GAP_X : 0),
-      0,
-    )
-    const innerWidth = Math.max(
-      rootWidth,
-      childTreeWidth,
-      columns * EXPANDED_CLUSTER_CHILD_WIDTH +
-        Math.max(0, columns - 1) * EXPANDED_CLUSTER_GAP_X,
-    )
-    const initialX =
-      EXPANDED_CLUSTER_PADDING_X + Math.max(0, (innerWidth - childTreeWidth) / 2)
-
-    placeSubtree(cluster.rootNodeId, initialX)
-
-    const depthBandCount = Math.max(
-      1,
-      ...Object.values(childPlacements).map((placement) =>
-        Math.round(
-          (placement.y - rootHeight - EXPANDED_CLUSTER_PADDING_TOP) /
-            (EXPANDED_CLUSTER_CHILD_HEIGHT + EXPANDED_CLUSTER_GAP_Y),
-        ) + 1,
-      ),
-    )
-
-    for (const memberId of memberIds) {
-      const memberNode = snapshot.nodes[memberId]
-
-      if (!memberNode || !isSymbolNode(memberNode) || childPlacements[memberId]) {
-        continue
-      }
-
-      const memberDimensions =
-        symbolFootprints?.get(memberId, { contained: true }) ??
-        getSymbolNodeFootprint(
+        getExpandedClusterMemberDimensions(
           memberNode,
           layout.placements[memberId],
-          { contained: true },
-          1,
           snapshot,
-        )
-
-      childPlacements[memberId] = {
-        x:
-          EXPANDED_CLUSTER_PADDING_X +
-          Object.keys(childPlacements).length *
-            (EXPANDED_CLUSTER_CHILD_WIDTH + EXPANDED_CLUSTER_GAP_X),
-        y:
-          rootHeight +
-          EXPANDED_CLUSTER_PADDING_TOP +
-          depthBandCount * (EXPANDED_CLUSTER_CHILD_HEIGHT + EXPANDED_CLUSTER_GAP_Y),
-        width: memberDimensions.width,
-        height: memberDimensions.height,
-      }
+          symbolFootprints,
+        ),
+      )
     }
 
-    const width = Math.max(
-      rootWidth,
-      EXPANDED_CLUSTER_PADDING_X * 2 +
-        innerWidth,
+    const orderedMemberIds = getExpandedClusterMemberOrder(
+      memberIds,
+      cluster,
+      childIdsByOwner,
+      layout,
+      snapshot,
     )
-    const height =
-      rootHeight +
-      EXPANDED_CLUSTER_PADDING_TOP +
-      Math.max(1, maxDepth) * EXPANDED_CLUSTER_CHILD_HEIGHT +
-      Math.max(0, Math.max(1, maxDepth) - 1) * EXPANDED_CLUSTER_GAP_Y +
-      EXPANDED_CLUSTER_PADDING_BOTTOM
+    const packedLayout = packExpandedClusterMembers(
+      orderedMemberIds,
+      sizeByNodeId,
+      rootWidth,
+      rootHeight,
+    )
+
+    Object.assign(childPlacements, packedLayout.childPlacements)
 
     layouts.set(cluster.id, {
       rootNodeId: cluster.rootNodeId,
-      width,
-      height,
+      width: packedLayout.width,
+      height: packedLayout.height,
       childPlacements,
     })
   }
 
   return layouts
+}
+
+function getExpandedClusterMemberDimensions(
+  memberNode: SymbolNode,
+  placement: LayoutSpec['placements'][string] | undefined,
+  snapshot: CodebaseSnapshot,
+  symbolFootprints: SymbolFootprintLookup | undefined,
+): SymbolFootprint {
+  const footprint =
+    symbolFootprints?.get(memberNode.id, { contained: true }) ??
+    getSymbolNodeFootprint(
+      memberNode,
+      placement,
+      { contained: true },
+      1,
+      snapshot,
+    )
+
+  return {
+    ...footprint,
+    width: Math.round(
+      clamp(
+        footprint.width,
+        EXPANDED_CLUSTER_CHILD_WIDTH,
+        EXPANDED_CLUSTER_CHILD_MAX_WIDTH,
+      ),
+    ),
+    height: Math.round(
+      clamp(
+        footprint.height,
+        EXPANDED_CLUSTER_CHILD_HEIGHT,
+        EXPANDED_CLUSTER_CHILD_MAX_HEIGHT,
+      ),
+    ),
+    compact: true,
+  }
+}
+
+function getExpandedClusterMemberOrder(
+  memberIds: string[],
+  cluster: SymbolCluster,
+  childIdsByOwner: Map<string, string[]>,
+  layout: LayoutSpec,
+  snapshot: CodebaseSnapshot,
+) {
+  const orderedMemberIds: string[] = []
+  const visited = new Set<string>()
+
+  const visitChildren = (ownerId: string) => {
+    for (const childId of childIdsByOwner.get(ownerId) ?? []) {
+      if (visited.has(childId)) {
+        continue
+      }
+
+      visited.add(childId)
+      orderedMemberIds.push(childId)
+      visitChildren(childId)
+    }
+  }
+
+  visitChildren(cluster.rootNodeId)
+
+  for (const memberId of [...memberIds].sort((leftId, rightId) =>
+    compareClusterMemberOrder(leftId, rightId, layout, snapshot),
+  )) {
+    if (visited.has(memberId)) {
+      continue
+    }
+
+    visited.add(memberId)
+    orderedMemberIds.push(memberId)
+  }
+
+  return orderedMemberIds
+}
+
+function packExpandedClusterMembers(
+  memberIds: string[],
+  sizeByNodeId: Map<string, SymbolFootprint>,
+  rootWidth: number,
+  rootHeight: number,
+) {
+  const rowWidthLimit = getExpandedClusterTargetInnerWidth(
+    memberIds,
+    sizeByNodeId,
+    rootWidth,
+  )
+  const rows: Array<{
+    height: number
+    ids: string[]
+    width: number
+  }> = []
+  let currentRow: { height: number; ids: string[]; width: number } | null = null
+
+  for (const memberId of memberIds) {
+    const memberDimensions = sizeByNodeId.get(memberId)
+
+    if (!memberDimensions) {
+      continue
+    }
+
+    const nextWidth =
+      currentRow && currentRow.ids.length > 0
+        ? currentRow.width + EXPANDED_CLUSTER_GAP_X + memberDimensions.width
+        : memberDimensions.width
+
+    if (
+      currentRow &&
+      currentRow.ids.length > 0 &&
+      nextWidth > rowWidthLimit
+    ) {
+      rows.push(currentRow)
+      currentRow = null
+    }
+
+    if (!currentRow) {
+      currentRow = {
+        height: memberDimensions.height,
+        ids: [memberId],
+        width: memberDimensions.width,
+      }
+      continue
+    }
+
+    currentRow.ids.push(memberId)
+    currentRow.width = nextWidth
+    currentRow.height = Math.max(currentRow.height, memberDimensions.height)
+  }
+
+  if (currentRow && currentRow.ids.length > 0) {
+    rows.push(currentRow)
+  }
+
+  const innerWidth = Math.max(
+    Math.max(0, rootWidth - EXPANDED_CLUSTER_PADDING_X * 2),
+    ...rows.map((row) => row.width),
+  )
+  const childPlacements: ExpandedClusterLayout['childPlacements'] = {}
+  let currentY = rootHeight + EXPANDED_CLUSTER_PADDING_TOP
+
+  for (const row of rows) {
+    let currentX =
+      EXPANDED_CLUSTER_PADDING_X + Math.max(0, (innerWidth - row.width) / 2)
+
+    for (const memberId of row.ids) {
+      const memberDimensions = sizeByNodeId.get(memberId)
+
+      if (!memberDimensions) {
+        continue
+      }
+
+      childPlacements[memberId] = {
+        x: currentX,
+        y: currentY + Math.max(0, (row.height - memberDimensions.height) / 2),
+        width: memberDimensions.width,
+        height: memberDimensions.height,
+      }
+      currentX += memberDimensions.width + EXPANDED_CLUSTER_GAP_X
+    }
+
+    currentY += row.height + EXPANDED_CLUSTER_GAP_Y
+  }
+
+  const packedHeight =
+    rows.length > 0 ? currentY - EXPANDED_CLUSTER_GAP_Y : rootHeight
+
+  return {
+    width: Math.max(rootWidth, innerWidth + EXPANDED_CLUSTER_PADDING_X * 2),
+    height:
+      rows.length > 0
+        ? packedHeight + EXPANDED_CLUSTER_PADDING_BOTTOM
+        : rootHeight,
+    childPlacements,
+  }
+}
+
+function getExpandedClusterTargetInnerWidth(
+  memberIds: string[],
+  sizeByNodeId: Map<string, SymbolFootprint>,
+  rootWidth: number,
+) {
+  const memberSizes = memberIds
+    .map((memberId) => sizeByNodeId.get(memberId))
+    .filter((size): size is SymbolFootprint => Boolean(size))
+
+  if (memberSizes.length === 0) {
+    return Math.max(0, rootWidth - EXPANDED_CLUSTER_PADDING_X * 2)
+  }
+
+  const maxChildWidth = Math.max(...memberSizes.map((size) => size.width))
+  const minInnerWidth = Math.max(
+    Math.max(0, rootWidth - EXPANDED_CLUSTER_PADDING_X * 2),
+    maxChildWidth,
+  )
+  const packedArea = memberSizes.reduce(
+    (sum, size) =>
+      sum +
+      (size.width + EXPANDED_CLUSTER_GAP_X) *
+        (size.height + EXPANDED_CLUSTER_GAP_Y),
+    0,
+  )
+  const areaBalancedWidth =
+    Math.sqrt(packedArea) * EXPANDED_CLUSTER_PACK_ASPECT_WEIGHT
+  const maxInnerWidth = Math.max(
+    minInnerWidth,
+    EXPANDED_CLUSTER_PACK_MAX_INNER_WIDTH,
+  )
+
+  return clamp(
+    Math.max(minInnerWidth, areaBalancedWidth),
+    minInnerWidth,
+    maxInnerWidth,
+  )
 }
 
 function compareClusterMemberOrder(

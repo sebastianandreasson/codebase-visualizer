@@ -1,4 +1,5 @@
 import {
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -33,6 +34,7 @@ import type {
   AgentAuthMode,
   AgentControlState,
   AgentEvent,
+  AgentSessionListItem,
   AgentSessionSummary,
   AgentSettingsState,
   AgentTimelineItem,
@@ -90,6 +92,7 @@ export function useAgentSessionController({
   })
   const [timeline, setTimeline] = useState<AgentTimelineItem[]>([])
   const [session, setSession] = useState<AgentSessionSummary | null>(null)
+  const [availableSessions, setAvailableSessions] = useState<AgentSessionListItem[]>([])
   const [controls, setControls] = useState<AgentControlState | null>(null)
   const [settings, setSettings] = useState<AgentSettingsState | null>(null)
   const {
@@ -98,8 +101,11 @@ export function useAgentSessionController({
     updateSettingsDraft,
   } = useAgentSettingsDraft()
   const [pending, setPending] = useState(false)
+  const [sessionListPending, setSessionListPending] = useState(false)
+  const [sessionActionPendingPath, setSessionActionPendingPath] = useState<string | null>(null)
   const [settingsPending, setSettingsPending] = useState(false)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
+  const [sessionListErrorMessage, setSessionListErrorMessage] = useState<string | null>(null)
   const [oauthStatusMessage, setOauthStatusMessage] = useState<string | null>(null)
   const [oauthLoginUrl, setOauthLoginUrl] = useState<string | null>(null)
   const messageListRef = useRef<HTMLDivElement | null>(null)
@@ -179,6 +185,22 @@ export function useAgentSessionController({
       window.clearInterval(intervalId)
     }
   }, [agentClient, desktopHostAvailable])
+
+  const refreshSessionList = useCallback(async () => {
+    try {
+      setSessionListPending(true)
+      const result = await agentClient.listSessions()
+
+      setAvailableSessions(result.sessions)
+      setSessionListErrorMessage(null)
+    } catch (error) {
+      setSessionListErrorMessage(
+        error instanceof Error ? error.message : 'Failed to list local chat sessions.',
+      )
+    } finally {
+      setSessionListPending(false)
+    }
+  }, [agentClient])
 
   useEffect(() => {
     let cancelled = false
@@ -314,6 +336,10 @@ export function useAgentSessionController({
         if (event.type === 'session_created' || event.type === 'session_updated') {
           void syncControls()
         }
+
+        if (event.type === 'session_created' && !settingsOnly) {
+          void refreshSessionList()
+        }
       })
     }
 
@@ -336,7 +362,9 @@ export function useAgentSessionController({
     agentClient,
     applySettingsDraftFromSettings,
     bridgeInfo.hasAgentBridge,
+    refreshSessionList,
     settingsDraftDirty,
+    settingsOnly,
   ])
 
   useEffect(() => {
@@ -413,6 +441,13 @@ export function useAgentSessionController({
     id: session?.modelId ?? modelValue,
     provider: session?.provider ?? providerValue,
   })
+  useEffect(() => {
+    if (settingsOnly) {
+      return
+    }
+
+    void refreshSessionList()
+  }, [refreshSessionList, session?.id, settingsOnly])
 
   useEffect(() => {
     if (!autoFocusComposer || settingsOnly || !sessionIsInteractive) {
@@ -444,6 +479,10 @@ export function useAgentSessionController({
       const localCommandName = getLocalCommandName(nextPrompt)
 
       if (await handleLocalCommand(nextPrompt)) {
+        if (localCommandName === 'new' || localCommandName === 'resume') {
+          await refreshSessionList()
+        }
+
         if (localCommandName === 'clear') {
           onChatSessionCleared?.(sessionRef.current)
         }
@@ -560,6 +599,153 @@ export function useAgentSessionController({
         error instanceof Error ? error.message : 'Failed to switch the agent model.',
       )
     } finally {
+      setPending(false)
+    }
+  }
+
+  async function handleThinkingLevelChange(
+    nextThinkingLevel: NonNullable<AgentSessionSummary['thinkingLevel']>,
+  ) {
+    if (
+      !nextThinkingLevel ||
+      nextThinkingLevel === sessionRef.current?.thinkingLevel ||
+      pending
+    ) {
+      return
+    }
+
+    if (!getSessionCapabilities(sessionRef.current).setThinkingLevel) {
+      setErrorMessage('Thinking level changes are not available for the current agent runtime.')
+      return
+    }
+
+    try {
+      setPending(true)
+      setErrorMessage(null)
+
+      const nextSession = await agentClient.setThinkingLevel(nextThinkingLevel)
+      const state = await agentClient.getHttpState()
+      const nextControls = await agentClient.getControls().catch(() => null)
+
+      if (nextControls) {
+        applyControls(nextControls)
+      }
+      applySessionState(nextSession ?? state.session, state.timeline ?? [])
+    } catch (error) {
+      setErrorMessage(
+        error instanceof Error ? error.message : 'Failed to change the thinking level.',
+      )
+    } finally {
+      setPending(false)
+    }
+  }
+
+  async function handleNewSession() {
+    if (pending || sessionActionPendingPath) {
+      return
+    }
+
+    if (!getSessionCapabilities(sessionRef.current).newSession) {
+      setSessionListErrorMessage('New sessions are not available for the current agent runtime.')
+      return
+    }
+
+    try {
+      setPending(true)
+      setSessionActionPendingPath('__new__')
+      setErrorMessage(null)
+      setSessionListErrorMessage(null)
+
+      const nextSession = await agentClient.newSession()
+      const state = await agentClient.getHttpState()
+      const nextControls = await agentClient.getControls().catch(() => null)
+
+      if (nextControls) {
+        applyControls(nextControls)
+      }
+      applySessionState(nextSession ?? state.session, state.timeline ?? [])
+      await refreshSessionList()
+    } catch (error) {
+      setSessionListErrorMessage(
+        error instanceof Error ? error.message : 'Failed to start a new chat session.',
+      )
+    } finally {
+      setSessionActionPendingPath(null)
+      setPending(false)
+    }
+  }
+
+  async function handleResumeSession(sessionToResume: AgentSessionListItem) {
+    if (pending || sessionActionPendingPath) {
+      return
+    }
+
+    if (!getSessionCapabilities(sessionRef.current).resumeSession) {
+      setSessionListErrorMessage('Resume is only available for pi SDK sessions.')
+      return
+    }
+
+    if (sessionRef.current?.sessionFile === sessionToResume.path) {
+      return
+    }
+
+    try {
+      setPending(true)
+      setSessionActionPendingPath(sessionToResume.path)
+      setErrorMessage(null)
+      setSessionListErrorMessage(null)
+
+      const nextSession = await agentClient.resumeSession(sessionToResume.path)
+      const state = await agentClient.getHttpState()
+      const nextControls = await agentClient.getControls().catch(() => null)
+
+      if (nextControls) {
+        applyControls(nextControls)
+      }
+      applySessionState(nextSession ?? state.session, state.timeline ?? [])
+      await refreshSessionList()
+    } catch (error) {
+      setSessionListErrorMessage(
+        error instanceof Error ? error.message : 'Failed to resume the selected chat session.',
+      )
+    } finally {
+      setSessionActionPendingPath(null)
+      setPending(false)
+    }
+  }
+
+  async function handleDeleteSession(sessionToDelete: AgentSessionListItem) {
+    if (sessionActionPendingPath) {
+      return
+    }
+
+    const title = sessionToDelete.name?.trim() || sessionToDelete.preview || sessionToDelete.id
+    const confirmed = window.confirm(`Delete local chat session "${title}"?`)
+
+    if (!confirmed) {
+      return
+    }
+
+    try {
+      setPending(true)
+      setSessionActionPendingPath(sessionToDelete.path)
+      setErrorMessage(null)
+      setSessionListErrorMessage(null)
+
+      const state = await agentClient.deleteSession(sessionToDelete.path)
+      const nextControls = await agentClient.getControls().catch(() => null)
+
+      if (nextControls) {
+        applyControls(nextControls)
+      }
+      applySessionState(state.session, state.timeline ?? [])
+      await refreshSessionList()
+    } catch (error) {
+      setSessionListErrorMessage(
+        error instanceof Error ? error.message : 'Failed to delete the selected chat session.',
+      )
+    } finally {
+      setSessionActionPendingPath(null)
       setPending(false)
     }
   }
@@ -698,6 +884,7 @@ export function useAgentSessionController({
   return {
     apiKeyValue,
     authModeValue,
+    availableSessions,
     availableModels,
     commandSuggestions,
     composerRef,
@@ -710,9 +897,13 @@ export function useAgentSessionController({
     handleCompleteManualRedirect,
     handleComposerChange,
     handleImportCodexLogin,
+    handleDeleteSession,
+    handleNewSession,
+    handleResumeSession,
     handleSaveSettings,
     handleStartBrokeredLogin,
     handleSubmit,
+    handleThinkingLevelChange,
     handleTerminalModelChange,
     handleTimelineScroll,
     hasInspectorContext,
@@ -729,9 +920,12 @@ export function useAgentSessionController({
     selectedModelKey,
     sendDisabledReason,
     session,
+    sessionActionPendingPath,
     sessionCapabilities,
     sessionControls,
     sessionIsInteractive,
+    sessionListErrorMessage,
+    sessionListPending,
     settings,
     settingsPending,
     terminalModelOptions,
