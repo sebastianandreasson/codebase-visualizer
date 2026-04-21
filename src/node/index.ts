@@ -1,5 +1,11 @@
 export { readProjectSnapshot } from './readProjectSnapshot'
-export { createRustLanguageAdapter, createTsJsLanguageAdapter } from './analysis'
+export {
+  createDartLanguageAdapter,
+  createGoLanguageAdapter,
+  createPythonLanguageAdapter,
+  createRustLanguageAdapter,
+  createTsJsLanguageAdapter,
+} from './analysis'
 export { createReactProjectPlugin } from './project-plugins/react'
 export type {
   LanguageAdapter,

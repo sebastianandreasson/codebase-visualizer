@@ -18,6 +18,7 @@ import type {
 } from '../../schema/snapshot'
 
 import { buildJsCallGraph } from '../jsCallgraph'
+import { normalizeRoutePattern } from '../apiEndpointResolver'
 import { createEmptySymbolIndex, registerSymbolNodes } from '../symbolIndex'
 
 const IMPORTABLE_EXTENSIONS = new Set([
@@ -65,6 +66,36 @@ interface AstCallResolutionContext {
   importBindingsByFile: Map<string, Map<string, ImportBinding>>
   symbolsByFile: Map<string, SymbolNode[]>
 }
+
+interface HttpClientRequest {
+  client: string
+  confidence: number
+  method: string
+  normalizedPath: string
+  pathTemplate: string
+  range: SourceRange
+  subjectId: string
+}
+
+interface HttpServerEndpoint {
+  confidence: number
+  framework: string
+  method: string
+  normalizedRoutePattern: string
+  routePattern: string
+  range: SourceRange
+  subjectId: string
+}
+
+const HTTP_METHOD_NAMES = new Set([
+  'delete',
+  'get',
+  'head',
+  'options',
+  'patch',
+  'post',
+  'put',
+])
 
 export function createTsJsLanguageAdapter(): LanguageAdapter {
   return {
@@ -1033,9 +1064,480 @@ function extractAnalysisFacts(
         }))
       }
     }
+
+    for (const request of collectHttpClientRequests(
+      fileNode,
+      sourceFile,
+      fileSymbolContexts,
+    )) {
+      facts.push(createFact(fileNode.path, 'http_client_request', request.subjectId, {
+        client: request.client,
+        column: request.range.start.column,
+        confidence: request.confidence,
+        line: request.range.start.line,
+        method: request.method,
+        normalizedPath: request.normalizedPath,
+        pathTemplate: request.pathTemplate,
+      }))
+    }
+
+    for (const endpoint of collectHttpServerEndpoints(
+      fileNode,
+      sourceFile,
+      fileSymbolContexts,
+    )) {
+      facts.push(createFact(fileNode.path, 'http_server_endpoint', endpoint.subjectId, {
+        column: endpoint.range.start.column,
+        confidence: endpoint.confidence,
+        framework: endpoint.framework,
+        line: endpoint.range.start.line,
+        method: endpoint.method,
+        normalizedRoutePattern: endpoint.normalizedRoutePattern,
+        routePattern: endpoint.routePattern,
+      }))
+    }
   }
 
   return dedupeFacts(facts)
+}
+
+function collectHttpClientRequests(
+  fileNode: FileNode,
+  sourceFile: ts.SourceFile,
+  symbolContexts: ExtractedSymbolContext[],
+) {
+  const requests: HttpClientRequest[] = []
+
+  function visit(node: ts.Node) {
+    if (ts.isCallExpression(node)) {
+      const request = parseHttpClientRequest(node, sourceFile)
+
+      if (request) {
+        const sourceSymbol = findEnclosingSymbolContext(node, sourceFile, symbolContexts)
+        requests.push({
+          ...request,
+          subjectId: sourceSymbol?.symbolNode.id ?? fileNode.id,
+        })
+      }
+    }
+
+    ts.forEachChild(node, visit)
+  }
+
+  visit(sourceFile)
+  return requests
+}
+
+function parseHttpClientRequest(
+  node: ts.CallExpression,
+  sourceFile: ts.SourceFile,
+): Omit<HttpClientRequest, 'subjectId'> | null {
+  const expression = unwrapExpression(node.expression)
+  const fetchRequest = parseFetchRequest(expression, node, sourceFile)
+
+  if (fetchRequest) {
+    return fetchRequest
+  }
+
+  const methodRequest = parseMethodClientRequest(expression, node, sourceFile)
+
+  if (methodRequest) {
+    return methodRequest
+  }
+
+  return null
+}
+
+function parseFetchRequest(
+  expression: ts.Expression,
+  node: ts.CallExpression,
+  sourceFile: ts.SourceFile,
+): Omit<HttpClientRequest, 'subjectId'> | null {
+  if (!ts.isIdentifier(expression) || expression.text !== 'fetch') {
+    return null
+  }
+
+  const url = extractUrlTemplate(node.arguments[0])
+
+  if (!url) {
+    return null
+  }
+
+  return createHttpClientRequest({
+    client: 'fetch',
+    method: extractFetchMethod(node.arguments[1]) ?? 'GET',
+    node,
+    sourceFile,
+    url,
+    confidence: url.confidence,
+  })
+}
+
+function parseMethodClientRequest(
+  expression: ts.Expression,
+  node: ts.CallExpression,
+  sourceFile: ts.SourceFile,
+): Omit<HttpClientRequest, 'subjectId'> | null {
+  if (!ts.isPropertyAccessExpression(expression)) {
+    return null
+  }
+
+  const methodName = expression.name.text.toLowerCase()
+
+  if (!HTTP_METHOD_NAMES.has(methodName)) {
+    return null
+  }
+
+  if (isLikelyServerRouterReceiver(expression.expression)) {
+    return null
+  }
+
+  const url = extractUrlTemplate(node.arguments[0])
+
+  if (!url) {
+    return null
+  }
+
+  return createHttpClientRequest({
+    client: getExpressionText(expression.expression),
+    method: methodName.toUpperCase(),
+    node,
+    sourceFile,
+    url,
+    confidence: Math.min(0.88, url.confidence),
+  })
+}
+
+function collectHttpServerEndpoints(
+  fileNode: FileNode,
+  sourceFile: ts.SourceFile,
+  symbolContexts: ExtractedSymbolContext[],
+) {
+  const symbolByName = new Map(
+    symbolContexts.map((symbolContext) => [
+      symbolContext.symbolNode.name,
+      symbolContext.symbolNode,
+    ]),
+  )
+  const endpoints: HttpServerEndpoint[] = []
+
+  function visit(node: ts.Node) {
+    if (ts.isCallExpression(node)) {
+      const endpoint = parseHttpServerEndpoint(
+        node,
+        sourceFile,
+        fileNode,
+        symbolByName,
+      )
+
+      if (endpoint) {
+        endpoints.push(endpoint)
+      }
+    }
+
+    ts.forEachChild(node, visit)
+  }
+
+  visit(sourceFile)
+  return endpoints
+}
+
+function parseHttpServerEndpoint(
+  node: ts.CallExpression,
+  sourceFile: ts.SourceFile,
+  fileNode: FileNode,
+  symbolByName: Map<string, SymbolNode>,
+): HttpServerEndpoint | null {
+  const expression = unwrapExpression(node.expression)
+
+  if (!ts.isPropertyAccessExpression(expression)) {
+    return null
+  }
+
+  const directRoute = parseDirectServerRouteExpression(expression, node)
+  const chainedRoute = parseChainedServerRouteExpression(expression, node)
+  const route = directRoute ?? chainedRoute
+
+  if (!route) {
+    return null
+  }
+
+  const normalizedRoutePattern = normalizeRoutePattern(route.routePattern)
+
+  if (!normalizedRoutePattern) {
+    return null
+  }
+
+  return {
+    confidence: route.subjectId === fileNode.id ? 0.72 : 0.88,
+    framework: route.framework,
+    method: route.method,
+    normalizedRoutePattern,
+    routePattern: route.routePattern,
+    range: getSourceRange(node, sourceFile),
+    subjectId: route.subjectId,
+  }
+
+  function parseDirectServerRouteExpression(
+    expression: ts.PropertyAccessExpression,
+    node: ts.CallExpression,
+  ) {
+    const method = expression.name.text.toLowerCase()
+
+    if (method !== 'all' && !HTTP_METHOD_NAMES.has(method)) {
+      return null
+    }
+
+    if (!isLikelyServerRouterReceiver(expression.expression)) {
+      return null
+    }
+
+    const url = extractUrlTemplate(node.arguments[0])
+
+    if (!url) {
+      return null
+    }
+
+    return {
+      framework: 'express',
+      method: method === 'all' ? 'ANY' : method.toUpperCase(),
+      routePattern: url.pathTemplate,
+      subjectId: resolveHandlerSubjectId(node.arguments.slice(1), symbolByName, fileNode.id),
+    }
+  }
+
+  function parseChainedServerRouteExpression(
+    expression: ts.PropertyAccessExpression,
+    node: ts.CallExpression,
+  ) {
+    const method = expression.name.text.toLowerCase()
+
+    if (method !== 'all' && !HTTP_METHOD_NAMES.has(method)) {
+      return null
+    }
+
+    const routeCall = unwrapExpression(expression.expression)
+
+    if (!ts.isCallExpression(routeCall)) {
+      return null
+    }
+
+    const routeExpression = unwrapExpression(routeCall.expression)
+
+    if (
+      !ts.isPropertyAccessExpression(routeExpression) ||
+      routeExpression.name.text !== 'route' ||
+      !isLikelyServerRouterReceiver(routeExpression.expression)
+    ) {
+      return null
+    }
+
+    const url = extractUrlTemplate(routeCall.arguments[0])
+
+    if (!url) {
+      return null
+    }
+
+    return {
+      framework: 'express',
+      method: method === 'all' ? 'ANY' : method.toUpperCase(),
+      routePattern: url.pathTemplate,
+      subjectId: resolveHandlerSubjectId(node.arguments, symbolByName, fileNode.id),
+    }
+  }
+}
+
+function resolveHandlerSubjectId(
+  args: readonly ts.Expression[],
+  symbolByName: Map<string, SymbolNode>,
+  fallbackSubjectId: string,
+) {
+  for (const arg of args) {
+    const expression = unwrapExpression(arg)
+    const handlerName = getHandlerName(expression)
+
+    if (!handlerName) {
+      continue
+    }
+
+    const symbol = symbolByName.get(handlerName)
+
+    if (symbol) {
+      return symbol.id
+    }
+  }
+
+  return fallbackSubjectId
+}
+
+function getHandlerName(expression: ts.Expression): string | null {
+  if (ts.isIdentifier(expression)) {
+    return expression.text
+  }
+
+  if (ts.isPropertyAccessExpression(expression)) {
+    return expression.name.text
+  }
+
+  return null
+}
+
+function isLikelyServerRouterReceiver(expression: ts.Expression) {
+  const receiverText = getExpressionText(expression)
+  const receiverName = receiverText.split('.').pop() ?? receiverText
+
+  return /^(app|server|route|routes|router)$/i.test(receiverName) ||
+    /router$/i.test(receiverName) ||
+    /app$/i.test(receiverName)
+}
+
+function createHttpClientRequest(input: {
+  client: string
+  confidence: number
+  method: string
+  node: ts.CallExpression
+  sourceFile: ts.SourceFile
+  url: {
+    confidence: number
+    pathTemplate: string
+  }
+}): Omit<HttpClientRequest, 'subjectId'> | null {
+  const normalizedPath = normalizeRoutePattern(input.url.pathTemplate)
+
+  if (!normalizedPath) {
+    return null
+  }
+
+  return {
+    client: input.client,
+    confidence: input.confidence,
+    method: input.method,
+    normalizedPath,
+    pathTemplate: input.url.pathTemplate,
+    range: getSourceRange(input.node, input.sourceFile),
+  }
+}
+
+function extractFetchMethod(node: ts.Expression | undefined) {
+  if (!node || !ts.isObjectLiteralExpression(node)) {
+    return null
+  }
+
+  for (const property of node.properties) {
+    if (!ts.isPropertyAssignment(property)) {
+      continue
+    }
+
+    const name = property.name
+    const isMethodProperty =
+      (ts.isIdentifier(name) && name.text === 'method') ||
+      (ts.isStringLiteral(name) && name.text === 'method')
+
+    if (!isMethodProperty || !ts.isStringLiteral(property.initializer)) {
+      continue
+    }
+
+    return property.initializer.text.toUpperCase()
+  }
+
+  return null
+}
+
+function extractUrlTemplate(node: ts.Expression | undefined):
+  | { confidence: number; pathTemplate: string }
+  | null {
+  if (!node) {
+    return null
+  }
+
+  const expression = unwrapExpression(node)
+
+  if (ts.isStringLiteral(expression)) {
+    return {
+      confidence: isLikelyHttpPath(expression.text) ? 0.94 : 0.66,
+      pathTemplate: expression.text,
+    }
+  }
+
+  if (ts.isNoSubstitutionTemplateLiteral(expression)) {
+    return {
+      confidence: isLikelyHttpPath(expression.text) ? 0.94 : 0.66,
+      pathTemplate: expression.text,
+    }
+  }
+
+  if (ts.isTemplateExpression(expression)) {
+    const pathTemplate = [
+      expression.head.text,
+      ...expression.templateSpans.map(
+        (span) => `\${${getExpressionText(span.expression)}}${span.literal.text}`,
+      ),
+    ].join('')
+
+    return {
+      confidence: isLikelyHttpPath(pathTemplate) ? 0.84 : 0.58,
+      pathTemplate,
+    }
+  }
+
+  return null
+}
+
+function isLikelyHttpPath(value: string) {
+  return value.startsWith('/') || /^https?:\/\//.test(value)
+}
+
+function findEnclosingSymbolContext(
+  node: ts.Node,
+  sourceFile: ts.SourceFile,
+  symbolContexts: ExtractedSymbolContext[],
+) {
+  const position = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile))
+  const line = position.line + 1
+  const column = position.character
+  const candidates = symbolContexts.filter((symbolContext) =>
+    rangeContainsPosition(symbolContext.symbolNode.range, line, column),
+  )
+
+  if (candidates.length === 0) {
+    return null
+  }
+
+  return candidates.sort((left, right) =>
+    getRangeSpan(left.symbolNode.range) - getRangeSpan(right.symbolNode.range),
+  )[0] ?? null
+}
+
+function rangeContainsPosition(
+  range: SourceRange | undefined,
+  line: number,
+  column: number,
+) {
+  if (!range) {
+    return false
+  }
+
+  if (line < range.start.line || line > range.end.line) {
+    return false
+  }
+
+  if (line === range.start.line && column < range.start.column) {
+    return false
+  }
+
+  if (line === range.end.line && column > range.end.column) {
+    return false
+  }
+
+  return true
+}
+
+function getRangeSpan(range: SourceRange | undefined) {
+  if (!range) {
+    return Number.MAX_SAFE_INTEGER
+  }
+
+  return (range.end.line - range.start.line) * 1_000 + range.end.column - range.start.column
 }
 
 function collectExtractedSymbolContexts(

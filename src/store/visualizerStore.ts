@@ -151,11 +151,13 @@ export function createVisualizerStore(
         graphLayers:
           viewMode === 'symbols'
             ? {
+                api: true,
                 contains: false,
                 imports: false,
                 calls: true,
               }
             : {
+                api: true,
                 contains: true,
                 imports: false,
                 calls: false,

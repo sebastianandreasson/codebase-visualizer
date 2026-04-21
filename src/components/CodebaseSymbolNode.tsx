@@ -172,6 +172,8 @@ function formatSymbolKindTag(kind: string) {
       return 'comp'
     case 'hook':
       return 'hook'
+    case 'endpoint':
+      return 'api'
     case 'class':
       return 'class'
     case 'constant':

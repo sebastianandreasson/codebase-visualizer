@@ -20,6 +20,7 @@ import {
   validateLayoutPlannerProposal,
 } from './index'
 import {
+  isApiEndpointNode,
   isSymbolNode,
   type GraphEdgeKind,
   type ProjectNode,
@@ -214,6 +215,38 @@ export function matchLayoutSelector(
     return false
   }
 
+  if (
+    selector.endpointMethod &&
+    (!isApiEndpointNode(node) || !matchesStringOrArray(selector.endpointMethod, node.method))
+  ) {
+    return false
+  }
+
+  if (
+    selector.endpointService &&
+    (!isApiEndpointNode(node) ||
+      !matchesStringOrArray(selector.endpointService, node.serviceName ?? node.scopeId))
+  ) {
+    return false
+  }
+
+  if (
+    selector.endpointPathContains &&
+    (!isApiEndpointNode(node) ||
+      !node.normalizedRoutePattern
+        .toLowerCase()
+        .includes(selector.endpointPathContains.toLowerCase()))
+  ) {
+    return false
+  }
+
+  if (
+    selector.endpointConfidenceMin !== undefined &&
+    (!isApiEndpointNode(node) || node.confidence < selector.endpointConfidenceMin)
+  ) {
+    return false
+  }
+
   if (selector.pathPrefix && !node.path.startsWith(selector.pathPrefix)) {
     return false
   }
@@ -281,7 +314,7 @@ export function getNodeLoc(snapshot: ProjectSnapshot, node: ProjectNode): number
 
 export function isNodeInScope(node: ProjectNode, nodeScope: LayoutNodeScope) {
   if (nodeScope === 'symbols') {
-    return node.kind === 'symbol'
+    return node.kind === 'symbol' || isApiEndpointNode(node)
   }
 
   if (nodeScope === 'filesystem') {
@@ -311,6 +344,7 @@ function buildHybridPlannerContext(
     constraints: {
       allowDirectories: nodeScope !== 'symbols',
       allowFiles: nodeScope !== 'symbols',
+      allowApiEndpoints: nodeScope !== 'filesystem',
       allowSymbols: nodeScope !== 'filesystem',
       nodeScope,
     },

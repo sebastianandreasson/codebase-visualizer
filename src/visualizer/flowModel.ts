@@ -7,9 +7,11 @@ import {
 } from '@xyflow/react'
 
 import {
+  isApiEndpointNode,
   isDirectoryNode,
   isFileNode,
   isSymbolNode,
+  type ApiEndpointNode,
   type CodebaseFile,
   type CodebaseSnapshot,
   type GraphEdgeKind,
@@ -170,6 +172,8 @@ const EXPANDED_CLUSTER_PACK_MAX_INNER_WIDTH = 1_760
 const EXPANDED_CLUSTER_PACK_ASPECT_WEIGHT = 1.16
 const DEFAULT_NODE_WIDTH = DEFAULT_SYMBOL_FOOTPRINT_WIDTH
 const DEFAULT_NODE_HEIGHT = DEFAULT_SYMBOL_FOOTPRINT_HEIGHT
+const API_ENDPOINT_NODE_WIDTH = 268
+const API_ENDPOINT_NODE_HEIGHT = 96
 const FILESYSTEM_CONTAINER_PADDING_RIGHT = 18
 const FILESYSTEM_CONTAINER_PADDING_BOTTOM = 18
 const LAYOUT_GROUP_PADDING_X = 22
@@ -271,7 +275,7 @@ function collectDirectoryDescendantIds(
 export function buildFlowModel(
   snapshot: CodebaseSnapshot,
   layout: LayoutSpec,
-  graphLayers: Record<GraphLayerKey, boolean>,
+  graphLayers: Partial<Record<GraphLayerKey, boolean>>,
   viewMode: VisualizerViewMode,
   symbolClusterState: SymbolClusterState,
   expandedClusterIds: Set<string>,
@@ -349,8 +353,12 @@ export function buildFlowModel(
       }
 
       if (viewMode === 'symbols') {
-        if (!isSymbolNode(node)) {
+        if (!isSymbolViewNode(node)) {
           return false
+        }
+
+        if (isApiEndpointNode(node)) {
+          return true
         }
 
         const cluster = symbolClusterState.clusterByNodeId[node.id]
@@ -458,6 +466,14 @@ export function buildFlowModel(
         callEdgeRenderLimit,
       ),
     )
+  }
+
+  if (graphLayers.api) {
+    const apiEdges = viewMode === 'symbols'
+      ? getVisibleApiEdges(snapshot, visibleNodeIds)
+      : getVisibleFilesystemApiEdges(snapshot, visibleNodeIds, options.viewportZoom ?? 1)
+
+    edges.push(...apiEdges)
   }
 
   return { nodes, edges }
@@ -633,6 +649,42 @@ function buildFlowNode(
 ): Node {
   const groupParentContainer = layoutGroupContainerIndex.containerByNodeId.get(node.id) ?? null
   const groupChildPlacement = groupParentContainer?.childPlacements[node.id]
+
+  if (isApiEndpointNode(node)) {
+    const width = groupChildPlacement?.width ?? placement.width ?? API_ENDPOINT_NODE_WIDTH
+    const height = groupChildPlacement?.height ?? placement.height ?? API_ENDPOINT_NODE_HEIGHT
+
+    return {
+      id: node.id,
+      type: 'symbolNode',
+      position: {
+        x: groupChildPlacement?.x ?? placement.x,
+        y: groupChildPlacement?.y ?? placement.y,
+      },
+      sourcePosition: Position.Right,
+      targetPosition: Position.Left,
+      width,
+      height,
+      zIndex: SYMBOL_NODE_Z_INDEX,
+      style: {
+        width,
+        height,
+      },
+      draggable: true,
+      data: {
+        title: node.name,
+        subtitle: getApiEndpointSubtitle(node),
+        kind: 'endpoint',
+        kindClass: 'endpoint',
+        tags: getNodeBadgeLabels(node, snapshot),
+        locScale: 1,
+        contentScale: 1,
+        compact: false,
+        dimmed: false,
+        highlighted: false,
+      },
+    }
+  }
 
   if (viewMode === 'symbols' && isSymbolNode(node)) {
     const cluster = symbolClusterState.clusterByNodeId[node.id]
@@ -844,6 +896,10 @@ function getContainsEdges(
       snapshot.nodes[edge.target]?.kind === 'symbol'
     )
   })
+}
+
+function isSymbolViewNode(node: ProjectNode) {
+  return isSymbolNode(node) || isApiEndpointNode(node)
 }
 
 export function buildFilesystemContainerLayouts(
@@ -1465,7 +1521,7 @@ function buildFlowEdge(
       highlighted: false,
     },
     animated: false,
-    interactionWidth: kind === 'calls' ? 8 : 16,
+    interactionWidth: kind === 'calls' || isApiEdgeKind(kind) ? 8 : 16,
     markerEnd: {
       type: MarkerType.ArrowClosed,
       color: stroke,
@@ -1492,6 +1548,18 @@ function getEdgeImpactPresentation(kind: GraphEdgeKind, count: number) {
       impact: 'low' as const,
       opacity: 0.18,
       strokeWidth: 1.1,
+    }
+  }
+
+  if (isApiEdgeKind(kind)) {
+    const safeCount = Math.max(1, count)
+    const impactScore = Math.log2(safeCount + 1)
+
+    return {
+      impact:
+        safeCount >= 4 ? 'high' as const : safeCount >= 2 ? 'medium' as const : 'low' as const,
+      opacity: clamp(0.18 + impactScore * 0.12, 0.2, 0.82),
+      strokeWidth: clamp(1.05 + impactScore * 0.24, 1.2, 3),
     }
   }
 
@@ -1646,6 +1714,110 @@ function aggregateSymbolEdges(
       label: formatCallEdgeLabel(count, viewportZoom),
     }
   })
+}
+
+function getVisibleApiEdges(
+  snapshot: CodebaseSnapshot,
+  visibleNodeIds: Set<string>,
+) {
+  return snapshot.edges
+    .filter((edge) => isApiEdgeKind(edge.kind))
+    .filter((edge) => visibleNodeIds.has(edge.source) && visibleNodeIds.has(edge.target))
+    .map((edge) =>
+      buildFlowEdge(
+        edge.id,
+        edge.kind,
+        edge.source,
+        edge.target,
+        edge.label,
+        {
+          kind: edge.kind,
+          count: 1,
+        },
+      ),
+    )
+}
+
+function getVisibleFilesystemApiEdges(
+  snapshot: CodebaseSnapshot,
+  visibleNodeIds: Set<string>,
+  viewportZoom = 1,
+) {
+  const edges = new Map<string, Edge>()
+
+  for (const edge of snapshot.edges) {
+    if (!isApiEdgeKind(edge.kind)) {
+      continue
+    }
+
+    const sourceFileId = getFileNodeId(snapshot, edge.source) ?? edge.source
+    const targetFileId = getFileNodeId(snapshot, edge.target) ?? edge.target
+
+    if (
+      !sourceFileId ||
+      !targetFileId ||
+      sourceFileId === targetFileId ||
+      !visibleNodeIds.has(sourceFileId) ||
+      !visibleNodeIds.has(targetFileId)
+    ) {
+      continue
+    }
+
+    const key = `${edge.kind}:${sourceFileId}->${targetFileId}`
+    const existingEdge = edges.get(key)
+
+    if (existingEdge) {
+      const existingData = getFlowEdgeData(existingEdge)
+      const nextCount = (existingData?.count ?? 1) + 1
+
+      edges.set(key, {
+        ...existingEdge,
+        data: {
+          kind: edge.kind,
+          count: nextCount,
+        },
+        label: formatApiEdgeLabel(edge.kind, nextCount, viewportZoom),
+      })
+      continue
+    }
+
+    edges.set(
+      key,
+      buildFlowEdge(
+        key,
+        edge.kind,
+        sourceFileId,
+        targetFileId,
+        edge.label,
+        {
+          kind: edge.kind,
+          count: 1,
+        },
+      ),
+    )
+  }
+
+  return Array.from(edges.values())
+}
+
+function isApiEdgeKind(kind: GraphEdgeKind) {
+  return kind === 'api_calls' || kind === 'handles'
+}
+
+function formatApiEdgeLabel(
+  kind: GraphEdgeKind,
+  count: number,
+  viewportZoom = 1,
+) {
+  if (count <= 1) {
+    return undefined
+  }
+
+  if (viewportZoom < 0.32 && count < 4) {
+    return undefined
+  }
+
+  return kind === 'handles' ? `${count} handlers` : `${count} requests`
 }
 
 function formatCallEdgeLabel(count: number, viewportZoom = 1) {
@@ -2765,10 +2937,32 @@ export function getNodeSubtitle(node: ProjectNode) {
     return `${node.extension || 'no ext'} · ${formatFileSize(node.size)}`
   }
 
+  if (isApiEndpointNode(node)) {
+    return getApiEndpointSubtitle(node)
+  }
+
   return node.symbolKind
 }
 
+function getApiEndpointSubtitle(node: ApiEndpointNode) {
+  const sourceLabel =
+    node.source === 'merged'
+      ? 'client + server'
+      : node.source === 'client'
+        ? 'client request'
+        : node.source === 'server'
+          ? 'server route'
+          : node.source
+  const confidence = Math.round(node.confidence * 100)
+
+  return `${sourceLabel} · ${confidence}%`
+}
+
 export function getDefaultNodeWidth(node: ProjectNode) {
+  if (isApiEndpointNode(node)) {
+    return API_ENDPOINT_NODE_WIDTH
+  }
+
   if (node.kind === 'directory') {
     return 240
   }
@@ -2781,6 +2975,10 @@ export function getDefaultNodeWidth(node: ProjectNode) {
 }
 
 export function getDefaultNodeHeight(node: ProjectNode) {
+  if (isApiEndpointNode(node)) {
+    return API_ENDPOINT_NODE_HEIGHT
+  }
+
   if (node.kind === 'directory') {
     return 68
   }
@@ -2794,6 +2992,10 @@ export function getDefaultNodeHeight(node: ProjectNode) {
 
 function getEdgeColor(kind: GraphEdgeKind) {
   switch (kind) {
+    case 'api_calls':
+      return '#2d7f73'
+    case 'handles':
+      return '#7c67b1'
     case 'imports':
       return '#346f66'
     case 'calls':
@@ -3491,8 +3693,8 @@ export function getLayerTogglesForViewMode(
   viewMode: VisualizerViewMode,
 ): GraphLayerKey[] {
   return viewMode === 'symbols'
-    ? ['contains', 'calls']
-    : ['contains', 'imports', 'calls']
+    ? ['contains', 'calls', 'api']
+    : ['contains', 'imports', 'calls', 'api']
 }
 
 export function getFollowTargetZoom(input: {

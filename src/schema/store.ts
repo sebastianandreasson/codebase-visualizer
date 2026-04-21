@@ -13,7 +13,7 @@ import type {
   OverlayFocusMode,
 } from './scene'
 
-export type GraphLayerKey = 'contains' | 'imports' | 'calls'
+export type GraphLayerKey = 'contains' | 'imports' | 'calls' | 'api'
 
 export type GraphLayerVisibility = Record<GraphLayerKey, boolean>
 
@@ -125,6 +125,7 @@ export interface VisualizerStoreActions {
 export type VisualizerStore = VisualizerStoreState & VisualizerStoreActions
 
 export const DEFAULT_GRAPH_LAYER_VISIBILITY: GraphLayerVisibility = {
+  api: true,
   contains: true,
   imports: false,
   calls: false,

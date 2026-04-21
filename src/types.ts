@@ -58,6 +58,9 @@ export type {
   ProjectPluginResult,
 } from './schema/projectPlugin'
 export type {
+  ApiEndpointNode,
+  ApiEndpointProtocol,
+  ApiEndpointSource,
   CodebaseDirectory,
   CodebaseEntry,
   CodebaseEntryKind,
@@ -271,6 +274,7 @@ export type {
 export {
   DEFAULT_PROJECT_TAGS,
   PROJECT_SNAPSHOT_SCHEMA_VERSION,
+  isApiEndpointNode,
   isDirectoryNode,
   isFileNode,
   isSymbolNode,

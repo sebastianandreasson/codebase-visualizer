@@ -34,6 +34,7 @@
   --cbv-kind-type: oklch(0.76 0.14 75);
   --cbv-kind-variable: oklch(0.75 0.08 210);
   --cbv-kind-module: oklch(0.72 0.05 260);
+  --cbv-kind-endpoint: oklch(0.72 0.13 190);
 
   --app-text: oklch(0.945 0.005 260);
   --app-muted: oklch(0.745 0.01 260);

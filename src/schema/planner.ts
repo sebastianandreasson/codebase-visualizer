@@ -26,6 +26,7 @@ export interface LayoutPlannerConstraints {
   allowFiles: boolean
   allowDirectories: boolean
   allowSymbols: boolean
+  allowApiEndpoints: boolean
   allowLanes: boolean
   allowGroups: boolean
   allowAnnotations: boolean
@@ -40,6 +41,7 @@ export const DEFAULT_LAYOUT_PLANNER_CONSTRAINTS: LayoutPlannerConstraints = {
   allowFiles: true,
   allowDirectories: true,
   allowSymbols: true,
+  allowApiEndpoints: true,
   allowLanes: true,
   allowGroups: true,
   allowAnnotations: true,
@@ -55,6 +57,10 @@ export interface PlannerNodeRef {
   path: string
   fileId?: string
   symbolKind?: SymbolKind
+  endpointConfidence?: number
+  endpointMethod?: string
+  endpointRoutePattern?: string
+  endpointService?: string
   tags: string[]
   facets: string[]
   size?: number
@@ -68,6 +74,7 @@ export interface PlannerEdgeRef {
   target: string
   label?: string
   inferred?: boolean
+  metadata?: Record<string, boolean | number | string | null>
 }
 
 export interface PlannerSnapshotMeta {

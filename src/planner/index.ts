@@ -31,10 +31,11 @@ import type {
   ProjectNode,
   ProjectSnapshot,
 } from '../schema/snapshot'
+import { isApiEndpointNode } from '../schema/snapshot'
 
 const LAYOUTS_DIRECTORY = '.semanticode/layouts'
 const DRAFTS_DIRECTORY = '.semanticode/layouts/drafts'
-const PLANNER_EDGE_KINDS = new Set(['contains', 'imports', 'calls'])
+const PLANNER_EDGE_KINDS = new Set(['contains', 'imports', 'calls', 'api_calls', 'handles'])
 
 export interface BuildLayoutPlannerContextOptions {
   prompt: string
@@ -533,6 +534,20 @@ function createPlannerNodeRef(node: ProjectNode): PlannerNodeRef {
     }
   }
 
+  if (isApiEndpointNode(node)) {
+    return {
+      id: node.id,
+      kind: node.kind,
+      path: node.path,
+      endpointConfidence: node.confidence,
+      endpointMethod: node.method,
+      endpointRoutePattern: node.normalizedRoutePattern,
+      endpointService: node.serviceName ?? node.scopeId,
+      tags: [...node.tags],
+      facets: [...node.facets],
+    }
+  }
+
   return {
     id: node.id,
     kind: node.kind,
@@ -550,6 +565,7 @@ function createPlannerEdgeRef(edge: GraphEdge): PlannerEdgeRef {
     target: edge.target,
     label: edge.label,
     inferred: edge.inferred,
+    metadata: edge.metadata,
   }
 }
 
@@ -712,6 +728,8 @@ function isNodeKindAllowed(
       return constraints.allowDirectories
     case 'symbol':
       return constraints.allowSymbols
+    case 'api_endpoint':
+      return constraints.allowApiEndpoints
     default:
       return false
   }
@@ -779,7 +797,7 @@ function getScopedNodes(
       return true
     }
 
-    return node.kind === 'symbol'
+    return node.kind === 'symbol' || isApiEndpointNode(node)
   })
 }
 
@@ -804,7 +822,7 @@ function getScopedEdges(
       return true
     }
 
-    if (edge.kind === 'calls') {
+    if (edge.kind === 'calls' || edge.kind === 'api_calls' || edge.kind === 'handles') {
       return true
     }
 

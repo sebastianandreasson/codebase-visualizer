@@ -1,4 +1,5 @@
 import type {
+  ApiEndpointNode,
   GraphEdge,
   LayoutNodePlacement,
   LayoutSpec,
@@ -6,9 +7,12 @@ import type {
   SymbolKind,
   SymbolNode,
 } from '../types'
+import { isApiEndpointNode } from '../schema/snapshot'
 
 const SYMBOL_NODE_WIDTH = 248
 const SYMBOL_NODE_HEIGHT = 82
+const API_ENDPOINT_NODE_WIDTH = 268
+const API_ENDPOINT_NODE_HEIGHT = 96
 const COMPONENT_GAP_X = 220
 const COMPONENT_GAP_Y = 82
 const ISOLATED_GAP_X = 130
@@ -41,8 +45,10 @@ const SYMBOL_KIND_ORDER: Record<SymbolKind, number> = {
 export function buildSymbolLayout(snapshot: ProjectSnapshot): LayoutSpec {
   const placements: Record<string, LayoutNodePlacement> = {}
   const symbols = Object.values(snapshot.nodes).filter(isSupportedSymbolNode)
-  const adjacency = buildSymbolAdjacency(symbols, snapshot.edges)
-  const components = collectComponents(symbols, adjacency)
+  const endpoints = Object.values(snapshot.nodes).filter(isApiEndpointNode)
+  const layoutNodes: SymbolLayoutNode[] = [...symbols, ...endpoints]
+  const adjacency = buildSymbolAdjacency(layoutNodes, snapshot.edges)
+  const components = collectComponents(layoutNodes, adjacency)
   const connectedComponents = components.filter((component) => component.length > 1)
   const isolatedSymbols = components
     .filter((component) => component.length === 1)
@@ -70,8 +76,8 @@ export function buildSymbolLayout(snapshot: ProjectSnapshot): LayoutSpec {
           nodeId: symbol.id,
           x: componentCursorX,
           y: componentCursorY,
-          width: SYMBOL_NODE_WIDTH,
-          height: SYMBOL_NODE_HEIGHT,
+          width: getLayoutNodeWidth(symbol),
+          height: getLayoutNodeHeight(symbol),
         }
 
         componentCursorY += slot.height + COMPONENT_GAP_Y
@@ -102,8 +108,8 @@ export function buildSymbolLayout(snapshot: ProjectSnapshot): LayoutSpec {
       nodeId: symbol.id,
       x: isolatedCursorX,
       y: isolatedCursorY,
-      width: SYMBOL_NODE_WIDTH,
-      height: SYMBOL_NODE_HEIGHT,
+      width: getLayoutNodeWidth(symbol),
+      height: getLayoutNodeHeight(symbol),
     }
 
     isolatedCursorX += slot.width + ISOLATED_GAP_X
@@ -121,14 +127,16 @@ export function buildSymbolLayout(snapshot: ProjectSnapshot): LayoutSpec {
     lanes: [],
     annotations: [],
     hiddenNodeIds: Object.values(snapshot.nodes)
-      .filter((node) => !isSupportedSymbolNode(node))
+      .filter((node) => !isSupportedSymbolNode(node) && !isApiEndpointNode(node))
       .map((node) => node.id),
     createdAt: snapshot.generatedAt,
     updatedAt: snapshot.generatedAt,
   }
 }
 
-export function getSymbolLayoutSlot(symbol: SymbolNode) {
+export type SymbolLayoutNode = SymbolNode | ApiEndpointNode
+
+export function getSymbolLayoutSlot(symbol: SymbolLayoutNode) {
   const loc = getSymbolLoc(symbol)
   const logLoc = Math.log10(loc + 1)
   const highLocWeight = Math.max(0, Math.min(1, (logLoc - 2.1) / 0.9))
@@ -146,19 +154,23 @@ export function getSymbolLayoutSlot(symbol: SymbolNode) {
     width: Math.round(
       Math.max(
         MIN_SYMBOL_SLOT_WIDTH,
-        Math.min(MAX_SYMBOL_SLOT_WIDTH, SYMBOL_NODE_WIDTH * locScale + 96),
+        Math.min(MAX_SYMBOL_SLOT_WIDTH, getLayoutNodeWidth(symbol) * locScale + 96),
       ),
     ),
     height: Math.round(
       Math.max(
         MIN_SYMBOL_SLOT_HEIGHT,
-        Math.min(MAX_SYMBOL_SLOT_HEIGHT, SYMBOL_NODE_HEIGHT * locScale + 170),
+        Math.min(MAX_SYMBOL_SLOT_HEIGHT, getLayoutNodeHeight(symbol) * locScale + 170),
       ),
     ),
   }
 }
 
-function getSymbolLoc(symbol: SymbolNode) {
+function getSymbolLoc(symbol: SymbolLayoutNode) {
+  if (isApiEndpointNode(symbol)) {
+    return 1
+  }
+
   if (!symbol.range) {
     return 1
   }
@@ -167,7 +179,7 @@ function getSymbolLoc(symbol: SymbolNode) {
 }
 
 function buildSymbolAdjacency(
-  symbols: SymbolNode[],
+  symbols: SymbolLayoutNode[],
   edges: GraphEdge[],
 ) {
   const symbolIds = new Set(symbols.map((symbol) => symbol.id))
@@ -178,7 +190,12 @@ function buildSymbolAdjacency(
   }
 
   for (const edge of edges) {
-    if (edge.kind !== 'calls' && edge.kind !== 'contains') {
+    if (
+      edge.kind !== 'calls' &&
+      edge.kind !== 'contains' &&
+      edge.kind !== 'api_calls' &&
+      edge.kind !== 'handles'
+    ) {
       continue
     }
 
@@ -194,12 +211,12 @@ function buildSymbolAdjacency(
 }
 
 function collectComponents(
-  symbols: SymbolNode[],
+  symbols: SymbolLayoutNode[],
   adjacency: Map<string, Set<string>>,
 ) {
   const remaining = new Set(symbols.map((symbol) => symbol.id))
   const symbolById = new Map(symbols.map((symbol) => [symbol.id, symbol]))
-  const components: SymbolNode[][] = []
+  const components: SymbolLayoutNode[][] = []
 
   while (remaining.size > 0) {
     const startId = Array.from(remaining).sort()[0]
@@ -208,7 +225,7 @@ function collectComponents(
       break
     }
 
-    const component: SymbolNode[] = []
+    const component: SymbolLayoutNode[] = []
     const stack = [startId]
     remaining.delete(startId)
 
@@ -244,8 +261,8 @@ function collectComponents(
 }
 
 function compareComponents(
-  left: SymbolNode[],
-  right: SymbolNode[],
+  left: SymbolLayoutNode[],
+  right: SymbolLayoutNode[],
   adjacency: Map<string, Set<string>>,
 ) {
   if (left.length !== right.length) {
@@ -263,7 +280,7 @@ function compareComponents(
 }
 
 function sumComponentDegree(
-  component: SymbolNode[],
+  component: SymbolLayoutNode[],
   adjacency: Map<string, Set<string>>,
 ) {
   return component.reduce(
@@ -273,8 +290,8 @@ function sumComponentDegree(
 }
 
 function compareSymbolsByDegree(
-  left: SymbolNode,
-  right: SymbolNode,
+  left: SymbolLayoutNode,
+  right: SymbolLayoutNode,
   adjacency: Map<string, Set<string>>,
 ) {
   const leftDegree = adjacency.get(left.id)?.size ?? 0
@@ -287,9 +304,9 @@ function compareSymbolsByDegree(
   return compareSymbols(left, right)
 }
 
-function compareSymbols(left: SymbolNode, right: SymbolNode) {
-  const leftKindOrder = SYMBOL_KIND_ORDER[left.symbolKind] ?? Number.MAX_SAFE_INTEGER
-  const rightKindOrder = SYMBOL_KIND_ORDER[right.symbolKind] ?? Number.MAX_SAFE_INTEGER
+function compareSymbols(left: SymbolLayoutNode, right: SymbolLayoutNode) {
+  const leftKindOrder = getLayoutNodeKindOrder(left)
+  const rightKindOrder = getLayoutNodeKindOrder(right)
 
   if (leftKindOrder !== rightKindOrder) {
     return leftKindOrder - rightKindOrder
@@ -299,21 +316,45 @@ function compareSymbols(left: SymbolNode, right: SymbolNode) {
     return left.path.localeCompare(right.path)
   }
 
-  const leftLine = left.range?.start.line ?? Number.MAX_SAFE_INTEGER
-  const rightLine = right.range?.start.line ?? Number.MAX_SAFE_INTEGER
+  const leftLine = isApiEndpointNode(left)
+    ? Number.MAX_SAFE_INTEGER
+    : left.range?.start.line ?? Number.MAX_SAFE_INTEGER
+  const rightLine = isApiEndpointNode(right)
+    ? Number.MAX_SAFE_INTEGER
+    : right.range?.start.line ?? Number.MAX_SAFE_INTEGER
 
   if (leftLine !== rightLine) {
     return leftLine - rightLine
   }
 
-  const leftColumn = left.range?.start.column ?? Number.MAX_SAFE_INTEGER
-  const rightColumn = right.range?.start.column ?? Number.MAX_SAFE_INTEGER
+  const leftColumn = isApiEndpointNode(left)
+    ? Number.MAX_SAFE_INTEGER
+    : left.range?.start.column ?? Number.MAX_SAFE_INTEGER
+  const rightColumn = isApiEndpointNode(right)
+    ? Number.MAX_SAFE_INTEGER
+    : right.range?.start.column ?? Number.MAX_SAFE_INTEGER
 
   if (leftColumn !== rightColumn) {
     return leftColumn - rightColumn
   }
 
   return left.id.localeCompare(right.id)
+}
+
+function getLayoutNodeWidth(node: SymbolLayoutNode) {
+  return isApiEndpointNode(node) ? API_ENDPOINT_NODE_WIDTH : SYMBOL_NODE_WIDTH
+}
+
+function getLayoutNodeHeight(node: SymbolLayoutNode) {
+  return isApiEndpointNode(node) ? API_ENDPOINT_NODE_HEIGHT : SYMBOL_NODE_HEIGHT
+}
+
+function getLayoutNodeKindOrder(node: SymbolLayoutNode) {
+  if (isApiEndpointNode(node)) {
+    return 2.5
+  }
+
+  return SYMBOL_KIND_ORDER[node.symbolKind] ?? Number.MAX_SAFE_INTEGER
 }
 
 function isSupportedSymbolNode(

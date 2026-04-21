@@ -10,7 +10,7 @@ import {
   type Node,
   type ReactFlowInstance,
 } from '@xyflow/react'
-import { memo, useState } from 'react'
+import { memo, useMemo, useState } from 'react'
 
 import { CodebaseAnnotationNode } from '../CodebaseAnnotationNode'
 import { CodebaseCanvasNode } from '../CodebaseCanvasNode'
@@ -40,9 +40,12 @@ const SYMBOL_LEGEND_ITEMS = [
   { label: 'Hook', kindClass: 'hook' },
   { label: 'Class', kindClass: 'class' },
   { label: 'Function', kindClass: 'function' },
+  { label: 'API', kindClass: 'endpoint' },
   { label: 'Constant', kindClass: 'constant' },
   { label: 'Variable', kindClass: 'variable' },
 ] as const
+
+type SymbolLegendKind = (typeof SYMBOL_LEGEND_ITEMS)[number]['kindClass']
 
 const MINIMAP_NODE_COLORS: Record<string, string> = {
   annotation: 'oklch(0.58 0.02 260)',
@@ -50,6 +53,7 @@ const MINIMAP_NODE_COLORS: Record<string, string> = {
   component: 'oklch(0.74 0.14 300)',
   constant: 'oklch(0.74 0.13 145)',
   directory: 'oklch(0.56 0.04 260)',
+  endpoint: 'oklch(0.72 0.13 190)',
   file: 'oklch(0.62 0.05 220)',
   function: 'oklch(0.74 0.14 240)',
   group: 'oklch(0.68 0.09 64)',
@@ -65,6 +69,7 @@ const MINIMAP_NODE_COLORS_LIGHT: Record<string, string> = {
   component: 'oklch(0.58 0.16 300)',
   constant: 'oklch(0.58 0.14 145)',
   directory: 'oklch(0.62 0.04 260)',
+  endpoint: 'oklch(0.54 0.13 190)',
   file: 'oklch(0.56 0.07 220)',
   function: 'oklch(0.56 0.16 240)',
   group: 'oklch(0.6 0.12 64)',
@@ -195,7 +200,13 @@ export const CanvasViewport = memo(function CanvasViewport({
   visibleLayerToggles,
 }: CanvasViewportProps) {
   const [utilityPaletteOpen, setUtilityPaletteOpen] = useState(false)
-  const canCullVisibleElements = !nodes.some((node) => node.parentId)
+  const [hoveredLegendKind, setHoveredLegendKind] = useState<SymbolLegendKind | null>(null)
+  const legendKindCounts = useMemo(() => getLegendKindCounts(nodes), [nodes])
+  const presentedNodes = useMemo(
+    () => applyLegendHoverPresentation(nodes, hoveredLegendKind),
+    [hoveredLegendKind, nodes],
+  )
+  const canCullVisibleElements = !presentedNodes.some((node) => node.parentId)
   const canvasDotColor = themeMode === 'dark' ? '#4f5f74' : '#d8d1c3'
   const minimapMaskColor =
     themeMode === 'dark' ? 'rgba(7, 9, 12, 0.42)' : 'rgba(44, 35, 27, 0.16)'
@@ -252,7 +263,11 @@ export const CanvasViewport = memo(function CanvasViewport({
       <div className="cbv-canvas-overlays">
         <div className="cbv-canvas-utility-stack">
           <div className="cbv-canvas-legend-anchor">
-            <SymbolKindLegend />
+            <SymbolKindLegend
+              activeKind={hoveredLegendKind}
+              counts={legendKindCounts}
+              onActiveKindChange={setHoveredLegendKind}
+            />
           </div>
           <div className={`cbv-canvas-utility-anchor${utilityPaletteOpen ? ' is-open' : ''}`}>
             <button
@@ -549,7 +564,7 @@ export const CanvasViewport = memo(function CanvasViewport({
         maxZoom={4}
         minZoom={0.03}
         nodeTypes={nodeTypes}
-        nodes={nodes}
+        nodes={presentedNodes}
         onlyRenderVisibleElements={canCullVisibleElements}
         onEdgeClick={onEdgeClick}
         onEdgesChange={onEdgesChange}
@@ -578,6 +593,76 @@ export const CanvasViewport = memo(function CanvasViewport({
     </section>
   )
 })
+
+function getLegendKindCounts(nodes: Node[]) {
+  const counts = Object.fromEntries(
+    SYMBOL_LEGEND_ITEMS.map((item) => [item.kindClass, 0]),
+  ) as Record<SymbolLegendKind, number>
+
+  for (const node of nodes) {
+    const kind = getLegendKindForNode(node)
+
+    if (kind) {
+      counts[kind] += 1
+    }
+  }
+
+  return counts
+}
+
+function applyLegendHoverPresentation(
+  nodes: Node[],
+  activeKind: SymbolLegendKind | null,
+) {
+  if (!activeKind) {
+    return nodes
+  }
+
+  return nodes.map((node) => {
+    const data =
+      node.data && typeof node.data === 'object'
+        ? (node.data as Record<string, unknown>)
+        : {}
+    const matches = getLegendKindForNode(node) === activeKind
+
+    return {
+      ...node,
+      data: {
+        ...data,
+        dimmed: matches ? false : true,
+        highlighted: matches ? true : Boolean(data.highlighted),
+      },
+    }
+  })
+}
+
+function getLegendKindForNode(node: Node): SymbolLegendKind | null {
+  const data =
+    node.data && typeof node.data === 'object'
+      ? (node.data as Record<string, unknown>)
+      : null
+
+  if (node.type !== 'symbolNode' || !data) {
+    return null
+  }
+
+  const rawKind =
+    typeof data.kindClass === 'string'
+      ? data.kindClass
+      : typeof data.kind === 'string'
+        ? data.kind
+        : null
+
+  if (rawKind === 'method') {
+    return 'function'
+  }
+
+  return isSymbolLegendKind(rawKind) ? rawKind : null
+}
+
+function isSymbolLegendKind(value: string | null): value is SymbolLegendKind {
+  return SYMBOL_LEGEND_ITEMS.some((item) => item.kindClass === value)
+}
 
 function parseTelemetryWindow(value: string): TelemetryWindow {
   if (value === '30') {
@@ -652,18 +737,49 @@ function LayerToggle({
   )
 }
 
-function SymbolKindLegend() {
+function SymbolKindLegend({
+  activeKind,
+  counts,
+  onActiveKindChange,
+}: {
+  activeKind: SymbolLegendKind | null
+  counts: Record<SymbolLegendKind, number>
+  onActiveKindChange: (kind: SymbolLegendKind | null) => void
+}) {
   return (
-    <div className="cbv-symbol-legend">
+    <div
+      className={`cbv-symbol-legend${activeKind ? ' is-filtering' : ''}`}
+      onMouseLeave={() => onActiveKindChange(null)}
+    >
       <span className="cbv-symbol-legend-title">Legend</span>
-      {SYMBOL_LEGEND_ITEMS.map((item) => (
-        <span className="cbv-symbol-legend-item" key={item.kindClass}>
-          <span
-            className={`cbv-symbol-legend-swatch is-kind-${item.kindClass}`}
-          />
-          {item.label}
-        </span>
-      ))}
+      {SYMBOL_LEGEND_ITEMS.map((item) => {
+        const count = counts[item.kindClass]
+        const disabled = count === 0
+
+        return (
+          <button
+            aria-label={`${item.label}: ${count} visible ${count === 1 ? 'node' : 'nodes'}`}
+            className={`cbv-symbol-legend-item${activeKind === item.kindClass ? ' is-active' : ''}${disabled ? ' is-empty' : ''}`}
+            disabled={disabled}
+            key={item.kindClass}
+            onBlur={() => {
+              if (activeKind === item.kindClass) {
+                onActiveKindChange(null)
+              }
+            }}
+            onFocus={() => onActiveKindChange(item.kindClass)}
+            onMouseEnter={() => onActiveKindChange(item.kindClass)}
+            title={`${item.label}: ${count} visible ${count === 1 ? 'node' : 'nodes'}`}
+            type="button"
+          >
+            <span
+              className={`cbv-symbol-legend-swatch is-kind-${item.kindClass}`}
+            />
+            <span>{item.label}</span>
+            <span className="cbv-symbol-legend-count">{count}</span>
+          </button>
+        )
+      })}
     </div>
   )
 }
@@ -676,5 +792,9 @@ function getLayerLabel(
     return viewMode === 'symbols' ? 'Contains' : 'Structure'
   }
 
-  return layer === 'imports' ? 'Imports' : 'Calls'
+  if (layer === 'imports') {
+    return 'Imports'
+  }
+
+  return layer === 'api' ? 'API' : 'Calls'
 }

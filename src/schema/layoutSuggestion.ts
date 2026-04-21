@@ -27,6 +27,10 @@ export interface LayoutSelector {
   pathPrefix?: string
   symbolKind?: SymbolKind | SymbolKind[]
   tag?: NodeTagId | NodeTagId[]
+  endpointConfidenceMin?: number
+  endpointMethod?: string | string[]
+  endpointPathContains?: string
+  endpointService?: string | string[]
 }
 
 export interface HybridLayoutLane {
@@ -106,6 +110,10 @@ export interface LayoutQueryNodeRef {
   range?: SourceRange
   symbolKind?: SymbolKind
   tags: NodeTagId[]
+  endpointConfidence?: number
+  endpointMethod?: string
+  endpointRoutePattern?: string
+  endpointService?: string
 }
 
 export interface LayoutQueryEdgeRef {
@@ -115,4 +123,5 @@ export interface LayoutQueryEdgeRef {
   label?: string
   source: string
   target: string
+  metadata?: Record<string, boolean | number | string | null>
 }

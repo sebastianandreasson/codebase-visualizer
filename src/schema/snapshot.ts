@@ -5,14 +5,18 @@ import type {
   ProjectPluginDetection,
 } from './projectPlugin'
 
-export const PROJECT_SNAPSHOT_SCHEMA_VERSION = 2 as const
+export const PROJECT_SNAPSHOT_SCHEMA_VERSION = 3 as const
 
-export type SnapshotSchemaVersion = typeof PROJECT_SNAPSHOT_SCHEMA_VERSION
+export type SnapshotSchemaVersion = number
 
 export type GraphEdgeKind =
   | 'contains'
   | 'imports'
   | 'calls'
+  | 'api_calls'
+  | 'handles'
+  | 'declares_endpoint'
+  | 'implements_contract'
   | 'references'
   | 'generated_from'
   | 'pipeline_step'
@@ -104,8 +108,26 @@ export interface SymbolNode extends BaseProjectNode {
   range?: SourceRange
 }
 
+export type ApiEndpointProtocol = 'http' | 'graphql' | 'rpc'
+
+export type ApiEndpointSource = 'server' | 'client' | 'contract' | 'merged'
+
+export interface ApiEndpointNode extends BaseProjectNode {
+  kind: 'api_endpoint'
+  parentId: string | null
+  protocol: ApiEndpointProtocol
+  method: string
+  routePattern: string
+  normalizedRoutePattern: string
+  scopeId: string
+  serviceName?: string
+  framework?: string
+  source: ApiEndpointSource
+  confidence: number
+}
+
 export type FileSystemNode = DirectoryNode | FileNode
-export type ProjectNode = FileSystemNode | SymbolNode
+export type ProjectNode = FileSystemNode | SymbolNode | ApiEndpointNode
 
 export interface ProjectSnapshot {
   schemaVersion: SnapshotSchemaVersion
@@ -232,4 +254,8 @@ export function isFileNode(node: ProjectNode): node is FileNode {
 
 export function isSymbolNode(node: ProjectNode): node is SymbolNode {
   return node.kind === 'symbol'
+}
+
+export function isApiEndpointNode(node: ProjectNode): node is ApiEndpointNode {
+  return node.kind === 'api_endpoint'
 }

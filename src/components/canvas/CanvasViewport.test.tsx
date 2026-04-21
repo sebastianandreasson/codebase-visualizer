@@ -1,5 +1,5 @@
 import type { ComponentProps, ReactNode } from 'react'
-import { render } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { CanvasViewport } from './CanvasViewport'
@@ -59,6 +59,47 @@ describe('CanvasViewport', () => {
 
     expect(reactFlowMock.props[0]?.onlyRenderVisibleElements).toBe(false)
   })
+
+  it('highlights matching nodes when hovering a legend item', () => {
+    renderCanvasViewport({
+      nodes: [
+        {
+          data: {
+            kind: 'function',
+            kindClass: 'function',
+            dimmed: false,
+            highlighted: false,
+          },
+          id: 'symbol:function',
+          position: { x: 0, y: 0 },
+          type: 'symbolNode',
+        },
+        {
+          data: {
+            kind: 'endpoint',
+            kindClass: 'endpoint',
+            dimmed: false,
+            highlighted: false,
+          },
+          id: 'api:endpoint:GET:/health',
+          position: { x: 120, y: 0 },
+          type: 'symbolNode',
+        },
+      ],
+    })
+
+    fireEvent.mouseEnter(screen.getByRole('button', { name: 'API: 1 visible node' }))
+
+    const presentedNodes = getLatestReactFlowNodes()
+    const functionNode = presentedNodes.find((node) => node.id === 'symbol:function')
+    const endpointNode = presentedNodes.find((node) => node.id === 'api:endpoint:GET:/health')
+
+    expect(functionNode?.data).toMatchObject({ dimmed: true })
+    expect(endpointNode?.data).toMatchObject({
+      dimmed: false,
+      highlighted: true,
+    })
+  })
 })
 
 function renderCanvasViewport(overrides: Partial<CanvasViewportProps> = {}) {
@@ -68,6 +109,15 @@ function renderCanvasViewport(overrides: Partial<CanvasViewportProps> = {}) {
       {...overrides}
     />,
   )
+}
+
+function getLatestReactFlowNodes() {
+  const latestProps = reactFlowMock.props[reactFlowMock.props.length - 1]
+
+  return latestProps?.nodes as Array<{
+    data?: Record<string, unknown>
+    id: string
+  }>
 }
 
 const noop = () => undefined
@@ -97,7 +147,7 @@ const DEFAULT_CANVAS_VIEWPORT_PROPS = {
   compareSourceTitle: null,
   denseCanvasMode: true,
   edges: [],
-  graphLayers: { calls: false, contains: false, imports: false },
+  graphLayers: { api: true, calls: false, contains: false, imports: false },
   nodes: [],
   onActivateCompareOverlay: noop,
   onAgentHeatModeChange: noop,

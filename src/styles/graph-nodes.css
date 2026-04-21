@@ -49,6 +49,14 @@
   border-color: color-mix(in oklch, var(--cbv-kind-variable) 40%, var(--app-border));
 }
 
+.cbv-node.is-symbol.is-kind-endpoint,
+.cbv-symbol-legend-swatch.is-kind-endpoint {
+  border-color: color-mix(in oklch, var(--cbv-kind-endpoint) 44%, var(--app-border));
+  background:
+    linear-gradient(90deg, color-mix(in oklch, var(--cbv-kind-endpoint) 18%, transparent) 0%, transparent 18%),
+    color-mix(in oklch, var(--app-surface-soft) 86%, transparent);
+}
+
 .cbv-node.is-selected {
   border-color: color-mix(in oklch, var(--app-accent) 48%, white);
   box-shadow:
@@ -552,6 +560,11 @@
 .cbv-node.is-symbol.is-kind-variable,
 .cbv-symbol-legend-swatch.is-kind-variable {
   --cbv-node-kind-color: var(--cbv-kind-variable);
+}
+
+.cbv-node.is-symbol.is-kind-endpoint,
+.cbv-symbol-legend-swatch.is-kind-endpoint {
+  --cbv-node-kind-color: var(--cbv-kind-endpoint);
 }
 
 .cbv-node.is-symbol::before {

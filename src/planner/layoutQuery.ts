@@ -14,6 +14,7 @@ import type {
   ProjectNode,
   ProjectSnapshot,
 } from '../schema/snapshot'
+import { isApiEndpointNode } from '../schema/snapshot'
 import {
   createHybridLayoutDraft,
   getNodeLoc,
@@ -411,6 +412,16 @@ export class LayoutQuerySession {
       }
     }
 
+    if (isApiEndpointNode(node)) {
+      return {
+        ...base,
+        endpointConfidence: node.confidence,
+        endpointMethod: node.method,
+        endpointRoutePattern: node.normalizedRoutePattern,
+        endpointService: node.serviceName ?? node.scopeId,
+      }
+    }
+
     return base
   }
 
@@ -513,6 +524,7 @@ function toEdgeRef(edge: GraphEdge): LayoutQueryEdgeRef {
     inferred: edge.inferred,
     kind: edge.kind,
     label: edge.label,
+    metadata: edge.metadata,
     source: edge.source,
     target: edge.target,
   }

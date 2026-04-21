@@ -180,6 +180,39 @@
   display: inline-flex;
   align-items: center;
   gap: 0.35rem;
+  border: 1px solid transparent;
+  border-radius: var(--cbv-radius-sm);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  line-height: 1;
+  cursor: pointer;
+  transition:
+    background 120ms ease,
+    border-color 120ms ease,
+    color 120ms ease,
+    opacity 120ms ease;
+}
+
+.cbv-symbol-legend-item:hover,
+.cbv-symbol-legend-item:focus-visible,
+.cbv-symbol-legend-item.is-active {
+  border-color: color-mix(in oklch, var(--app-accent) 34%, var(--app-border-soft));
+  background: color-mix(in oklch, var(--app-accent) 12%, transparent);
+  color: var(--app-text);
+  outline: none;
+}
+
+.cbv-symbol-legend-item.is-empty {
+  cursor: default;
+  opacity: 0.42;
+}
+
+.cbv-symbol-legend-count {
+  min-width: 1.15em;
+  color: var(--app-text-faint);
+  font-size: 0.92em;
+  text-align: right;
 }
 
 .cbv-canvas,
@@ -1037,5 +1070,6 @@
   flex: 0 0 auto;
   gap: 0.22rem;
   min-width: max-content;
+  padding: 0.12rem 0.18rem;
   white-space: nowrap;
 }

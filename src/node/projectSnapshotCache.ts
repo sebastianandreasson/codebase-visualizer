@@ -7,7 +7,7 @@ import { getBuiltInProjectPluginCacheSignatures } from './project-plugins'
 
 const SNAPSHOT_CACHE_DIRECTORY = '.semanticode/cache'
 const SNAPSHOT_CACHE_FILE = 'project-snapshot.json'
-const SNAPSHOT_CACHE_VERSION = 4
+const SNAPSHOT_CACHE_VERSION = 6
 
 interface PersistedProjectSnapshotCache {
   version: number

@@ -15,7 +15,11 @@ import type {
 } from '../schema/snapshot'
 
 import { createRustLanguageAdapter } from './adapters/rust'
+import { createDartLanguageAdapter } from './adapters/dart'
+import { createGoLanguageAdapter } from './adapters/go'
+import { createPythonLanguageAdapter } from './adapters/python'
 import { createTsJsLanguageAdapter } from './adapters/tsjs'
+import { buildApiEndpointGraph } from './apiEndpointResolver'
 import { createBuiltInProjectPlugins } from './project-plugins'
 
 const ASSET_EXTENSIONS = new Set([
@@ -179,6 +183,21 @@ export async function enrichProjectSnapshot(
     }
   }
 
+  const apiEndpointGraph = buildApiEndpointGraph(
+    buildWorkingSnapshot(snapshot, context),
+    context.facts,
+  )
+
+  if (apiEndpointGraph.edges.length > 0 || Object.keys(apiEndpointGraph.nodes).length > 0) {
+    Object.assign(context.nodes, apiEndpointGraph.nodes)
+    context.edges.push(...apiEndpointGraph.edges)
+    snapshot.tags = dedupeTags([...snapshot.tags, ...apiEndpointGraph.tags])
+    context.facetDefinitions = dedupeFacetDefinitions([
+      ...context.facetDefinitions,
+      ...apiEndpointGraph.facetDefinitions,
+    ])
+  }
+
   return {
     ...snapshot,
     entryFileIds: [...context.entryFileIds],
@@ -193,7 +212,13 @@ export async function enrichProjectSnapshot(
 function getLanguageAdapters(options: ReadProjectSnapshotOptions) {
   return options.adapters?.length
     ? options.adapters
-    : [createTsJsLanguageAdapter(), createRustLanguageAdapter()]
+    : [
+        createTsJsLanguageAdapter(),
+        createRustLanguageAdapter(),
+        createDartLanguageAdapter(),
+        createGoLanguageAdapter(),
+        createPythonLanguageAdapter(),
+      ]
 }
 
 function getProjectPlugins(options: ReadProjectSnapshotOptions) {
@@ -326,5 +351,11 @@ function dedupeNodeMetadata(nodes: ProjectSnapshot['nodes']) {
   return nextNodes
 }
 
-export { createRustLanguageAdapter, createTsJsLanguageAdapter }
+export {
+  createDartLanguageAdapter,
+  createGoLanguageAdapter,
+  createPythonLanguageAdapter,
+  createRustLanguageAdapter,
+  createTsJsLanguageAdapter,
+}
 export type { LanguageAdapter }

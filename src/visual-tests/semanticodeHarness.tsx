@@ -833,6 +833,7 @@ const workspaceHistory: WorkspaceHistoryPayload = {
 let currentPreferences: UiPreferences = {
   canvasWidthRatio: scenario === 'narrow-inspector' ? 0.84 : 0.62,
   graphLayers: {
+    api: true,
     calls: true,
     contains: true,
     imports: true,
